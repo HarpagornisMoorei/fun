@@ -124,9 +124,12 @@ unit        = "deg" | "deg/s" ;          (* field must match: theta/advance
                                              take deg, omega takes deg/s; a
                                              bare number is radians / rad/s *)
 
-(* M5: the weight drive *)
+(* M5: the weight drive; 'cw'/'ccw' set which way the cord unwinds
+   (default ccw = +theta). A clock's hands sweep clockwise, so its
+   weight drive is 'cw' and its advance guards read negative. *)
 weightDriveDecl = "drive" IDENT "weight" num [ "kg" ]
-                  [ "barrel" num [ "m" ] ] [ "drop" num [ "m" ] ] ;
+                  [ "barrel" num [ "m" ] ] [ "drop" num [ "m" ] ]
+                  [ "cw" | "ccw" ] ;
 
 ref         = IDENT "." IDENT ;
 num         = [ "-" ] NUMBER ;
@@ -524,17 +527,19 @@ only remove energy — discards whatever the new rows forbid, which is the
 relock impact a real pallet takes.
 
 **Weight drives are torques with a budget.** `drive b weight m barrel r
-drop d` applies `Q_theta += m g r` about the body's origin. The cord pays
-out ratchet-style — only forward rotation pays — and once `r * dtheta` of
-cord reaches `d`, the torque ceases and the mechanism runs down (a
-mid-unlock exhaustion leaves the wheel coasting into its relock; the *next*
-unlock finds a wheel at rest with nothing to drive it, and the clock stops
-in the free state).
+drop d cw` applies `Q_theta += ± m g r` about the body's origin — the sign
+is the cord's unwind sense, `cw` pulling along `-theta` (the direction clock
+hands sweep) and the default `ccw` along `+theta`. The cord pays out
+ratchet-style — only rotation in the unwind sense pays — and once `r *
+|dtheta|` of cord reaches `d`, the torque ceases and the mechanism runs down
+(a mid-unlock exhaustion leaves the wheel coasting into its relock; the
+*next* unlock finds a wheel at rest with nothing to drive it, and the clock
+stops in the free state).
 
 **The ledger closes.** Every run bookkeeps, in joules:
 
 ```text
-drawn   = sum over steps of torque * dtheta_forward     (weight work)
+drawn   = sum over steps of torque * |dtheta| in the unwind sense   (weight work)
 impulse = sum of applied reset energies                 (net, sign included)
 impact  = kinetic energy removed by event projections   (relock losses)
 dE      = E_mech(end) - E_mech(start)                   (kinetic + potential)
@@ -573,14 +578,14 @@ order: identical inputs give bit-identical trajectories (tested).
 | `dial [at g.c] { ... }` | static tick ring; center/radius captured at assembly | M4 |
 | `mode m { state s { hold b } ... }` | rate-0 drive rows (one per held body), enabled per active state, targets captured on state entry | M5 |
 | `a -> b when c.theta > 5 deg` | rising-edge zero-crossing event on `theta(c) - 5 deg` | M5 |
-| `... when c.advance > 6 deg` | zero-crossing on `(theta(c) - theta_at_state_entry) - 6 deg` | M5 |
+| `... when c.advance > 6 deg` | zero-crossing on `(theta(c) - theta_at_state_entry) - 6 deg` — advance is *signed* travel, so a clockwise wheel guards on `< -6 deg` | M5 |
 | `... : impulse c 2 mJ` | velocity jump `omega +- sqrt(omega^2 + 2 dE/I0)` along current motion | M5 |
 | `... : impulse c maintain 3 deg` | dE computed so the next turning point is 3 deg past the hang angle | M5 |
-| `drive b weight m [barrel r] [drop d]` | torque `m*g*r` while `(paid + r*dtheta) < d` | M5 |
+| `drive b weight m [barrel r] [drop d] [cw]` | torque `±m*g*r` (sense: `cw` -> `-theta`), ratchet pays in that sense while `(paid + r*|dtheta|) < d` | M5 |
 
 ## 8. Test matrix
 
-`mech test` (13334 checks) covers: lexer tokens/units/keywords/comments/errors;
+`mech test` (13409 checks) covers: lexer tokens/units/keywords/comments/errors;
 parser AST shapes for all M3 and M4 forms and all error classes; model checks,
 desugaring, gear radius arithmetic, module rules, mass derivation (rods,
 discs, compound assemblies, overrides), DOF arithmetic including tangent
@@ -625,6 +630,14 @@ determinism across runs, a weight-driven flywheel matching the torque-drive
 spin-up analytically, the run-down (a 0.0052 m cord stops the clock
 mid-state after paying out its whole budget of exactly `m g drop` joules),
 and the energy ledger closing against the change in mechanical energy.
+The M5 direction work is covered too: a `cw` weight spins its flywheel to
+the analytic *negative* rate and pays cord for negative travel, the same
+escapement wound clockwise steps *minus* half a tooth per beat with the
+ledger still closing, the flagship's equal-tooth-sum motion work holds
+`hour = minute/12` exactly (stud at `-minute/3`) over multiple revolutions,
+and the flagship file itself is regression-tested end to end: escape arbor
+minus 6 degrees per beat, minute `= escape/60`, hour `= minute/12`, all
+clockwise, constraints and ledger intact.
 
 ## 9. Milestone history & reserved ground
 
@@ -635,9 +648,14 @@ tangency, and the full constrained dynamics; M4 solved the intent layer
 always aiming at: the beat pendulum and the going train finally shake hands
 through a `mode` element — an anchor escapement, weight-driven, stepping
 half a tooth per beat and paying for its impulse from a falling weight with
-a closing ledger.
+a closing ledger. The flagship is a whole clock: small seconds on the
+escape arbor, a synthesized 1:60 going train down to the minute arbor, and
+the horologist's motion work (an equal-tooth-sum 10:30 x 8:32 stack, two
+coaxial shafts on one anchor) carrying the minute and hour hands — every
+hand sweeping clockwise because the weight is `cw`.
 
-Concentric motion-work synthesis (equal tooth sums for coaxial hands),
-contact-rich pallet geometry (impulse faces as constraint rows rather than
-event summaries), and multiple mechanisms in one file sharing a world are
-reserved for later milestones.
+Motion-work *synthesis* (the compiler choosing the equal-tooth-sum stack
+itself, rather than the flagship writing it out), contact-rich pallet
+geometry (impulse faces as constraint rows rather than event summaries),
+and multiple mechanisms in one file sharing a world are reserved for later
+milestones.
