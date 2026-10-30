@@ -70,5 +70,7 @@ dynamics, with an energy ledger that has to close.
 
 [`docs/LANG.md`](docs/LANG.md) is the language specification — grammar,
 semantics, solver formulation — and the contract `mech test` checks the
-implementation against. `scripts/` holds offscreen-rendering harnesses for
+implementation against. [`docs/design/contact.md`](docs/design/contact.md)
+is the proposal for the next milestone (cams, Geneva drives, ratchets,
+non-circular gears). `scripts/` holds offscreen-rendering harnesses for
 screenshots without a display.
