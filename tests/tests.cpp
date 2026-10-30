@@ -4955,17 +4955,25 @@ void testPolygonRatchet() {
         t.replace(pos, std::string("drive wheel torque -0.004").size(), std::string("drive wheel torque ") + torque);
         return t;
     };
+    // the shipped file uses friction 0.3; the frictionless numbers below pin it to 0
+    auto variant = [&](const char* torque, const char* mu) {
+        std::string t = withTorque(torque);
+        const std::string key = "friction 0.3";
+        t.replace(t.find(key), key.size(), std::string("friction ") + mu);
+        return t;
+    };
     {
         Model m = buildFromText(ratchetSrc.c_str());
         CHECK(m.profiles.size() == 1 && m.profiles[0].curve->pieces() == 48);   // 24 edges + 24 fillets
+        CHECK_APPROX(m.touches[0].friction, 0.3, 1e-15);
         std::vector<double> q0;
         m.assemble(q0);
         CHECK(!m.touches[0].engaged);                                           // placed just above the root
     }
 
-    // forward: one click per tooth, and every joule accounted for
+    // forward (frictionless): one click per tooth, and every joule accounted for
     {
-        Model m = buildFromText(ratchetSrc.c_str());
+        Model m = buildFromText(variant("-0.004", "0").c_str());
         ConstraintSystem sys(m);
         DynamicsSystem dyn(m, sys);
         std::vector<double> q, qd((size_t)m.nq(), 0.0);
@@ -5018,7 +5026,7 @@ void testPolygonRatchet() {
     //   I dw/dt = tau - N cross(footArm, n),
     // integrated over a window:  integral of N cross dt = tau T - I (w_end - w_start).
     {
-        Model m = buildFromText(withTorque("0.004").c_str());
+        Model m = buildFromText(variant("0.004", "0").c_str());
         ConstraintSystem sys(m);
         DynamicsSystem dyn(m, sys);
         std::vector<double> q, qd((size_t)m.nq(), 0.0);
@@ -5062,6 +5070,69 @@ void testPolygonRatchet() {
         CHECK(sys.maxResidual(q, k1 * h) < 1e-8);
     }
 
+    // with friction the locked wheel comes to REST (it rang forever without), held by exactly
+    // the normal force that balances the torque: tau = N cross(footArm, n)
+    {
+        Model m = buildFromText(variant("0.004", "0.3").c_str());
+        ConstraintSystem sys(m);
+        DynamicsSystem dyn(m, sys);
+        std::vector<double> q, qd((size_t)m.nq(), 0.0);
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        dyn.projectVelocities(q, qd);
+        const int iw = m.bodyIndex("wheel");
+        const double h = m.world.step;
+        for (long k = 0; k < 3000; ++k) dyn.step(q, qd, k * h);          // 1.5 s
+        const double th1 = q[(size_t)m.bodies[iw].qOffset];
+        for (long k = 3000; k < 4000; ++k) dyn.step(q, qd, k * h);       // 0.5 s more
+        CHECK(m.touches[0].engaged);
+        CHECK(std::fabs(qd[(size_t)m.bodies[iw].qOffset]) < 1e-6);       // at rest
+        CHECK(std::fabs(q[(size_t)m.bodies[iw].qOffset] - th1) < deg2rad(1e-3));   // and staying there
+        CHECK(std::fabs(th1) < deg2rad(5.0));                            // held within a few degrees
+        const ContactState cs = m.touchState(m.touches[0], q);
+        std::vector<double> qdd;
+        dyn.accelerations(q, qd, qdd);
+        const double N = dyn.contactForces()[0];
+        CHECK_APPROX(N * crossz(cs.footArm, cs.normal), 0.004, 1e-5);   // the static balance
+        CHECK(dyn.hybridStats().frictionLoss > 1e-6);                    // and friction did the damping
+    }
+    // forward with friction: still ratchets (slower: the ramps resist), and the ledger,
+    // now with a friction term, still closes
+    {
+        auto turned = [&](const std::string& src, HybridStats* hsOut, double* ledgerOut) {
+            Model m = buildFromText(src.c_str());
+            ConstraintSystem sys(m);
+            DynamicsSystem dyn(m, sys);
+            std::vector<double> q, qd((size_t)m.nq(), 0.0);
+            m.assemble(q);
+            int iters = 0;
+            double res = 0.0;
+            sys.solve(q, 0.0, iters, &res);
+            dyn.projectVelocities(q, qd);
+            const double E0 = dyn.kinetic(q, qd) + dyn.potential(q);
+            const int iw = m.bodyIndex("wheel");
+            const double th0 = q[(size_t)m.bodies[iw].qOffset];
+            for (long k = 0; k < 3000; ++k) dyn.step(q, qd, k * m.world.step);
+            const HybridStats& hs = dyn.hybridStats();
+            const double dE = dyn.kinetic(q, qd) + dyn.potential(q) - E0;
+            *ledgerOut = dE - (hs.driveWork - hs.impactLoss - hs.frictionLoss);
+            *hsOut = hs;
+            return th0 - q[(size_t)m.bodies[iw].qOffset];
+        };
+        HybridStats h0, h3;
+        double l0, l3;
+        const double free = turned(variant("-0.004", "0"), &h0, &l0);
+        const double rough = turned(variant("-0.004", "0.3"), &h3, &l3);
+        CHECK(h0.frictionLoss == 0.0);
+        CHECK(h3.frictionLoss > 1e-3);
+        CHECK(rough > deg2rad(120.0) && rough < free);                   // slower, but it turns
+        CHECK(std::fabs((double)h3.liftoffs - std::floor(rough / deg2rad(30.0))) <= 1.0);   // still one click per tooth
+        CHECK(std::fabs(l0) < 2e-6);
+        CHECK(std::fabs(l3) < 2e-6);                                     // the ledger closes with friction
+    }
+
     // determinism
     {
         auto run = [&](std::vector<double>& qOut, HybridStats& stOut) {
@@ -5084,6 +5155,151 @@ void testPolygonRatchet() {
         run(qb, sb);
         CHECK(qa == qb);
         CHECK(sa.liftoffs == sb.liftoffs && sa.impacts == sb.impacts && sa.impactLoss == sb.impactLoss);
+    }
+}
+
+
+// ---- M6f: friction ---------------------------------------------------------------------
+
+// A brake: a wheel (inertia `I`) spins against a shoe on a vertical rail through the
+// top of its rim; a spring sets the normal force N = k (R - rest) = 200 x 0.02 = 4 N,
+// and the rail absorbs the tangential load. Friction torque = mu N R, exactly.
+std::string brakeSrc(double mu, double inertia, double step) {
+    char b[1000];
+    std::snprintf(b, sizeof b,
+        "mechanism brake {\n"
+        "  world { gravity: 0  step: %g }\n"
+        "  ground frame { anchor axle at (0, 0)  anchor rail at (0, 0.05) dir (0, 1) }\n"
+        "  body wheel { anchor axle at (0, 0)  mass: %g  from: 0 deg }\n"
+        "  pin wheel.axle -> frame.axle\n"
+        "  profile rim on wheel.axle { circle: 0.05 }\n"
+        "  body shoe { anchor tip at (0, 0) dir (1, 0)  mass: 0.1 }\n"
+        "  slide shoe.tip -> frame.rail\n"
+        "  spring press shoe.tip -> frame.axle { k: 200  rest: 0.03 }\n"
+        "  touch shoe.tip on rim friction %g\n}\n", step, inertia / 0.01, mu);
+    return std::string(b);
+}
+
+struct BrakeRun {
+    std::vector<double> w;        // wheel speed sampled at t = 0.2, 0.4, ...
+    double N = 0.0, loss = 0.0, ledger = 0.0, ke0 = 0.0, wEnd = 0.0, shoeY = 0.0;
+    double stopT = -1.0;          // first time |w| < 1e-3
+    bool signFlipped = false;
+};
+BrakeRun runBrake(double mu, double w0, double inertia, double step, double T) {
+    BrakeRun r;
+    Model m = buildFromText(brakeSrc(mu, inertia, step).c_str());
+    ConstraintSystem sys(m);
+    DynamicsSystem dyn(m, sys);
+    std::vector<double> q, qd((size_t)m.nq(), 0.0);
+    m.assemble(q);
+    int iters = 0;
+    double res = 0.0;
+    sys.solve(q, 0.0, iters, &res);
+    dyn.projectVelocities(q, qd);
+    const int iw = m.bodyIndex("wheel"), is = m.bodyIndex("shoe");
+    qd[(size_t)m.bodies[iw].qOffset] = w0;
+    const double E0 = dyn.kinetic(q, qd) + dyn.potential(q);
+    r.ke0 = 0.5 * m.mass[(size_t)iw].inertia * w0 * w0;
+    long nextSample = (long)std::llround(0.2 / step);
+    bool stopped = false;
+    for (long k = 0; k * step < T; ++k) {
+        dyn.step(q, qd, k * step);
+        const double w = qd[(size_t)m.bodies[iw].qOffset];
+        const double t = (k + 1) * step;
+        if (k + 1 == nextSample) { r.w.push_back(w); nextSample += (long)std::llround(0.2 / step); }
+        if (!stopped && std::fabs(w) < 1e-3) { stopped = true; r.stopT = t; }
+        if (stopped && w * w0 < -1e-3 * std::fabs(w0)) r.signFlipped = true;   // overshoot through zero
+    }
+    const HybridStats& hs = dyn.hybridStats();
+    const double dE = dyn.kinetic(q, qd) + dyn.potential(q) - E0;
+    r.loss = hs.frictionLoss;
+    r.ledger = dE - (hs.driveWork - hs.impactLoss - hs.frictionLoss);
+    r.wEnd = qd[(size_t)m.bodies[iw].qOffset];
+    r.shoeY = q[(size_t)m.bodies[is].qOffset + 2];
+    std::vector<double> qdd;
+    dyn.accelerations(q, qd, qdd);
+    r.N = dyn.contactForces()[0];
+    return r;
+}
+
+void testFriction() {
+    std::printf("[friction M6f]\n");
+
+    // ---- grammar and diagnostics --------------------------------------------------------------
+    {
+        const Program p = parseText("mechanism m { ground g { anchor a at (0,0) } shaft s at g.a "
+                                    "profile p on s { circle: 0.03 } "
+                                    "touch g.a on p friction 0.4 restitution 0.2 roller 0.001 world { gravity: 1 } }");
+        const TouchDecl& t = p.mechanisms[0].touches[0];
+        CHECK(t.hasFriction && std::fabs(t.friction - 0.4) < 1e-15);
+        CHECK(t.hasRestitution && t.hasRoller);                 // any order
+    }
+    auto expectModelError = [&](const std::string& tail, const char* needle) {
+        bool threw = false;
+        try {
+            buildFromText(("mechanism m { ground g { anchor a at (0,0) } shaft s at g.a "
+                           "profile p on s { circle: 0.03 } touch g.a on p " + tail + " }").c_str());
+        } catch (const SemanticError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find(needle) != std::string::npos);
+        }
+        CHECK(threw);
+    };
+    expectModelError("friction 0.3", "no effect in a kinematic");            // nothing slides under a force
+    expectModelError("friction -0.1 world { gravity: 9.81 }", "cannot be negative");
+    {
+        Model m = buildFromText("mechanism m { ground g { anchor a at (0,0) } shaft s at g.a "
+                                "profile p on s { circle: 0.03 } touch g.a on p friction 0 "
+                                "world { gravity: 9.81 } }");
+        CHECK(m.touches[0].friction == 0.0);                    // zero is legal: frictionless
+    }
+
+    // ---- the brake, in closed form ------------------------------------------------------------------
+    // friction torque mu N R = 0.25 x 4 x 0.05 = 0.05 N m on I = 0.01: a constant 5 rad/s^2
+    {
+        const BrakeRun r = runBrake(0.25, 5.0, 0.01, 0.0005, 1.4);
+        CHECK(r.w.size() >= 6);
+        for (int i = 0; i < 4; ++i)                            // t = 0.2 .. 0.8, still sliding
+            CHECK_APPROX(r.w[(size_t)i], 5.0 - 5.0 * 0.2 * (i + 1), 1e-4);
+        CHECK(r.stopT > 0.99 && r.stopT < 1.03);              // 1 s, plus the creep tail
+        CHECK(std::fabs(r.wEnd) < 1e-4);                       // and it stays stopped
+        CHECK(!r.signFlipped);                                 // no overshoot through zero
+        CHECK_APPROX(r.N, 4.0, 1e-5);                          // the spring's force, undisturbed
+        CHECK_APPROX(r.shoeY, 0.05, 1e-9);                     // the shoe never moved
+        CHECK_APPROX(r.loss, r.ke0, 1e-4);                     // all of (1/2) I w^2 went to friction: 0.125 J
+        CHECK(std::fabs(r.ledger) < 1e-6);                     // and the ledger closes
+
+        // doubling mu doubles the deceleration; zero friction does not decelerate at all
+        const BrakeRun r2 = runBrake(0.5, 5.0, 0.01, 0.0005, 0.7);
+        CHECK_APPROX(r2.w[0], 5.0 - 10.0 * 0.2, 1e-4);
+        CHECK(r2.stopT > 0.49 && r2.stopT < 0.53);
+        const BrakeRun r0 = runBrake(0.0, 5.0, 0.01, 0.0005, 0.6);
+        CHECK_APPROX(r0.w[2], 5.0, 1e-9);
+        CHECK(r0.loss == 0.0);
+        // spinning the other way, friction opposes it just the same
+        const BrakeRun rn = runBrake(0.25, -5.0, 0.01, 0.0005, 1.2);
+        CHECK_APPROX(rn.w[1], -5.0 + 5.0 * 0.4, 1e-4);
+        CHECK_APPROX(rn.loss, rn.ke0, 1e-4);
+    }
+
+    // ---- stiffness: a light wheel, strong friction, a coarse step ---------------------------------------
+    // mu N / eps over the effective inertia would be ~1e5 /s: an explicit integrator with a
+    // fixed friction width would blow up. The width adapts, so it must not.
+    {
+        const BrakeRun r = runBrake(0.5, 40.0, 0.0001, 0.002, 1.0);
+        CHECK(std::isfinite(r.wEnd) && std::isfinite(r.loss));
+        CHECK(r.stopT > 0.035 && r.stopT < 0.06);              // mu N R / I = 1000 rad/s^2: 0.04 s
+        CHECK(std::fabs(r.wEnd) < 1e-3);
+        CHECK(!r.signFlipped);
+        CHECK_APPROX(r.loss, r.ke0, 2e-4);                     // 0.08 J
+    }
+
+    // ---- determinism ----------------------------------------------------------------------------------------
+    {
+        const BrakeRun a = runBrake(0.25, 5.0, 0.01, 0.0005, 0.6);
+        const BrakeRun b = runBrake(0.25, 5.0, 0.01, 0.0005, 0.6);
+        CHECK(a.w == b.w && a.loss == b.loss && a.wEnd == b.wEnd);
     }
 }
 
@@ -5121,6 +5337,7 @@ int runAllTests() {
     testContactDynamics();
     testNonCircularMesh();
     testPolygonRatchet();
+    testFriction();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

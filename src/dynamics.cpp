@@ -49,6 +49,13 @@ namespace mech {
 
 namespace {
 
+// Regularized Coulomb friction: F_t = mu N tanh(s / eps), s the slip speed. Below
+// ~eps the contact "creeps" instead of sticking (the price of a smooth force that an
+// explicit integrator can take); 2 mm/s is far below any motion worth modelling. The
+// width is raised per contact (see accelerations) so mu N / eps never exceeds what the
+// step can integrate stably.
+const double kFrictionEps = 2e-3;
+
 // Solve A x = b for symmetric A with growing Tikhonov damping until the
 // Cholesky succeeds. Returns false only if even brutal damping collapses.
 bool dampedSolve(std::vector<double> A, const std::vector<double>& b, int n,
@@ -324,19 +331,8 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
             BJ[j][o + 2] = wv[2];
         }
     }
-    // z = W Qeff
-    std::vector<double> z(nq, 0.0);
-    for (size_t bi = 1; bi < m.bodies.size(); ++bi) {
-        const int o = m.bodies[bi].qOffset;
-        double wv[3];
-        applyW(Mblocks, (int)bi, Qeff[o], Qeff[o + 1], Qeff[o + 2], wv);
-        z[o] = wv[0];
-        z[o + 1] = wv[1];
-        z[o + 2] = wv[2];
-    }
-    // A = J W J^T, rhs = -(J z + bias)
+    // A = J W J^T (it does not depend on the forces)
     std::vector<double> A((size_t)rows * rows, 0.0);
-    std::vector<double> rhs(rows, 0.0);
     for (int j = 0; j < rows; ++j) {
         const double* Jj = &J[(size_t)j * nq];
         for (int k = j; k < rows; ++k) {
@@ -345,19 +341,110 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
             A[(size_t)j * rows + k] = s;
             A[(size_t)k * rows + j] = s;
         }
-        double s = 0.0;
-        for (int cix = 0; cix < nq; ++cix) s += Jj[cix] * z[cix];
-        rhs[j] = -(s + bias[j]);
     }
 
-    std::vector<double> lam;
-    if (rows > 0) dampedSolve(A, rhs, rows, lam);
+    // Multipliers and accelerations under a given generalized force Qe:
+    //   z = W Qe,  A lam = -(J z + bias),  qdd = z + W J^T lam
+    std::vector<double> z(nq, 0.0), lam;
+    auto solveWith = [&](const std::vector<double>& Qe) {
+        for (size_t bi = 1; bi < m.bodies.size(); ++bi) {
+            const int o = m.bodies[bi].qOffset;
+            double wv[3];
+            applyW(Mblocks, (int)bi, Qe[o], Qe[o + 1], Qe[o + 2], wv);
+            z[o] = wv[0];
+            z[o + 1] = wv[1];
+            z[o + 2] = wv[2];
+        }
+        std::vector<double> rhs(rows, 0.0);
+        for (int j = 0; j < rows; ++j) {
+            const double* Jj = &J[(size_t)j * nq];
+            double s = 0.0;
+            for (int cix = 0; cix < nq; ++cix) s += Jj[cix] * z[cix];
+            rhs[j] = -(s + bias[j]);
+        }
+        lam.assign((size_t)rows, 0.0);
+        if (rows > 0) dampedSolve(A, rhs, rows, lam);
+        qdd = z;
+        for (int j = 0; j < rows; ++j) {
+            if (lam[j] == 0.0) continue;
+            for (int cix = 0; cix < nq; ++cix) qdd[cix] += BJ[j][cix] * lam[j];
+        }
+    };
+    solveWith(Qeff);
 
-    // qdd = z + W J^T lam
-    qdd = z;
-    for (int j = 0; j < rows; ++j) {
-        if (lam[j] == 0.0) continue;
-        for (int cix = 0; cix < nq; ++cix) qdd[cix] += BJ[j][cix] * lam[j];
+    // M6f: Coulomb friction at engaged contacts. The tangential force mu N tanh(s/eps)
+    // opposes the slip speed s = t . w, and N is the multiplier of the very solve it
+    // loads, so iterate: solve, add friction from that N, solve again (converges unless
+    // the geometry is jammed; three passes). The force acts through the slip Jacobian
+    //   s = Jt qd,   Jt_B = (t . perp(rB), t),   Jt_A = -(t . perp(rA), t),
+    // as Q = -F_t Jt^T. Its width eps is raised so the friction "spring" mu N / eps
+    // stays below 1 / (h * mobility), mobility being the constrained inverse inertia
+    // along Jt: otherwise a stiff contact on a light body is unstable under RK4.
+    lastFrictionPower_ = 0.0;
+    {
+        std::vector<int> trow(m.touches.size(), -1);
+        std::vector<size_t> fric;
+        int rr = touchRow0;
+        for (size_t ti = 0; ti < m.touches.size(); ++ti) {
+            if (!m.touches[ti].engaged) continue;
+            trow[ti] = rr++;
+            if (m.touches[ti].friction > 0.0) fric.push_back(ti);
+        }
+        for (int pass = 0; pass < 3 && !fric.empty(); ++pass) {
+            std::vector<double> Qtot = Qeff;
+            double power = 0.0;
+            for (size_t ti : fric) {
+                const TouchJoint& tj = m.touches[ti];
+                const Profile& pr = m.profiles[(size_t)tj.profile];
+                const double N = std::max(0.0, lam[(size_t)trow[ti]]);
+                const ContactState cs = m.touchState(tj, q);
+                const Vec2 t = cs.tangent;
+                std::vector<double> Jt((size_t)nq, 0.0);
+                const Body& bp = m.bodies[(size_t)tj.body];
+                const Body& bh = m.bodies[(size_t)pr.body];
+                if (bp.qOffset >= 0) {
+                    Jt[(size_t)bp.qOffset + 0] += dot(t, perp(anchorOff(tj.body, tj.anchor)));
+                    Jt[(size_t)bp.qOffset + 1] += t.x;
+                    Jt[(size_t)bp.qOffset + 2] += t.y;
+                }
+                if (bh.qOffset >= 0) {
+                    Jt[(size_t)bh.qOffset + 0] -= dot(t, perp(cs.footArm));
+                    Jt[(size_t)bh.qOffset + 1] -= t.x;
+                    Jt[(size_t)bh.qOffset + 2] -= t.y;
+                }
+                double s = 0.0;
+                for (int i = 0; i < nq; ++i) s += Jt[(size_t)i] * qd[(size_t)i];
+
+                // constrained mobility along Jt: Jt W Jt^T - (Jt W J^T) A^-1 (J W Jt^T)
+                std::vector<double> g((size_t)nq, 0.0);
+                for (size_t bi = 1; bi < m.bodies.size(); ++bi) {
+                    const int o = m.bodies[bi].qOffset;
+                    double wv[3];
+                    applyW(Mblocks, (int)bi, Jt[(size_t)o], Jt[(size_t)o + 1], Jt[(size_t)o + 2], wv);
+                    g[(size_t)o] = wv[0];
+                    g[(size_t)o + 1] = wv[1];
+                    g[(size_t)o + 2] = wv[2];
+                }
+                double mob = 0.0;
+                for (int i = 0; i < nq; ++i) mob += Jt[(size_t)i] * g[(size_t)i];
+                if (rows > 0) {
+                    std::vector<double> a((size_t)rows, 0.0), y;
+                    for (int j = 0; j < rows; ++j)
+                        for (int i = 0; i < nq; ++i) a[(size_t)j] += J[(size_t)j * nq + i] * g[(size_t)i];
+                    if (dampedSolve(A, a, rows, y)) {
+                        double red = 0.0;
+                        for (int j = 0; j < rows; ++j) red += a[(size_t)j] * y[(size_t)j];
+                        if (mob - red > 1e-12) mob -= red;
+                    }
+                }
+                const double eps = std::max(kFrictionEps, tj.friction * N * m.world.step * mob);
+                const double Ft = tj.friction * N * std::tanh(s / eps);
+                for (int i = 0; i < nq; ++i) Qtot[(size_t)i] -= Ft * Jt[(size_t)i];
+                power += Ft * s;
+            }
+            solveWith(Qtot);
+            lastFrictionPower_ = power;
+        }
     }
 
     // M6c: contact normal forces (0 where the contact is lifted off)
@@ -419,7 +506,7 @@ void DynamicsSystem::integrate(std::vector<double>& q, std::vector<double>& qd,
     };
     std::vector<double> a1, a2, a3, a4;
     accelerations(q, qd, a1);
-    const double P1 = power(qd);
+    const double P1 = power(qd), F1 = lastFrictionPower_;
 
     std::vector<double> qS(nq), qdS(nq);
     for (int i = 0; i < nq; ++i) {
@@ -427,14 +514,14 @@ void DynamicsSystem::integrate(std::vector<double>& q, std::vector<double>& qd,
         qdS[i] = qd[i] + 0.5 * h * a1[i];
     }
     accelerations(qS, qdS, a2);
-    const double P2 = power(qdS);
+    const double P2 = power(qdS), F2 = lastFrictionPower_;
 
     for (int i = 0; i < nq; ++i) {
         qS[i] = q[i] + 0.5 * h * qd[i] + 0.25 * h * h * a1[i];
         qdS[i] = qd[i] + 0.5 * h * a2[i];
     }
     accelerations(qS, qdS, a3);
-    const double P3 = power(qdS);
+    const double P3 = power(qdS), F3 = lastFrictionPower_;
 
     for (int i = 0; i < nq; ++i) {
         qS[i] = q[i] + h * qd[i] + 0.5 * h * h * a2[i];
@@ -442,6 +529,7 @@ void DynamicsSystem::integrate(std::vector<double>& q, std::vector<double>& qd,
     }
     accelerations(qS, qdS, a4);
     lastDriveWork_ = h / 6.0 * (P1 + 2.0 * P2 + 2.0 * P3 + power(qdS));
+    lastFrictionLoss_ = h / 6.0 * (F1 + 2.0 * F2 + 2.0 * F3 + lastFrictionPower_);
 
     for (int i = 0; i < nq; ++i)
         qd[i] += h / 6.0 * (a1[i] + 2.0 * a2[i] + 2.0 * a3[i] + a4[i]);
@@ -759,6 +847,7 @@ void DynamicsSystem::hybridStep(std::vector<double>& q, std::vector<double>& qd,
         const std::vector<double> q0 = q;
         integrate(q, qd, t, h);
         stats_.driveWork += lastDriveWork_;
+        stats_.frictionLoss += lastFrictionLoss_;
         if (!m.weights.empty()) accountWeights(q0, q);
         return;
     }
@@ -774,7 +863,7 @@ void DynamicsSystem::hybridStep(std::vector<double>& q, std::vector<double>& qd,
     // restitution bounce sequence is legitimate) finishes it unwatched; the
     // next step's settle pass catches whatever that skipped.
     const std::vector<double> qStart = q;   // for the weight ledger
-    double tau = 0.0, work = 0.0;           // work: committed rate-drive work this step
+    double tau = 0.0, work = 0.0, fric = 0.0;   // committed drive work and friction loss this step
     int events = 0;
 
     struct Cand {
@@ -805,7 +894,7 @@ void DynamicsSystem::hybridStep(std::vector<double>& q, std::vector<double>& qd,
         const double t0 = t + tau;
         const std::vector<double> q0 = q, qd0 = qd;
         integrate(q, qd, t0, rem);   // trial integration of the remainder
-        const double wTrial = lastDriveWork_;
+        const double wTrial = lastDriveWork_, fTrial = lastFrictionLoss_;
 
         std::vector<Cand> fired;
         for (const Mode& mo : m.modes) {
@@ -824,27 +913,29 @@ void DynamicsSystem::hybridStep(std::vector<double>& q, std::vector<double>& qd,
         }
         if (fired.empty()) {      // no event: q, qd hold the whole remainder
             work += wTrial;
+            fric += fTrial;
             break;
         }
 
         // bisect each candidate's crossing: value(t0) <= 0 < value(t0 + hi);
         // the earliest wins (ties keep declaration order)
-        double bestHi = 1e300, bestWork = 0.0;
+        double bestHi = 1e300, bestWork = 0.0, bestFric = 0.0;
         std::vector<double> bestQ, bestQd;
         size_t bestIdx = 0;
         for (size_t fi = 0; fi < fired.size(); ++fi) {
-            double lo = 0.0, hi = rem, wHi = wTrial;
+            double lo = 0.0, hi = rem, wHi = wTrial, fHi = fTrial;
             std::vector<double> qHi = q, qdHi = qd;
             for (int it = 0; it < 10; ++it) {
                 const double mid = 0.5 * (lo + hi);
                 std::vector<double> qm = q0, qdm = qd0;
                 integrate(qm, qdm, t0, mid);
-                const double wm = lastDriveWork_;
+                const double wm = lastDriveWork_, fm = lastFrictionLoss_;
                 if (value(fired[fi], qm, qdm) > 0.0) {
                     hi = mid;
                     qHi = qm;
                     qdHi = qdm;
                     wHi = wm;
+                    fHi = fm;
                 } else {
                     lo = mid;
                 }
@@ -852,6 +943,7 @@ void DynamicsSystem::hybridStep(std::vector<double>& q, std::vector<double>& qd,
             if (hi < bestHi) {
                 bestHi = hi;
                 bestWork = wHi;
+                bestFric = fHi;
                 bestQ = qHi;
                 bestQd = qdHi;
                 bestIdx = fi;
@@ -863,6 +955,7 @@ void DynamicsSystem::hybridStep(std::vector<double>& q, std::vector<double>& qd,
             qd = bestQd;
         }
         work += bestWork;
+        fric += bestFric;
 
         switch (ev.kind) {
             case 0:
@@ -882,11 +975,13 @@ void DynamicsSystem::hybridStep(std::vector<double>& q, std::vector<double>& qd,
             // chatter guard: finish the step without further events
             integrate(q, qd, t + tau, h - tau);
             work += lastDriveWork_;
+            fric += lastFrictionLoss_;
             tau = h;
             break;
         }
     }
     stats_.driveWork += work;
+    stats_.frictionLoss += fric;
     if (!m.weights.empty()) accountWeights(qStart, q);
 }
 

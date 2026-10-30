@@ -1364,6 +1364,18 @@ Model buildModel(const MechanismDecl& decl) {
             }
             tj.restitution = td.restitution;
         }
+        if (td.hasFriction) {
+            if (!m.world.dynamic) {
+                throw SemanticError{td.line, "touch 'friction' has no effect in a kinematic "
+                    "mechanism (nothing slides under a force there) — add a world block, or "
+                    "drop it"};
+            }
+            if (!(td.friction >= 0.0)) {
+                throw SemanticError{td.line, "touch 'friction' (the Coulomb coefficient) "
+                    "cannot be negative"};
+            }
+            tj.friction = td.friction;
+        }
         m.touches.push_back(tj);
     }
 

@@ -68,7 +68,7 @@
 //                | 'points' ':' ( '(' num ',' num ')' )+
 //                | 'ellipse' ':' num num [ 'focus' ]          (M6d)
 //                | 'polygon' ':' ( '(' num ',' num ')' )+ 'fillet' num   (M6e)
-//   touchDecl   := 'touch' ref 'on' IDENT { 'roller' num | 'restitution' num }
+//   touchDecl   := 'touch' ref 'on' IDENT { 'roller' num | 'restitution' num | 'friction' num }
 //
 // M6b ('cam' is contextual at statement start so `cam` stays usable as a
 // body name; the items below are contextual identifiers too):
@@ -608,12 +608,16 @@ private:
         expectKw("on");
         t.profile = expectIdent().text;
         while (cur().type == Tok::Ident &&
-               (cur().text == "roller" || cur().text == "restitution")) {
+               (cur().text == "roller" || cur().text == "restitution" ||
+                cur().text == "friction")) {
             const std::string key = cur().text;
             next();
             if (key == "roller") {
                 t.hasRoller = true;
                 t.roller = parseNum();
+            } else if (key == "friction") {
+                t.hasFriction = true;
+                t.friction = parseNum();
             } else {
                 t.hasRestitution = true;
                 t.restitution = parseNum();

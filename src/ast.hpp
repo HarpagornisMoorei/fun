@@ -209,6 +209,8 @@ struct TouchDecl {
     double roller = 0.0;
     bool hasRestitution = false;
     double restitution = 0.0;
+    bool hasFriction = false;           // M6f: Coulomb coefficient (dynamic mechanisms)
+    double friction = 0.0;
     int line = 0;
 };
 

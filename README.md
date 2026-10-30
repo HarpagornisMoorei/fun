@@ -51,6 +51,7 @@ make test       # unit tests
 | gears | `gear`, `mesh` (external, internal, epicyclic) |
 | contact | `profile` (circle, polar table, point list), `touch` — cams with translating or swinging followers, optional roller |
 | teeth and corners | `polygon` profiles — straight edges with filleted corners, exact (no spline ringing) — a ratchet wheel and pawl that clicks forward and locks in reverse |
+| friction | `touch ... friction mu` — Coulomb friction at contacts, stable on light bodies, with its dissipation in the energy ledger; a locked ratchet comes to rest |
 | non-circular gears | `mesh` between two profiles (circle, polar table, `ellipse`) on fixed shafts — elliptical gear pairs whose output surges; the pair's conjugacy is checked at build time |
 | cams | `cam` — state the motion (`rise`, `dwell`, `return`; cycloidal, harmonic, modified-trapezoid) and the compiler cuts the surface; `check` reports pressure angle and rejects undercut |
 | forces | gravity, `spring`, torque and weight `drive`s |
@@ -73,7 +74,7 @@ dynamics, with an energy ledger that has to close.
 | `fourbar`, `crankslider` | closed loops, prismatic joints |
 | `geartrain`, `train`, `planetary` | meshes, synthesized reductions, epicyclics |
 | `eccentric`, `lobecam`, `platecam` | cams: a closed-form eccentric disc, a plate cam from a polar table, and one synthesized from a displacement diagram |
-| `ratchet` | a ratchet wheel and gravity pawl: one click per tooth forward, locked in reverse; energy ledger closes |
+| `ratchet` | a ratchet wheel and gravity pawl with friction: one click per tooth forward, locked and at rest in reverse; energy ledger closes |
 | `ellipgears` | a pair of elliptical gears: input steady, output surging between 3x and 1/3x |
 | `jumpcam` | the plate cam with mass, a spring and a contact that can let go — cam jump, impacts, energy ledger |
 | `pendulum`, `doublepend`, `flywheel`, `oscillator`, `orbit` | dynamics |
@@ -85,6 +86,6 @@ dynamics, with an energy ledger that has to close.
 semantics, solver formulation — and the contract `mech test` checks the
 implementation against. [`docs/design/contact.md`](docs/design/contact.md)
 is the design for contact (cams, Geneva drives, ratchets, non-circular
-gears); M6a through M6e (profiles, cam synthesis, unilateral contact,
-non-circular gears, polygons and a ratchet) are implemented. `scripts/` holds offscreen-rendering harnesses for
+gears); M6a through M6f (profiles, cam synthesis, unilateral contact,
+non-circular gears, polygons and a ratchet, friction) are implemented. `scripts/` holds offscreen-rendering harnesses for
 screenshots without a display.

@@ -332,8 +332,13 @@ int cmdCheck(const std::string& path) {
                                           : "unilateral: starts in flight")
                             : "bilateral: force closure assumed");
             if (m.world.dynamic) {
-                std::printf("  restitution %g%s\n", tj.restitution,
+                std::printf("  restitution %g%s", tj.restitution,
                             tj.restitution == 0.0 ? " (plastic landing)" : "");
+                if (tj.friction > 0.0)
+                    std::printf("  ·  friction %g (Coulomb, regularized below 2 mm/s)", tj.friction);
+                else
+                    std::printf("  ·  frictionless");
+                std::printf("\n");
             }
         }
         for (const PolarMesh& pm : m.polarMeshes) {
@@ -589,12 +594,13 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
                 }
                 const double dE = (dyn.kinetic(q, qd) + dyn.potential(q)) - E0;
                 const double ledger = dE - (hs.weightDrawn + hs.impulseEnergy +
-                                            hs.driveWork - hs.impactLoss);
+                                            hs.driveWork - hs.impactLoss - hs.frictionLoss);
                 std::printf("energy: drawn %.4f J + impulse %.4f J", hs.weightDrawn,
                             hs.impulseEnergy);
                 if (hs.driveWork != 0.0) std::printf(" + drive %.4f J", hs.driveWork);
-                std::printf(" - impact %.4f J = dE %.4f J (ledger residual %.2e J)\n",
-                            hs.impactLoss, dE, ledger);
+                std::printf(" - impact %.4f J", hs.impactLoss);
+                if (hs.frictionLoss != 0.0) std::printf(" - friction %.4f J", hs.frictionLoss);
+                std::printf(" = dE %.4f J (ledger residual %.2e J)\n", dE, ledger);
             } else {
                 std::printf("done: worst residual %.2e, worst |E - E0| %.2e J\n",
                             worstRes, dEworst);
