@@ -13,6 +13,7 @@
 #include "ast.hpp"
 #include "dynamics.hpp"
 #include "kinematics.hpp"
+#include "record.hpp"
 #include "lexer.hpp"
 #include "model.hpp"
 #include "parser.hpp"
@@ -99,7 +100,7 @@ std::string rollerNote(double r) {
 
 void printHelp() {
     std::printf(
-        "mech — mechanism language, M5: hybrid modes & weight drives\n"
+        "mech — mechanism language, M7: contact, cams, gears, friction; CSV export\n"
         "\n"
         "usage:\n"
         "  mech check <file.mech>              parse + DOF analysis + initial assembly\n"
@@ -111,6 +112,13 @@ void printHelp() {
         "                      (dynamic files integrate at their world step; the table\n"
         "                      gains an energy column, drive reaction torques and, for\n"
         "                      hybrid files, the mode state and the energy ledger)\n"
+        "  --csv <file>        (with --headless) write the whole run as CSV: every body's\n"
+        "                      pose, contacts (gap, force, state), and for dynamic files\n"
+        "                      velocities, energies and every term of the energy ledger\n"
+        "  --probe <b.a>       (repeatable) also record anchor a of body b in the world\n"
+        "  --dt <sec>          kinematic frame step (default 1/60; dynamic files use their\n"
+        "                      world step)\n"
+        "  --every <n>         record every n-th step\n"
         "  --trace <b.a>       draw the path of body b's anchor a (coupler curve)\n"
         "  --speed <x>         initial speed multiplier (default 1)\n"
         "  --paused            start paused\n"
@@ -471,8 +479,28 @@ int cmdCheck(const std::string& path) {
     return anyError ? 1 : 0;
 }
 
+// What `mech run --headless` should export (M7).
+struct RunExport {
+    std::string csv;                  // output path ("" = none)
+    std::vector<std::string> probes;  // body.anchor, each recorded as world x, y
+    double dt = 0.0;                  // kinematic frame step in seconds (0 = 1/60)
+    long every = 1;                   // record every n-th step
+};
+
+// A CSV file being written: the Recorder plus the open stream.
+struct CsvSink {
+    std::FILE* f = nullptr;
+    const Recorder* rec = nullptr;
+    long rows = 0;
+    ~CsvSink() { if (f) std::fclose(f); }
+    void row(double t, const std::vector<double>& q, const std::vector<double>& qd, double maxRes) {
+        std::fprintf(f, "%s\n", Recorder::csvLine(rec->sample(t, q, qd, maxRes)).c_str());
+        ++rows;
+    }
+};
+
 int cmdRun(const std::string& path, double headlessSecs, bool headless,
-           const std::string& traceRef, double speed, bool paused) {
+           const std::string& traceRef, double speed, bool paused, const RunExport& ex) {
     Program prog = loadAndParse(path);
     if (prog.mechanisms.empty()) {
         throw ToolError{path, 0, 0, "file contains no mechanism"};
@@ -503,6 +531,29 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
         return 1;
     }
 
+    if (!headless && (!ex.csv.empty() || !ex.probes.empty() || ex.dt > 0.0 || ex.every != 1)) {
+        throw ToolError{path, 0, 0, "--csv, --probe, --dt and --every need --headless <sec>"};
+    }
+    std::vector<Probe> probes;
+    for (const std::string& ref : ex.probes) {
+        const size_t dot = ref.find('.');
+        const int bi = dot == std::string::npos ? -1 : m.bodyIndex(ref.substr(0, dot));
+        const int ai = bi < 0 ? -1 : m.anchorIndex(bi, ref.substr(dot + 1));
+        if (bi < 0 || ai < 0) {
+            throw ToolError{path, 0, 0, "--probe expects an existing body.anchor, got '" + ref + "'"};
+        }
+        if (m.bodies[(size_t)bi].isGround) {
+            throw ToolError{path, 0, 0, "--probe '" + ref + "' is on the ground body (it never moves)"};
+        }
+        probes.push_back(Probe{bi, ai});
+    }
+    if (ex.every < 1) throw ToolError{path, 0, 0, "--every must be at least 1"};
+    if (m.world.dynamic && ex.dt > 0.0) {
+        throw ToolError{path, 0, 0, "--dt applies to kinematic files; a dynamic file integrates at "
+                                    "its world step (use --every to thin the output)"};
+    }
+    if (ex.dt < 0.0) throw ToolError{path, 0, 0, "--dt must be positive"};
+
     if (headless) {
         if (m.world.dynamic) {
             // fixed-step integration, fully deterministic
@@ -524,9 +575,21 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
             long reportEvery = std::max(1L, (long)std::llround(0.5 / h));
             double worstRes = 0.0;
             double dEworst = 0.0;
+            Recorder rec(m, &dyn, probes);
+            rec.setBaseline(E0);
+            CsvSink csv;
+            if (!ex.csv.empty()) {
+                csv.f = std::fopen(ex.csv.c_str(), "w");
+                if (!csv.f) throw ToolError{path, 0, 0, "cannot write '" + ex.csv + "'"};
+                csv.rec = &rec;
+                std::fprintf(csv.f, "%s\n", rec.headerLine().c_str());
+                csv.row(0.0, q, qd, sys.maxResidual(q, 0.0));
+            }
             for (long k = 1; k <= steps; ++k) {
                 const double t = (k - 1) * h;
                 dyn.step(q, qd, t);
+                if (csv.f && (k % ex.every == 0 || k == steps))
+                    csv.row(k * h, q, qd, sys.maxResidual(q, k * h));
                 if (k % reportEvery == 0 || k == steps) {
                     const double r = sys.maxResidual(q, k * h);
                     worstRes = std::max(worstRes, r);
@@ -605,12 +668,16 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
                 std::printf("done: worst residual %.2e, worst |E - E0| %.2e J\n",
                             worstRes, dEworst);
             }
+            if (csv.f)
+                std::printf("wrote %s: %ld rows x %zu columns\n", ex.csv.c_str(), csv.rows,
+                            rec.columns().size());
             return 0;
         }
 
-        const double dt = 1.0 / 60.0;
-        std::printf("headless run of '%s' for %.2f s (dt = 1/60 s, angles in deg)\n",
-                    m.name.c_str(), headlessSecs);
+        const double dt = ex.dt > 0.0 ? ex.dt : 1.0 / 60.0;
+        const long printEvery = std::max(1L, (long)std::llround(0.5 / dt));
+        std::printf("headless run of '%s' for %.2f s (dt = %.6g s, angles in deg)\n",
+                    m.name.c_str(), headlessSecs, dt);
         std::printf("%8s  %10s  ", "t", "maxRes");
         for (const Body& b : m.bodies)
             if (!b.isGround) std::printf("%-11s", b.name.c_str());
@@ -619,13 +686,24 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
                 m.bodies[(size_t)tj.body].anchors[(size_t)tj.anchor].name + " x,y").c_str());
         std::printf("\n");
 
+        Recorder rec(m, nullptr, probes);
+        CsvSink csv;
+        const std::vector<double> noVel;
+        if (!ex.csv.empty()) {
+            csv.f = std::fopen(ex.csv.c_str(), "w");
+            if (!csv.f) throw ToolError{path, 0, 0, "cannot write '" + ex.csv + "'"};
+            csv.rec = &rec;
+            std::fprintf(csv.f, "%s\n", rec.headerLine().c_str());
+            csv.row(0.0, q, noVel, sys.maxResidual(q, 0.0));
+        }
         int frame = 0;
         double maxSeen = 0;
         for (double t = dt; t <= headlessSecs + 1e-9; t += dt, ++frame) {
             sys.solve(q, t, iters);
             double r = sys.maxResidual(q, t);
             maxSeen = std::max(maxSeen, r);
-            if (frame % 30 == 0) {
+            if (csv.f && (frame + 1) % ex.every == 0) csv.row(t, q, noVel, r);
+            if (frame % printEvery == 0) {
                 std::printf("%8.3f  %10.2e  ", t, r);
                 for (const Body& b : m.bodies)
                     if (!b.isGround) std::printf("%10.2f    ", rad2deg(q[b.qOffset]));
@@ -637,6 +715,9 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
             }
         }
         std::printf("done: %d frames, worst residual %.2e\n", frame, maxSeen);
+        if (csv.f)
+            std::printf("wrote %s: %ld rows x %zu columns\n", ex.csv.c_str(), csv.rows,
+                        rec.columns().size());
         return 0;
     }
 
@@ -667,6 +748,7 @@ int main(int argc, char** argv) {
             std::string traceRef;
             double speed = 1.0;
             bool paused = false;
+            RunExport ex;
             for (int i = 3; i < argc; ++i) {
                 std::string a = argv[i];
                 if (a == "--headless") {
@@ -678,12 +760,21 @@ int main(int argc, char** argv) {
                     speed = std::atof(argv[++i]);
                 } else if (a == "--paused") {
                     paused = true;
+                } else if (a == "--csv" && i + 1 < argc) {
+                    ex.csv = argv[++i];
+                } else if (a == "--probe" && i + 1 < argc) {
+                    ex.probes.push_back(argv[++i]);
+                } else if (a == "--dt" && i + 1 < argc) {
+                    ex.dt = std::atof(argv[++i]);
+                    if (!(ex.dt > 0.0)) { std::fprintf(stderr, "--dt must be positive\n"); return 1; }
+                } else if (a == "--every" && i + 1 < argc) {
+                    ex.every = std::atol(argv[++i]);
                 } else {
                     std::fprintf(stderr, "unknown option '%s'\n", a.c_str());
                     return 1;
                 }
             }
-            return cmdRun(argv[2], headlessSecs, headless, traceRef, speed, paused);
+            return cmdRun(argv[2], headlessSecs, headless, traceRef, speed, paused, ex);
         }
 
         std::fprintf(stderr, "unknown command '%s' (try: check, run, test)\n", cmd.c_str());

@@ -992,7 +992,7 @@ resistance, more than one contact point per `touch`, and compliant
 
 ## 8. Test matrix
 
-`mech test` (14023 checks) covers: lexer tokens/units/keywords/comments/errors;
+`mech test` (14482 checks) covers: lexer tokens/units/keywords/comments/errors;
 parser AST shapes for all M3 and M4 forms and all error classes; model checks,
 desugaring, gear radius arithmetic, module rules, mass derivation (rods,
 discs, compound assemblies, overrides), DOF arithmetic including tangent
@@ -1143,6 +1143,19 @@ static balance `N cross(footArm, n) = tau` to 1e-5; the forward ratchet with fri
 and bit-for-bit determinism. Flipping the friction's sign, dropping its dissipation
 from the ledger, removing the stability widening, or mis-scaling `mu` breaks checks.
 
+The M7 suite adds: the Recorder's columns (unique names, units in the name, one header
+cell per column, no energies or velocities in a kinematic run); the exported eccentric
+disc equal to its closed form to 1e-9 through the CSV text (12 significant digits
+round-trip), the probe equal to the body's pose, the foot on the disc and the normal
+through its centre; the cam's design pressure angle recovered from the exported
+contact normal (20.59 deg both ways, at the same cam angle to the 1-degree grid); a
+brake's ledger residual under 1e-6 J *at every sample* with the spring's 4 N, the
+deceleration and monotone kinetic energy as columns; and the command line end to end
+(row count, last time, closed form from the file itself; misuse — unknown or
+ground-hosted probe, `--csv` without `--headless`, `--every 0`, `--dt` on a dynamic
+file — refused with a nonzero status). Dropping friction from the exported ledger,
+flipping the normal, mis-indexing the probe, or ignoring `--every` breaks checks.
+
 ## 9. Milestone history & reserved ground
 
 M1 walked the skeleton (lexer/parser/rods/pins/drives); M2 added shafts,
@@ -1196,6 +1209,13 @@ and gravity pawl that clicks once per tooth forward and locks in reverse.
 M6f added friction: `touch ... friction mu`, regularized Coulomb with a stability
 width taken from the constrained inertia and its dissipation in the ledger. The
 ratchet's reverse lock now comes to rest (it rang forever without).
+
+M7 is tooling rather than language: `mech run --headless --csv` exports a run as a
+time series (see `docs/EXPORT.md`) — poses, contact gap and force, velocities,
+energies, and every term of the energy ledger *with its residual as a column*, so
+conservation is something to plot rather than a number at the end. It is built on a
+`Recorder` that the tests drive directly; the exported contact normal reproduces the
+plate cam's design pressure angle (20.590 deg against the formula's 20.59 deg).
 
 The rest is reserved: static friction proper (the regularization creeps at ~2 mm/s
 instead of sticking), tangential impact impulses, curve-against-curve contact (the

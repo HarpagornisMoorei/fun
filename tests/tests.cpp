@@ -9,14 +9,19 @@
 #include "../src/model.hpp"
 #include "../src/parser.hpp"
 #include "../src/profile.hpp"
+#include "../src/record.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include <sys/wait.h>
+#include <unistd.h>
 
 using namespace mech;
 
@@ -5303,6 +5308,220 @@ void testFriction() {
     }
 }
 
+
+// ---- M7: time-series export ---------------------------------------------------------------
+
+std::vector<std::string> splitCsv(const std::string& line) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (char c : line) {
+        if (c == ',') { out.push_back(cur); cur.clear(); } else cur += c;
+    }
+    out.push_back(cur);
+    return out;
+}
+
+int colIndex(const std::vector<std::string>& cols, const std::string& name) {
+    for (size_t i = 0; i < cols.size(); ++i)
+        if (cols[i] == name) return (int)i;
+    return -1;
+}
+
+void testRecorder() {
+    std::printf("[record M7]\n");
+
+    // ---- kinematic: the eccentric disc through the Recorder ------------------------------
+    {
+        Model m = buildFromText(eccentricSrc("profile disc on cam.rim { circle: 0.03 }", "roller 0.006").c_str());
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        const int ifol = m.bodyIndex("follower");
+        const int itip = m.anchorIndex(ifol, "tip");
+        Recorder rec(m, nullptr, {Probe{ifol, itip}});
+        const std::vector<std::string>& cols = rec.columns();
+        CHECK(cols[0] == "t[s]");
+        for (const char* n : {"cam.theta[rad]", "follower.y[m]", "follower.tip.x[m]", "follower.tip.y[m]",
+                              "maxRes", "follower.tip@disc.gap[m]", "follower.tip@disc.foot.x[m]",
+                              "follower.tip@disc.normal[rad]"})
+            CHECK(colIndex(cols, n) >= 0);
+        CHECK(colIndex(cols, "KE[J]") < 0);                       // no energies in a kinematic run
+        CHECK(colIndex(cols, "follower.vx[m/s]") < 0);
+        CHECK(rec.headerLine().find('\n') == std::string::npos);
+        {   // names are unique and the header has exactly one cell per column
+            CHECK(splitCsv(rec.headerLine()).size() == cols.size());
+            for (size_t i = 0; i < cols.size(); ++i)
+                for (size_t j = i + 1; j < cols.size(); ++j) CHECK(cols[i] != cols[j]);
+        }
+        const int iy = colIndex(cols, "follower.y[m]"), ipy = colIndex(cols, "follower.tip.y[m]");
+        const int igap = colIndex(cols, "follower.tip@disc.gap[m]");
+        const int ith = colIndex(cols, "cam.theta[rad]"), inorm = colIndex(cols, "follower.tip@disc.normal[rad]");
+        const int ifx = colIndex(cols, "follower.tip@disc.foot.x[m]");
+        double worstY = 0.0, worstProbe = 0.0, worstGap = 0.0, worstRound = 0.0;
+        for (int k = 0; k <= 72; ++k) {                           // one turn, 5 degrees a step
+            const double t = k / 6.0;
+            sys.solve(q, t, iters, &res);
+            const std::vector<double> row = rec.sample(t, q, {}, sys.maxResidual(q, t));
+            CHECK(row.size() == cols.size());
+            worstY = std::max(worstY, std::fabs(row[(size_t)iy] - eccentricY(row[(size_t)ith], 0.006)));
+            worstProbe = std::max(worstProbe, std::fabs(row[(size_t)ipy] - row[(size_t)iy]));   // tip at the origin
+            worstGap = std::max(worstGap, std::fabs(row[(size_t)igap]));                        // in contact throughout
+            // the foot lies on the disc: |foot - rim centre| = R, the rim centre being e off the axle
+            const double th = row[(size_t)ith];
+            const Vec2 centre{0.010 * std::cos(th), 0.010 * std::sin(th)};
+            const Vec2 foot{row[(size_t)ifx], row[(size_t)ifx + 1]};
+            CHECK_APPROX(vlen(foot - centre), 0.030, 1e-9);
+            // and the normal points from the disc centre through the foot
+            const Vec2 n = normalize(foot - centre);
+            CHECK_APPROX(std::atan2(n.y, n.x), row[(size_t)inorm], 1e-9);
+            // the CSV text round-trips every value to 12 significant digits
+            const std::vector<std::string> cells = splitCsv(Recorder::csvLine(row));
+            CHECK(cells.size() == row.size());
+            for (size_t i = 0; i < row.size(); ++i)
+                worstRound = std::max(worstRound, std::fabs(std::strtod(cells[i].c_str(), nullptr) - row[i]) /
+                                                      std::max(1e-300, std::max(1e-9, std::fabs(row[i]))));
+        }
+        CHECK(worstY < 1e-9);          // the exported follower height IS the closed form
+        CHECK(worstProbe < 1e-12);
+        CHECK(worstGap < 1e-9);
+        CHECK(worstRound < 1e-10);
+    }
+
+    // ---- two independent routes to the same number ----------------------------------------------
+    // The cam synthesizer's design pressure angle comes from a FORMULA (tan a = s'/r); the
+    // Recorder's contact normal comes from the SOLVED geometry. They must agree.
+    {
+        Model m = buildFromText(plateCamSrc(kCamBody, "30").c_str());
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        Recorder rec(m, nullptr, {});
+        const int inorm = colIndex(rec.columns(), "follower.tip@lobe.normal[rad]");
+        const int ith = colIndex(rec.columns(), "cam.theta[rad]");
+        CHECK(inorm >= 0 && ith >= 0);
+        double maxAlpha = 0.0, atTheta = 0.0;
+        for (int k = 0; k <= 360; ++k) {                          // one turn, 1 degree a step
+            const double t = k / 30.0;
+            sys.solve(q, t, iters, &res);
+            const std::vector<double> row = rec.sample(t, q, {}, 0.0);
+            const double alpha = std::fabs(row[(size_t)inorm] - kPi / 2.0);   // vertical rail
+            if (alpha > maxAlpha) { maxAlpha = alpha; atTheta = std::fmod(row[(size_t)ith], 2.0 * kPi); }
+        }
+        CHECK_APPROX(rad2deg(maxAlpha), rad2deg(m.cams[0].maxPressure), 0.05);     // 20.59 deg, both ways
+        // and at the same cam angle, to the 1 degree grid (46.7 designed, 46.6 measured)
+        CHECK_APPROX(rad2deg(atTheta), rad2deg(m.cams[0].maxPressureAt), 1.0);
+    }
+
+    // ---- dynamic: the brake's energy, force and ledger as time series ----------------------------
+    {
+        Model m = buildFromText(brakeSrc(0.25, 0.01, 0.0005).c_str());
+        ConstraintSystem sys(m);
+        DynamicsSystem dyn(m, sys);
+        std::vector<double> q, qd((size_t)m.nq(), 0.0);
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        dyn.projectVelocities(q, qd);
+        const int iw = m.bodyIndex("wheel");
+        qd[(size_t)m.bodies[iw].qOffset] = 5.0;
+        const double E0 = dyn.kinetic(q, qd) + dyn.potential(q);
+        Recorder rec(m, &dyn, {});
+        rec.setBaseline(E0);
+        const std::vector<std::string>& cols = rec.columns();
+        for (const char* n : {"wheel.omega[rad/s]", "shoe.tip@rim.N[N]", "shoe.tip@rim.engaged", "KE[J]", "PE[J]",
+                              "E[J]", "ledger.friction[J]", "ledger.residual[J]"})
+            CHECK(colIndex(cols, n) >= 0);
+        CHECK(colIndex(cols, "drive.wheel[N*m]") < 0);            // no rate drive here
+        const int iw_ = colIndex(cols, "wheel.omega[rad/s]"), iN = colIndex(cols, "shoe.tip@rim.N[N]");
+        const int ie = colIndex(cols, "shoe.tip@rim.engaged"), iKE = colIndex(cols, "KE[J]");
+        const int iPE = colIndex(cols, "PE[J]"), iE = colIndex(cols, "E[J]");
+        const int iFr = colIndex(cols, "ledger.friction[J]"), iRes = colIndex(cols, "ledger.residual[J]");
+        double worstRes = 0.0, worstN = 0.0, worstE = 0.0, worstDecel = 0.0, prevKE = 1e9;
+        bool monotone = true, always = true;
+        std::vector<double> last;
+        for (long k = 0; k <= 1600; ++k) {                        // 0.8 s
+            if (k > 0) dyn.step(q, qd, (k - 1) * m.world.step);
+            if (k % 100 != 0) continue;
+            const double t = k * m.world.step;
+            const std::vector<double> row = rec.sample(t, q, qd, sys.maxResidual(q, t));
+            CHECK(row.size() == cols.size());
+            worstRes = std::max(worstRes, std::fabs(row[(size_t)iRes]));
+            worstN = std::max(worstN, std::fabs(row[(size_t)iN] - 4.0));
+            worstE = std::max(worstE, std::fabs(row[(size_t)iE] - (row[(size_t)iKE] + row[(size_t)iPE])));
+            always = always && row[(size_t)ie] == 1.0;
+            if (row[(size_t)iKE] > prevKE + 1e-12) monotone = false;
+            prevKE = row[(size_t)iKE];
+            if (t > 0.0) worstDecel = std::max(worstDecel, std::fabs(row[(size_t)iw_] - (5.0 - 5.0 * t)));
+            last = row;
+        }
+        CHECK(worstRes < 1e-6);        // the ledger closes at every sample, not just at the end
+        CHECK(worstN < 1e-5);          // the spring's 4 N, as a column
+        CHECK(worstE < 1e-12);
+        CHECK(worstDecel < 1e-3);      // the wheel decelerates at 5 rad/s^2 (and is still sliding at 0.8 s)
+        CHECK(always && monotone);     // always on the curve; kinetic energy only ever falls
+        CHECK_APPROX(last[(size_t)iFr], 0.5 * 0.01 * (25.0 - 1.0), 1e-3);   // friction so far: (1/2) I (w0^2 - w^2)
+    }
+
+    // ---- the command line, end to end -------------------------------------------------------------
+    if (std::ifstream("./mech")) {
+        auto run = [&](const std::string& args) {
+            const int st = std::system(("./mech run " + args + " >/dev/null 2>&1").c_str());
+            return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+        };
+        char tmpl[] = "/tmp/mech_csv_XXXXXX";
+        const int fd = mkstemp(tmpl);
+        if (fd >= 0) close(fd);
+        const std::string out = tmpl;
+
+        CHECK(run("examples/eccentric.mech --headless 1 --csv " + out + " --every 6 --probe follower.tip") == 0);
+        {
+            std::ifstream in(out);
+            std::string line;
+            std::getline(in, line);
+            const std::vector<std::string> head = splitCsv(line);
+            CHECK(colIndex(head, "follower.tip.y[m]") >= 0);
+            const int iy = colIndex(head, "follower.y[m]"), it = colIndex(head, "t[s]");
+            int rows = 0;
+            double lastT = 0.0, worst = 0.0;
+            while (std::getline(in, line)) {
+                const std::vector<std::string> cells = splitCsv(line);
+                CHECK(cells.size() == head.size());
+                const double th = deg2rad(360.0) * std::strtod(cells[(size_t)it].c_str(), nullptr);   // 60 rpm
+                worst = std::max(worst, std::fabs(std::strtod(cells[(size_t)iy].c_str(), nullptr) - eccentricY(th, 0.006)));
+                lastT = std::strtod(cells[(size_t)it].c_str(), nullptr);
+                ++rows;
+            }
+            CHECK(rows == 11);                          // t = 0 plus every 6th of 60 frames
+            CHECK_APPROX(lastT, 1.0, 1e-9);
+            CHECK(worst < 1e-8);                        // the file holds the closed form
+        }
+        CHECK(run("examples/jumpcam.mech --headless 0.05 --csv " + out + " --every 10") == 0);
+        {
+            std::ifstream in(out);
+            std::string line;
+            std::getline(in, line);
+            CHECK(colIndex(splitCsv(line), "ledger.residual[J]") >= 0);   // dynamic files carry the ledger
+        }
+        // misuse is refused with a nonzero status, not silently ignored
+        CHECK(run("examples/eccentric.mech --headless 1 --probe nope.tip") != 0);
+        CHECK(run("examples/eccentric.mech --headless 1 --probe frame.rail") != 0);     // ground never moves
+        CHECK(run("examples/eccentric.mech --csv " + out) != 0);                         // needs --headless
+        CHECK(run("examples/eccentric.mech --headless 1 --every 0") != 0);
+        CHECK(run("examples/jumpcam.mech --headless 0.1 --dt 0.01") != 0);               // dynamic: world step rules
+        CHECK(run("examples/eccentric.mech --headless 1 --dt 0.1 --csv " + out) == 0);   // kinematic: dt is fine
+        unlink(tmpl);
+    } else {
+        std::fprintf(stderr, "note: ./mech not found (cwd?); skipping the command-line checks\n");
+    }
+}
+
 } // namespace (anonymous)
 
 namespace mech {
@@ -5338,6 +5557,7 @@ int runAllTests() {
     testNonCircularMesh();
     testPolygonRatchet();
     testFriction();
+    testRecorder();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

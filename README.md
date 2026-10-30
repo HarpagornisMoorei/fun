@@ -67,6 +67,19 @@ Kinematic files are solved with an analytic-Jacobian Levenberg–Marquardt
 assembly; files with masses and forces are integrated as constrained
 dynamics, with an energy ledger that has to close.
 
+## Measuring a run
+
+`--csv` exports a whole run as a table — every body's pose, contact gap and force,
+and (for dynamic files) velocities, energies and every term of the energy ledger — so
+you can plot or check it rather than just watch it:
+
+```bash
+mech run examples/jumpcam.mech --headless 1 --csv jump.csv
+python3 scripts/summarize_run.py jump.csv 'follower.tip@lobe.N[N]'
+```
+
+See [`docs/EXPORT.md`](docs/EXPORT.md) for the columns and recipes.
+
 ## Examples
 
 | file | shows |
