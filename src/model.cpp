@@ -51,8 +51,11 @@ ContactState Model::touchState(const TouchJoint& t, const std::vector<double>& q
     cs.gap = f.signedDist;
     cs.s = f.s;
     cs.footLocal = f.point;
-    cs.foot = rotate(origin + f.point, th) + tr;
+    cs.footArm = rotate(origin + f.point, th);
+    cs.foot = cs.footArm + tr;
     cs.normal = rotate(f.normal, th);
+    cs.tangent = rotate(normalize(f.tangent), th);
+    cs.kappa = f.curvature;
     return cs;
 }
 
@@ -260,6 +263,15 @@ std::vector<std::string> Model::assemble(std::vector<double>& q) const {
         }
     }
 
+    // M6c: initial contact state. A kinematic contact is always bilateral. In
+    // a dynamic mechanism a contact starts engaged only if the point is
+    // already on the curve where it was placed; otherwise the follower starts
+    // in flight and the first touch-down is a real impact.
+    for (const TouchJoint& tj : touches) {
+        tj.engaged = !world.dynamic ||
+                     std::fabs(touchState(tj, q).gap - tj.roller) <= 1e-6;
+    }
+
     // M4: dials without an explicit center/radius capture them from the
     // assembled hands (auto-center on the average mount, auto-size to the
     // longest hand).
@@ -327,6 +339,7 @@ std::vector<std::string> Model::validateAssembly(const std::vector<double>& q) c
         }
     }
     for (const TouchJoint& tj : touches) {
+        if (!tj.engaged) continue;      // a follower starting in flight is not an error
         const Profile& pr = profiles[(size_t)tj.profile];
         const double err = touchState(tj, q).gap - tj.roller;
         if (std::fabs(err) > 1e-6) {
@@ -1001,10 +1014,16 @@ Model buildModel(const MechanismDecl& decl) {
         } else {
             tj.roller = pr.designRoller;   // a cam is cut for its roller: follow it
         }
-        if (m.world.dynamic) {
-            throw SemanticError{td.line, "touch in a dynamic mechanism is not supported yet "
-                "(M6a is kinematic: no world block, springs, torque or weight drives, or "
-                "modes) — unilateral contact with separation is planned for M6c"};
+        if (td.hasRestitution) {
+            if (!m.world.dynamic) {
+                throw SemanticError{td.line, "touch 'restitution' has no effect in a "
+                    "kinematic mechanism (the contact is bilateral and nothing lands) — "
+                    "add a world block, or drop it"};
+            }
+            if (!(td.restitution >= 0.0 && td.restitution <= 1.0)) {
+                throw SemanticError{td.line, "touch 'restitution' must lie in [0, 1]"};
+            }
+            tj.restitution = td.restitution;
         }
         m.touches.push_back(tj);
     }

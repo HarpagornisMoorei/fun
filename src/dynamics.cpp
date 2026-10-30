@@ -269,6 +269,33 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
         }
     }
 
+    // M6c: touch rows. The row is the signed gap g(q) of a point against a
+    // curve, so with w the point's velocity relative to the curve's material
+    // point at the foot, t the unit tangent, kappa the curve's curvature and
+    // u the foot's sliding speed along the curve (see docs/LANG.md 5.2):
+    //
+    //   g''  = J qdd + bias
+    //   bias = n . (-wB^2 rB + wA^2 rA) + wA u + Omega (t . w)
+    //   u    = (t . w - g wA) / (1 + g kappa),     Omega = wA + kappa u
+    //
+    // (A = the profile's body, B = the touching point's body; rA is the arm to
+    // the foot, rB the arm to the anchor.) For a roller g is its radius, so
+    // 1 + g kappa is the offset curve's stretch over the surface.
+    const int touchRow0 = r;
+    for (const TouchJoint& tj : m.touches) {
+        if (!tj.engaged) continue;
+        const ContactState cs = m.touchState(tj, q);
+        const Profile& pr = m.profiles[(size_t)tj.profile];
+        const double wB = bodyW(tj.body), wA = bodyW(pr.body);
+        const Vec2 rB = anchorOff(tj.body, tj.anchor);
+        const Vec2 rA = cs.footArm;
+        const Vec2 w = bodyVel(tj.body) - bodyVel(pr.body) + wB * perp(rB) - wA * perp(rA);
+        const double tw = dot(cs.tangent, w);
+        const double u = (tw - cs.gap * wA) / (1.0 + cs.gap * cs.kappa);
+        const double Om = wA + cs.kappa * u;
+        bias[r++] = dot(cs.normal, (-wB * wB) * rB + (wA * wA) * rA) + wA * u + Om * tw;
+    }
+
     // --- KKT via Schur complement --------------------------------------------
     std::vector<MassBlock> Mblocks;
     massBlocks(q, Mblocks);
@@ -321,6 +348,17 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
         for (int cix = 0; cix < nq; ++cix) qdd[cix] += BJ[j][cix] * lam[j];
     }
 
+    // M6c: contact normal forces (0 where the contact is lifted off)
+    lastContact_.assign(m.touches.size(), 0.0);
+    {
+        int rr = touchRow0;
+        for (size_t ti = 0; ti < m.touches.size(); ++ti) {
+            if (!m.touches[ti].engaged) continue;
+            lastContact_[ti] = rr < (int)lam.size() ? lam[rr] : 0.0;
+            ++rr;
+        }
+    }
+
     // reaction torques of the rate drives (N*m about each driven body;
     // a disabled mode hold reports 0)
     lastReaction_.assign(m.drives.size(), 0.0);
@@ -356,8 +394,17 @@ void DynamicsSystem::integrate(std::vector<double>& q, std::vector<double>& qd,
     // semi-implicit Euler drifts at first order on this non-separable system
     // (the mass matrix depends on q); RK4 keeps chaotic mechanisms' energy
     // flat to well under a percent at the default 2 ms step.
+    // M6c: the rate drives' power (reaction torque x prescribed rate) at each
+    // stage, for the energy ledger: Simpson over the four stages.
+    auto power = [&]() {
+        double P = 0.0;
+        for (size_t di = 0; di < m.drives.size(); ++di)
+            if (m.drives[di].enabled) P += lastReaction_[di] * m.drives[di].omegaRad;
+        return P;
+    };
     std::vector<double> a1, a2, a3, a4;
     accelerations(q, qd, a1);
+    const double P1 = power();
 
     std::vector<double> qS(nq), qdS(nq);
     for (int i = 0; i < nq; ++i) {
@@ -365,18 +412,21 @@ void DynamicsSystem::integrate(std::vector<double>& q, std::vector<double>& qd,
         qdS[i] = qd[i] + 0.5 * h * a1[i];
     }
     accelerations(qS, qdS, a2);
+    const double P2 = power();
 
     for (int i = 0; i < nq; ++i) {
         qS[i] = q[i] + 0.5 * h * qd[i] + 0.25 * h * h * a1[i];
         qdS[i] = qd[i] + 0.5 * h * a2[i];
     }
     accelerations(qS, qdS, a3);
+    const double P3 = power();
 
     for (int i = 0; i < nq; ++i) {
         qS[i] = q[i] + h * qd[i] + 0.5 * h * h * a2[i];
         qdS[i] = qd[i] + h * a3[i];
     }
     accelerations(qS, qdS, a4);
+    lastDriveWork_ = h / 6.0 * (P1 + 2.0 * P2 + 2.0 * P3 + power());
 
     for (int i = 0; i < nq; ++i)
         qd[i] += h / 6.0 * (a1[i] + 2.0 * a2[i] + 2.0 * a3[i] + a4[i]);
@@ -392,9 +442,11 @@ void DynamicsSystem::integrate(std::vector<double>& q, std::vector<double>& qd,
 }
 
 void DynamicsSystem::projectVelocities(const std::vector<double>& q,
-                                        std::vector<double>& qd) const {
+                                        std::vector<double>& qd,
+                                        double* impulseWork) const {
     const int nq = m.nq();
     const int rows = sys.rowCount();
+    if (impulseWork) *impulseWork = 0.0;
     if (rows <= 0) return;
 
     std::vector<double> J2;
@@ -448,6 +500,9 @@ void DynamicsSystem::projectVelocities(const std::vector<double>& q,
         for (int j = 0; j < rows; ++j) {
             if (mu[j] == 0.0) continue;
             for (int cix = 0; cix < nq; ++cix) qd[cix] -= BJ2[j][cix] * mu[j];
+            // the impulse on row j is -mu_j; on a prescribed coordinate it
+            // does work (-mu_j) * nu_j
+            if (impulseWork) *impulseWork -= mu[j] * nu[j];
         }
     }
 }
@@ -580,75 +635,243 @@ void DynamicsSystem::accountWeights(const std::vector<double>& qStart,
     }
 }
 
+// ---- M6c unilateral contact -----------------------------------------------------
+//
+// A touch in a dynamic mechanism is a two-state element. While `engaged` its
+// row is an ordinary equality constraint (gap = roller) and its multiplier is
+// the normal force, which must stay >= 0. It lifts off when that force would
+// have to go negative (a pull); it lands again when the gap closes, and the
+// landing is a Newton impact. Both are zero-crossings handled by the same
+// bisection loop as the mode guards.
+
+namespace {
+const double kForceTol = 1e-9;    // N: below this a contact is "just touching"
+const double kSettleGap = 1e-9;   // m: deeper than this at a step start is a touch-down
+// m/s: slower landings are plastic. A bounce restarts inside the kSettleGap band, so
+// the guard can only see a landing after sqrt(2 a kSettleGap) of free speed (about
+// 3e-4 m/s at 56 m/s^2, 1.4e-3 at 1000): without a cutoff above that floor a
+// resting contact would bounce forever. 2 mm/s clears it with margin and is far
+// below any landing worth modelling a rebound for.
+const double kStickSpeed = 2e-3;
+}
+
+double DynamicsSystem::contactForce(int ti, const std::vector<double>& q,
+                                    const std::vector<double>& qd) const {
+    std::vector<double> qdd;
+    accelerations(q, qd, qdd);
+    return lastContact_[(size_t)ti];
+}
+
+void DynamicsSystem::settleContacts(std::vector<double>& q, std::vector<double>& qd,
+                                    double tNow) const {
+    // Level-triggered resolution at the start of a (sub)step: a point already
+    // inside its curve lands now; an engaged contact that would have to pull
+    // lets go now. A few passes are enough — each pass flips at most one.
+    for (int pass = 0; pass < 8; ++pass) {
+        bool changed = false;
+        for (size_t ti = 0; ti < m.touches.size(); ++ti) {
+            const TouchJoint& tj = m.touches[ti];
+            if (tj.engaged) continue;
+            if (m.touchState(tj, q).gap - tj.roller < -kSettleGap) {
+                applyImpact((int)ti, q, qd, tNow);
+                changed = true;
+                break;
+            }
+        }
+        if (changed) continue;
+
+        bool anyEngaged = false;
+        for (const TouchJoint& tj : m.touches) if (tj.engaged) anyEngaged = true;
+        if (!anyEngaged) break;
+        std::vector<double> qdd;
+        accelerations(q, qd, qdd);
+        int worst = -1;
+        double worstF = -kForceTol;
+        for (size_t ti = 0; ti < m.touches.size(); ++ti) {
+            if (!m.touches[ti].engaged) continue;
+            if (lastContact_[ti] < worstF) { worstF = lastContact_[ti]; worst = (int)ti; }
+        }
+        if (worst < 0) break;
+        m.touches[(size_t)worst].engaged = false;   // lift off: no velocity change
+        ++stats_.liftoffs;
+    }
+}
+
+void DynamicsSystem::applyImpact(int ti, std::vector<double>& q, std::vector<double>& qd,
+                                 double tNow) const {
+    const TouchJoint& tj = m.touches[(size_t)ti];
+    ++stats_.impacts;
+
+    // Row on, position re-anchored onto the surface (the crossing was located
+    // to h/1024, so this is a sliver).
+    tj.engaged = true;
+    int iters = 0;
+    sys.solve(q, tNow, iters);
+
+    // Approach speed along the contact normal, from the pre-impact velocity.
+    std::vector<double> row((size_t)m.nq(), 0.0);
+    sys.touchRow(tj, q, row.data());
+    double gdot = 0.0;
+    for (int i = 0; i < m.nq(); ++i) gdot += row[(size_t)i] * qd[(size_t)i];
+    if (gdot >= 0.0) return;   // not actually approaching: just stay engaged
+
+    // Newton's impact law in the mass metric. qs is the velocity with the
+    // contact row held at rest (every other constraint still satisfied), so
+    //   qd+ = (1 + e) qs - e qd-
+    // has contact speed -e * gdot- and the same impulse direction. A slow
+    // landing is plastic: no bouncing the contact to death.
+    const double e = (-gdot < kStickSpeed) ? 0.0 : tj.restitution;
+    const double T0 = kinetic(q, qd);
+    std::vector<double> qs = qd;
+    double Wstick = 0.0;
+    projectVelocities(q, qs, &Wstick);
+    for (int i = 0; i < m.nq(); ++i)
+        qd[(size_t)i] = (1.0 + e) * qs[(size_t)i] - e * qd[(size_t)i];
+    const double dT = kinetic(q, qd) - T0;
+
+    // Energy: dT = (impulse work done by prescribed coordinates) - dissipated.
+    const double W = (1.0 + e) * Wstick;
+    stats_.driveWork += W;
+    stats_.impactLoss += W - dT;
+
+    if (e > 0.0) tj.engaged = false;   // bouncing away; it can land again
+}
+
 void DynamicsSystem::hybridStep(std::vector<double>& q, std::vector<double>& qd,
                                 double t, double h) const {
-    if (m.modes.empty()) {
+    const bool contacts = !m.touches.empty();
+    if (m.modes.empty() && !contacts) {
         const std::vector<double> q0 = q;
         integrate(q, qd, t, h);
+        stats_.driveWork += lastDriveWork_;
         if (!m.weights.empty()) accountWeights(q0, q);
         return;
     }
 
-    // Event loop: integrate the remainder, detect the first guard whose
-    // value rose across zero (rising edge: false at the start of the
-    // sub-interval, true at its end), localize the crossing by bisection
-    // (re-integrating sub-steps, resolution h/1024), apply the transition,
-    // and continue with what is left of the step. Simultaneous rises within
-    // one step are processed in declaration order; a pathological mode that
-    // fires more than 8 times in one step finishes the step unwatched.
+    // Event loop: integrate the remainder, detect every guard whose value
+    // rose across zero (rising edge: false at the start of the sub-interval,
+    // true at its end), localize each crossing by bisection (re-integrating
+    // sub-steps, resolution h/1024), process the *earliest*, and continue with
+    // what is left of the step. Guards are mode transitions, contact lift-off
+    // (the normal force going negative) and contact touch-down (the gap
+    // closing). Simultaneous crossings go in declaration order; a mechanism
+    // that fires more than 8 events in one step (32 with contacts, where a
+    // restitution bounce sequence is legitimate) finishes it unwatched; the
+    // next step's settle pass catches whatever that skipped.
     const std::vector<double> qStart = q;   // for the weight ledger
-    double tau = 0.0;
+    double tau = 0.0, work = 0.0;           // work: committed rate-drive work this step
     int events = 0;
+
+    struct Cand {
+        int kind;                  // 0 mode transition, 1 lift-off, 2 touch-down
+        const Mode* mo;
+        const ModeTransition* tr;
+        int ti;
+    };
+    // value > 0 means "the event has happened"
+    auto value = [&](const Cand& c, const std::vector<double>& qq,
+                     const std::vector<double>& dd) -> double {
+        switch (c.kind) {
+            case 0: return guardValue(*c.mo, *c.tr, qq, dd);
+            case 1: return -contactForce(c.ti, qq, dd) - kForceTol;
+            default: {
+                // armed while the point is within kSettleGap of the surface (just
+                // bounced, or resting), so a landing is never "already true"
+                const TouchJoint& tj = m.touches[(size_t)c.ti];
+                return -(m.touchState(tj, qq).gap - tj.roller) - kSettleGap;
+            }
+        }
+    };
+
+    if (contacts) settleContacts(q, qd, t);
+
     while (tau < h - 1e-12) {
         const double rem = h - tau;
         const double t0 = t + tau;
         const std::vector<double> q0 = q, qd0 = qd;
         integrate(q, qd, t0, rem);   // trial integration of the remainder
+        const double wTrial = lastDriveWork_;
 
-        const Mode* fmo = nullptr;
-        const ModeTransition* ftr = nullptr;
+        std::vector<Cand> fired;
         for (const Mode& mo : m.modes) {
             for (const ModeTransition& tr : mo.transitions) {
                 if (tr.from != mo.current) continue;
                 if (guardValue(mo, tr, q0, qd0) > 0.0) continue;  // already true
                 if (guardValue(mo, tr, q, qd) <= 0.0) continue;   // not true now
-                fmo = &mo;
-                ftr = &tr;
+                fired.push_back({0, &mo, &tr, -1});
+            }
+        }
+        for (size_t ti = 0; ti < m.touches.size(); ++ti) {
+            const Cand c{m.touches[ti].engaged ? 1 : 2, nullptr, nullptr, (int)ti};
+            if (value(c, q0, qd0) > 0.0) continue;    // already true
+            if (value(c, q, qd) <= 0.0) continue;     // not true now
+            fired.push_back(c);
+        }
+        if (fired.empty()) {      // no event: q, qd hold the whole remainder
+            work += wTrial;
+            break;
+        }
+
+        // bisect each candidate's crossing: value(t0) <= 0 < value(t0 + hi);
+        // the earliest wins (ties keep declaration order)
+        double bestHi = 1e300, bestWork = 0.0;
+        std::vector<double> bestQ, bestQd;
+        size_t bestIdx = 0;
+        for (size_t fi = 0; fi < fired.size(); ++fi) {
+            double lo = 0.0, hi = rem, wHi = wTrial;
+            std::vector<double> qHi = q, qdHi = qd;
+            for (int it = 0; it < 10; ++it) {
+                const double mid = 0.5 * (lo + hi);
+                std::vector<double> qm = q0, qdm = qd0;
+                integrate(qm, qdm, t0, mid);
+                const double wm = lastDriveWork_;
+                if (value(fired[fi], qm, qdm) > 0.0) {
+                    hi = mid;
+                    qHi = qm;
+                    qdHi = qdm;
+                    wHi = wm;
+                } else {
+                    lo = mid;
+                }
+            }
+            if (hi < bestHi) {
+                bestHi = hi;
+                bestWork = wHi;
+                bestQ = qHi;
+                bestQd = qdHi;
+                bestIdx = fi;
+            }
+        }
+        const Cand& ev = fired[bestIdx];
+        if (bestHi < rem) {
+            q = bestQ;     // land on the crossing state (guard true, h/1024 sharp)
+            qd = bestQd;
+        }
+        work += bestWork;
+
+        switch (ev.kind) {
+            case 0:
+                applyTransition(*ev.mo, *ev.tr, q, qd, t0 + bestHi);
                 break;
-            }
-            if (ftr) break;
+            case 1:
+                m.touches[(size_t)ev.ti].engaged = false;   // lift off, velocity unchanged
+                ++stats_.liftoffs;
+                break;
+            default:
+                applyImpact(ev.ti, q, qd, t0 + bestHi);
+                break;
         }
-        if (!ftr) break;   // no event: q, qd hold the whole remainder
+        tau += bestHi;
 
-        // bisect the crossing: g(t0) <= 0 < g(t0 + hi)
-        double lo = 0.0, hi = rem;
-        std::vector<double> qHi = q, qdHi = qd;
-        for (int it = 0; it < 10; ++it) {
-            const double mid = 0.5 * (lo + hi);
-            std::vector<double> qm = q0, qdm = qd0;
-            integrate(qm, qdm, t0, mid);
-            if (guardValue(*fmo, *ftr, qm, qdm) > 0.0) {
-                hi = mid;
-                qHi = qm;
-                qdHi = qdm;
-            } else {
-                lo = mid;
-            }
-        }
-        if (hi < rem) {
-            q = qHi;   // land on the crossing state (guard true, h/1024 sharp)
-            qd = qdHi;
-        }
-        applyTransition(*fmo, *ftr, q, qd, t0 + hi);
-        tau += hi;
-
-        if (++events >= 8) {
+        if (++events >= (contacts ? 32 : 8)) {
             // chatter guard: finish the step without further events
             integrate(q, qd, t + tau, h - tau);
+            work += lastDriveWork_;
             tau = h;
             break;
         }
     }
+    stats_.driveWork += work;
     if (!m.weights.empty()) accountWeights(qStart, q);
 }
 

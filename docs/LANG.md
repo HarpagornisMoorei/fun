@@ -1,11 +1,12 @@
-# The mech language — M6b specification
+# The mech language — M6c specification
 
-This document pins down the M6b kernel: lexical structure, grammar, static
+This document pins down the M6c kernel: lexical structure, grammar, static
 semantics, the kinematic solver's mathematical formulation, the
 constrained-dynamics integrator, the intent layer's synthesis rules, the
 hybrid elements (`mode` blocks with weight drives — the escapement's kernel),
-kinematic contact (`profile` curves and point-on-curve `touch` joints — the
-first higher pair), and plate cams stated as displacement diagrams.
+contact (`profile` curves and point-on-curve `touch` joints — the first
+higher pair — bilateral in kinematic files, unilateral with lift-off and
+impact in dynamic ones), and plate cams stated as displacement diagrams.
 It is the contract the implementation is tested against (`mech test`).
 
 ---
@@ -59,7 +60,7 @@ Four principles govern the design:
   `radius`, and the whole M5 hybrid vocabulary (`state`, `when`, `hold`,
   `impulse`, `maintain`, `theta`, `omega`, `advance`, `weight`, `barrel`,
   `drop`, `kg`, `m`, `mJ`) and the M6 contact vocabulary (`circle`, `polar`,
-  `points`, `roller`) and the M6b cam vocabulary (`cam` at statement start,
+  `points`, `roller`, `restitution`) and the M6b cam vocabulary (`cam` at statement start,
   `base`, `start`, `turn`, `rise`, `fall`, `return`, `over`, `dwell`,
   `cycloidal`, `harmonic`, `modtrap`) are *contextual* identifiers (not
   keywords), usable as names — a body called `cam` is fine.
@@ -145,7 +146,7 @@ profileDecl = "profile" IDENT [ "on" IDENT [ "." IDENT ] ] "{" shape "}"
 shape       = "circle" ":" num
             | "polar" ":" { "(" num [ "deg" ] "," num ")" }      (* angle, radius *)
             | "points" ":" { "(" num "," num ")" } ;
-touchDecl   = "touch" ref "on" IDENT [ "roller" num ] ;
+touchDecl   = "touch" ref "on" IDENT { "roller" num | "restitution" num } ;
 
 (* M6b: a plate cam stated as motion. Segments run in the order the follower
    meets them as the cam turns, and must fill exactly one turn. *)
@@ -227,9 +228,10 @@ Checks run at model build time, each error pointing at a source line:
 * A `touch` names a point (`body.anchor`) and a profile; they may not share a
   body (so ground cannot touch its own profile). `roller` must be positive;
   without it the point is a knife-edge tip.
-* **M6a is kinematic only:** a `touch` in a dynamic mechanism (world block,
-  spring, torque or weight drive, or any `mode`) is an error. Unilateral
-  contact with separation and impact is planned for M6c.
+* A `touch` is **bilateral** in a kinematic mechanism and **unilateral** in a
+  dynamic one (6.5). `restitution e` (Newton's coefficient, `0 <= e <= 1`,
+  default 0) belongs to the dynamic case; in a kinematic mechanism nothing
+  ever lands, so it is an error rather than silently ignored.
 
 **M6b cam checks** (each pointing at the offending segment's own line):
 
@@ -514,9 +516,10 @@ trial steps (unlike `psi`, which must be tracked). Curves are C2: a circle is
 exact; `polar` is the periodic cubic spline `r(phi)`; `points` is a pair of
 periodic cubic splines `x(s)`, `y(s)` on chord length.
 
-M6a contacts are **bilateral**: the row holds in both directions, i.e. force
-closure is assumed (a spring or gravity keeps a real follower on its cam).
-`mech check` labels each touch accordingly. The mechanism stays non-causal:
+In a *kinematic* mechanism a contact is **bilateral**: the row holds in both
+directions, i.e. force closure is assumed (a spring or gravity keeps a real
+follower on its cam). `mech check` labels each touch accordingly; the dynamic
+case is 6.5. The mechanism stays non-causal:
 the cam in `examples/eccentric.mech` is driven, but the contact relates the
 two bodies symmetrically.
 
@@ -707,6 +710,83 @@ budget, and `drawn` is what the mechanism actually collected.
 **Determinism.** Fixed step, fixed bisection depth, fixed declaration
 order: identical inputs give bit-identical trajectories (tested).
 
+### 6.5 Unilateral contact (M6c)
+
+In a dynamic mechanism a `touch` is a two-state element: **engaged** (its row
+is an ordinary equality constraint, `gap = roller`, and its multiplier is the
+normal force) or **in flight** (no row). The force may not pull, so the
+element switches on two zero-crossings, found by the same bisection loop as
+the mode guards:
+
+| event | guard fires when | action |
+|-------|------------------|--------|
+| lift-off | the normal force `lambda` falls below zero | row off; velocity unchanged |
+| touch-down | `gap - roller` closes to zero | Newton impact, then row on (or stay in flight if it bounces) |
+
+**The second-order term.** Dynamics needs `g'' = J q'' + bias`. For a point
+`B` against a curve on body `A` (`g` the signed gap, `n` and `t` the unit
+normal and tangent at the foot, `kappa` the curve's curvature there, `rA` and
+`rB` the arms to the foot and to the anchor, `w` the point's velocity relative
+to the curve's material point at the foot):
+
+```text
+w     = vB - vA + wB perp(rB) - wA perp(rA)
+u     = (t . w - g wA) / (1 + g kappa)           foot's sliding speed along the curve
+Om    = wA + kappa u                             angular rate of the normal
+bias  = n . (-wB^2 rB + wA^2 rA) + wA u + Om (t . w)
+```
+
+Derived by differentiating the foot condition `tau . d = 0` (which fixes `u`),
+and checked two ways: against finite differences of a moving ellipse to better
+than 1e-6 relative, and by a trajectory test — advance `q + h qd + h^2/2 qdd`
+and the residual stays at the solver's noise floor, whereas breaking any one of
+the five terms leaves an `O(h^2)` drift that fails the test. For a roller `g` is
+its radius, so `1 + g kappa` is exactly the stretch of the offset curve over
+the surface; it is singular only if the point reaches the curve's centre of
+curvature.
+
+**Impact.** Landing with approach speed `v = -gdot-` applies Newton's law in
+the mass metric. With `qs` the pre-impact velocity projected so the contact
+row is at rest (every other active constraint still holds — the existing
+relock projection),
+
+```text
+qd+ = (1 + e) qs - e qd-          contact speed -e gdot-, impulse along the row
+```
+
+A prescribed (rate-driven) body is "infinitely heavy", so the impulse it feels
+does work: the energy ledger is
+
+```text
+dE = weight + impulse + drive - impact
+drive  = integral of (reaction torque x prescribed rate) dt   (Simpson over the
+         four RK4 stages) + the work of each impact's impulse on driven rows
+impact = (impulse work) - dT   >= 0, the energy the landing discarded
+```
+
+and closes to 1e-6 J against 0.023 J of cam work over two turns of the
+jump-cam example. Landings slower than 2 mm/s are
+plastic (`e = 0`): a bounce restarts inside the 1 nm contact band, so the guard
+can only see the next landing after `sqrt(2 a delta)` of free speed (about
+0.3 mm/s at 56 m/s^2), and without a cutoff above that floor a resting contact
+would bounce forever. A genuine bounce sequence is finite: `e = 0.5` dropped
+0.1 m settles after 11 impacts, at 0.428 s — the analytic accumulation time
+`t1 (1 + 2e/(1 - e))`, with `t1 = sqrt(2 h0 / g)`, is 0.4284 s.
+
+**State.** A contact starts engaged only if the point is within 1 um of the
+curve where it was *placed* (so `rail` anchors set the starting posture); a
+point placed in the air starts in flight and its first touch-down is a real
+impact. A `settle` pass at each step start resolves what the event loop could
+not (a point already inside its curve lands; an engaged contact that would pull
+lets go), and events are processed earliest-first, up to 32 per step.
+Dynamic runs also now start from velocities consistent with the rate drives
+(previously a driven shaft spun up in the first step, an impulsive start that
+no ledger term covered).
+
+Not modelled: friction (the tangential slip speed `u` is available, so Coulomb
+friction needs no new row), more than one contact point per `touch`, and
+compliant (spring-damper) contact.
+
 ## 7. Desugaring register
 
 | surface | kernel expansion | status |
@@ -722,7 +802,8 @@ order: identical inputs give bit-identical trajectories (tested).
 | `profile p on b.c { circle: R }` | closed curve `c(s) = R(cos s, sin s)` at anchor `b.c`, riding `b` | M6a |
 | `profile p on b.c { polar: ... }` | periodic cubic spline `r(phi)` through the `(angle, radius)` knots | M6a |
 | `profile p on b.c { points: ... }` | periodic cubic splines through the points, normalised counter-clockwise | M6a |
-| `touch f.tip on p [roller r]` | row `signedGap(f.tip, p) - r` (bilateral, kinematic); on a cam, `r` defaults to the cam's roller | M6a |
+| `touch f.tip on p [roller r]` | row `signedGap(f.tip, p) - r`; on a cam, `r` defaults to the cam's roller | M6a |
+| `touch ... restitution e` (dynamic) | two-state element: row while engaged, lift-off at `lambda < 0`, Newton impact `qd+ = (1+e) qs - e qd-` at touch-down | M6c |
 | `cam c on b.a { base Rb roller rho rise h over a deg ... }` | solve the pitch curve `r0 + s(theta)`, offset inward by `rho`, emit a 720-point closed `points` profile; reject undercut | M6b |
 | `rise/fall/return/dwell` segments | piecewise displacement diagram `s(theta)` with rest-to-rest laws; must close on the base circle in exactly one turn | M6b |
 | `drive b at w from a0 deg` | row `theta_b - (a0 + w*t)` | M1 |
@@ -745,7 +826,7 @@ order: identical inputs give bit-identical trajectories (tested).
 
 ## 8. Test matrix
 
-`mech test` (13723 checks) covers: lexer tokens/units/keywords/comments/errors;
+`mech test` (13783 checks) covers: lexer tokens/units/keywords/comments/errors;
 parser AST shapes for all M3 and M4 forms and all error classes; model checks,
 desugaring, gear radius arithmetic, module rules, mass derivation (rods,
 discs, compound assemblies, overrides), DOF arithmetic including tangent
@@ -833,6 +914,19 @@ negative rate, and a rotated `start` included), the contact normal agrees with
 the pressure-angle formula, and a 60-degree dwell leaves the follower still to
 1e-9. Reversing the sign of the roller offset breaks twelve of these checks.
 
+The M6c suite adds: the second-order contact term (the trajectory-drift test on
+two geometries where both bodies move and the foot slides, with every term of
+the formula mutation-checked); a ball dropped on a fixed circle in closed form
+(first-impact time, rebound peaks `e^(2k) h0` to 2e-5 m, dissipation `(1-e^2) m
+g h0`, a finite Zeno sequence ending at rest under exactly its own weight, the
+elastic and plastic limits, ledger closure); the spring-loaded cam follower
+(contact force equal to Newton's closed form `N cos(alpha) = m(omega^2 s'' + g)
++ k(y - rest)` to 2e-3 N while engaged, no lift-off at 300 rpm, lift-off at 600
+rpm within one step of the angle where that closed form reaches zero, flights
+about 2 mm clear that never dig into the cam, turn two repeating turn one
+exactly, the ledger closing, bit-for-bit determinism); and the initial-state
+rules.
+
 ## 9. Milestone history & reserved ground
 
 M1 walked the skeleton (lexer/parser/rods/pins/drives); M2 added shafts,
@@ -863,9 +957,16 @@ yet covered: offset and swinging followers (the cam is synthesized for a rail
 through the axle), flat-faced followers, and a pressure-angle sweep for
 arbitrary profiles.
 
-The rest of M6 is reserved: unilateral contact with separation, impact and
-restitution in the dynamics (6c), and rolling contact between arbitrary
-curves generalizing `mesh` (6d). Also reserved: motion-work *synthesis* (the
+M6c made contact real in the dynamics: a `touch` in a dynamic file is
+unilateral — the follower lifts off when the cam could only pull it, flies, and
+lands with a Newton impact — with the second-order term derived and verified,
+the energy ledger extended to the work of prescribed drives, and
+`examples/jumpcam.mech` showing a spring-loaded follower that holds at 300 rpm
+and jumps at 600. This is also what contact-rich pallet geometry needs.
+
+The rest of M6 is reserved: rolling contact between arbitrary curves
+generalizing `mesh` (6d); friction; and turning the escapement's event summary
+into contact rows. Also reserved: motion-work *synthesis* (the
 compiler choosing the equal-tooth-sum stack itself, rather than the flagship
 writing it out), contact-rich pallet geometry (impulse faces as constraint
 rows rather than event summaries — what 6c unlocks), and multiple mechanisms

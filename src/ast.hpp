@@ -191,12 +191,16 @@ struct CamDecl {
 
 // touch follower.tip on lobe [roller 0.008] — a point of one body rides a
 // profile of another: one row, the signed gap to the curve (less the roller
-// radius, if any) is zero.
+// radius, if any) is zero. In a kinematic mechanism the contact is bilateral;
+// in a dynamic one (M6c) it is unilateral — the point can lift off the curve
+// and land again, with Newton restitution `restitution e` (default 0).
 struct TouchDecl {
     std::string body, anchor;
     std::string profile;
     bool hasRoller = false;
     double roller = 0.0;
+    bool hasRestitution = false;
+    double restitution = 0.0;
     int line = 0;
 };
 

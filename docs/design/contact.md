@@ -1,9 +1,10 @@
 # Design note: contact and higher pairs (M6)
 
-Status: **6a and 6b implemented** (profiles `circle`/`polar`/`points`,
+Status: **6a, 6b and 6c implemented** (profiles `circle`/`polar`/`points`,
 bilateral kinematic `touch`, `cam` displacement-diagram synthesis with
 pressure-angle and undercut reports; the eccentric, lobe-cam and plate-cam
-examples). 6c–6d remain a proposal. This note fixed the representation before code was written,
+examples; unilateral contact in the dynamics with `jumpcam`). 6d remains a
+proposal. This note fixed the representation before code was written,
 because contact is where the design is hardest to change afterwards.
 
 ## Why
@@ -94,7 +95,9 @@ contact normal. I checked it against central finite differences on an
 ellipse (non-circular, rotated, both bodies displaced): agreement to
 ~1e-10.
 
-**Still not derived: the second-order bias term** `J̇ q̇` that dynamics needs.
+**The second-order bias term (derived in 6c; see docs/LANG.md 6.5 for the
+formula and its verification).** What follows is the original statement of the
+problem, kept for the record: the second-order bias term `J̇ q̇` that dynamics needs.
 It differs from the pin case because the contact point slides:
 `g̈` picks up a curvature term (`kappa`, and `1 − kappa g` in the foot
 rate). The existing finite-difference constraint-acceleration test is the
@@ -146,6 +149,30 @@ rows are, before the code.
   `harmonic` has the lowest peak velocity (1.571) but an acceleration jump
   at each end, which a C2 spline surface cannot represent (normal off by
   ~0.045 degrees at those two junctions).
+
+**6c as implemented, and where it departed from the table.**
+
+* The guards are *the contact force going negative* (lift-off) and *the gap
+  closing* (touch-down), reused on the existing bisection loop, which now
+  also runs for files with contacts but no `mode`. Events are processed
+  earliest-first rather than in declaration order, so one cannot mask another.
+* The energy ledger needed a new term, **drive work**. A cam on a rate drive
+  does work on the system continuously and, because it is "infinitely heavy",
+  during every impact on it; without that term the ledger cannot close for
+  any driven mechanism. The impact's own dissipation is `impulse work - dT`.
+* Dynamic runs now start from velocities consistent with the rate drives. The
+  old zero-velocity start spun a driven shaft up impulsively in the first step
+  — harmless, but it made the ledger open by the shaft's kinetic energy.
+* **Plastic cutoff.** A first implementation bounced a resting follower
+  forever. The cause was numerical, not physical: a bounce restarts inside the
+  contact tolerance band, and the free acceleration turns that sliver into a
+  landing speed floor of `sqrt(2 a delta)`, above the cutoff I had picked.
+  Landings under 2 mm/s are now plastic, which clears that floor with margin.
+* A guard that was "already true" at the start of a sub-step because the body
+  sat 1e-13 *inside* the surface after a bounce silently lost the next
+  landing. Touch-down is now armed within the contact band.
+* Friction is still deferred; the sliding speed `u` it needs falls out of the
+  bias term.
 
 Acceptance examples to add under `examples/`: `eccentric`, `platecam`,
 `geneva`, `ratchet`, `ellipgears`.

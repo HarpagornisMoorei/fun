@@ -43,6 +43,7 @@ public:
         Vec2 tangent;            // c'(s) (not normalized)
         Vec2 normal;             // unit, outward (right of the tangent)
         double signedDist = 0.0; // normal . (u - point): > 0 outside the curve
+        double curvature = 0.0;  // signed, > 0 where the curve is convex (turns toward its inside)
     };
     // Closest point on the curve to u. Global coarse scan, then a bracketed
     // Newton refinement; deterministic and free of hidden state.

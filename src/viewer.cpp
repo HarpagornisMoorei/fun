@@ -277,6 +277,7 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
                      "warning: initial assembly did not fully converge (max residual %.3e)\n",
                      res0);
     }
+    if (dynamic) dyn.projectVelocities(q, qd);   // rate-driven bodies start at speed
 
     int traceBody = -1, traceAnchor = -1;
     if (!traceRef.empty()) {
@@ -399,6 +400,7 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
             m.assemble(q);
             sys.solve(q, 0.0, iters);
             qd.assign(m.nq(), 0.0);
+            if (dynamic) dyn.projectVelocities(q, qd);
             dyn.resetHybrid();   // M5: rewind the discrete state and its ledger
             simT = 0.0; accum = 0.0; trail.clear();
             std::printf("reset\n");

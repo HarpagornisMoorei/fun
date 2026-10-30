@@ -144,10 +144,16 @@ struct CamInfo {
 // M6 — a point of `body` (an anchor, optionally with a roller of the given
 // radius centered on it) rides `profile`. One row: signed gap - roller = 0.
 // M6a is bilateral (force closure assumed) and kinematic-only.
+//
+// M6c: in a dynamic mechanism the contact is unilateral. `engaged` is the
+// discrete state (the row is only present while the point is on the curve);
+// `restitution` is Newton's coefficient for the impact when it lands again.
 struct TouchJoint {
     int body = -1, anchor = 0;
     int profile = -1;
     double roller = 0.0;
+    double restitution = 0.0;
+    mutable bool engaged = true;
     int line = 0;
 };
 
@@ -160,6 +166,9 @@ struct ContactState {
     Vec2 footLocal;          // foot in the profile's own (anchor-centered) frame
     Vec2 foot;               // world
     Vec2 normal;             // world, unit, outward from the profile
+    Vec2 tangent;            // world, unit, counter-clockwise along the curve
+    Vec2 footArm;            // world vector from the host body's origin to the foot
+    double kappa = 0.0;      // curve curvature at the foot (> 0 convex)
 };
 
 struct Drive {

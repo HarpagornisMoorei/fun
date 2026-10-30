@@ -197,6 +197,7 @@ ProfileCurve::Foot ProfileCurve::nearest(Vec2 u) const {
         f.tangent = {-radius_ * sn, radius_ * cs};
         f.normal = {cs, sn};
         f.signedDist = rr - radius_;
+        f.curvature = 1.0 / radius_;
         return f;
     }
 
@@ -254,6 +255,8 @@ ProfileCurve::Foot ProfileCurve::nearest(Vec2 u) const {
     f.tangent = d1;
     f.normal = normalize(Vec2{d1.y, -d1.x});
     f.signedDist = dot(f.normal, u - p);
+    const double tl = vlen(d1);
+    f.curvature = crossz(d1, d2) / (tl * tl * tl);
     return f;
 }
 

@@ -66,7 +66,7 @@
 //   shape       := 'circle' ':' num
 //                | 'polar' ':' ( '(' num ['deg'] ',' num ')' )+
 //                | 'points' ':' ( '(' num ',' num ')' )+
-//   touchDecl   := 'touch' ref 'on' IDENT [ 'roller' num ]
+//   touchDecl   := 'touch' ref 'on' IDENT { 'roller' num | 'restitution' num }
 //
 // M6b ('cam' is contextual at statement start so `cam` stays usable as a
 // body name; the items below are contextual identifiers too):
@@ -572,10 +572,17 @@ private:
         parseRef(t.body, t.anchor);
         expectKw("on");
         t.profile = expectIdent().text;
-        if (cur().type == Tok::Ident && cur().text == "roller") {
+        while (cur().type == Tok::Ident &&
+               (cur().text == "roller" || cur().text == "restitution")) {
+            const std::string key = cur().text;
             next();
-            t.hasRoller = true;
-            t.roller = parseNum();
+            if (key == "roller") {
+                t.hasRoller = true;
+                t.roller = parseNum();
+            } else {
+                t.hasRestitution = true;
+                t.restitution = parseNum();
+            }
         }
         m.touches.push_back(t);
     }

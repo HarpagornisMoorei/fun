@@ -55,8 +55,10 @@ make test       # unit tests
 | hybrid | `mode` state machines (the escapement) |
 | intent | `reduce`, `beat`, `hand`, `dial` — solved into the kernel |
 
-Contact is kinematic and bilateral for now (force closure assumed); unilateral
-contact with separation and impact comes next.
+Contact is bilateral in a kinematic file (force closure assumed) and unilateral
+in a dynamic one: a spring-loaded cam follower holds the cam at low speed, and
+at high speed lifts off, flies and lands with a Newton impact, with every joule
+accounted for (`examples/jumpcam.mech`).
 
 Kinematic files are solved with an analytic-Jacobian Levenberg–Marquardt
 assembly; files with masses and forces are integrated as constrained
@@ -69,6 +71,7 @@ dynamics, with an energy ledger that has to close.
 | `fourbar`, `crankslider` | closed loops, prismatic joints |
 | `geartrain`, `train`, `planetary` | meshes, synthesized reductions, epicyclics |
 | `eccentric`, `lobecam`, `platecam` | cams: a closed-form eccentric disc, a plate cam from a polar table, and one synthesized from a displacement diagram |
+| `jumpcam` | the plate cam with mass, a spring and a contact that can let go — cam jump, impacts, energy ledger |
 | `pendulum`, `doublepend`, `flywheel`, `oscillator`, `orbit` | dynamics |
 | `clock`, `clockface` | the flagship: a complete weight-driven clock |
 
@@ -78,5 +81,6 @@ dynamics, with an energy ledger that has to close.
 semantics, solver formulation — and the contract `mech test` checks the
 implementation against. [`docs/design/contact.md`](docs/design/contact.md)
 is the design for contact (cams, Geneva drives, ratchets, non-circular
-gears); the first slice, M6a, is implemented. `scripts/` holds offscreen-rendering harnesses for
+gears); M6a through M6c (profiles, cam synthesis, unilateral contact) are
+implemented. `scripts/` holds offscreen-rendering harnesses for
 screenshots without a display.

@@ -26,6 +26,10 @@ struct HybridStats {
     double weightDrawn = 0.0;     // J paid out by weight drives
     double impulseEnergy = 0.0;   // J delivered by impulse resets (net)
     double impactLoss = 0.0;      // J discarded by event relock projections
+                                  // and by contact impacts (M6c)
+    long liftoffs = 0;            // M6c: contacts that separated
+    long impacts = 0;             // M6c: contacts that touched down again
+    double driveWork = 0.0;       // M6c: J delivered by rate drives (reaction x rate)
 };
 
 class DynamicsSystem {
@@ -44,6 +48,15 @@ public:
     void accelerations(const std::vector<double>& q, const std::vector<double>& qd,
                        std::vector<double>& qdd) const;
 
+    // Mass-metric velocity projection onto the active constraint rows
+    // (J qd = nu, nu = drive rates): the same projection step() uses after
+    // every step and at events. Public so tests can build consistent states.
+    // If `impulseWork` is given it receives the work (J) the projection's
+    // impulses do on prescribed (rate-drive) coordinates: the cam is
+    // "infinitely heavy", so an impact on a driven body is paid for by its drive.
+    void projectVelocities(const std::vector<double>& q, std::vector<double>& qd,
+                           double* impulseWork = nullptr) const;
+
     // Energy bookkeeping (J). kinetic uses the exact mass matrix;
     // potential covers gravity and spring stretch. The weight drives' energy
     // is external — it appears in the hybrid ledger, not here.
@@ -54,6 +67,10 @@ public:
     // (N*m; the torque the prescribed coordinate transmits into the body).
     // Disabled mode holds report 0.
     const std::vector<double>& driveReactions() const { return lastReaction_; }
+
+    // M6c: the normal force (N) of each touch from the last acceleration
+    // solve; 0 for a contact that is not engaged.
+    const std::vector<double>& contactForces() const { return lastContact_; }
 
     // M5: the hybrid ledger (energy bookkeeping of discrete events).
     const HybridStats& hybridStats() const { return stats_; }
@@ -92,14 +109,23 @@ private:
     // the body's natural hang angle.
     void applyImpulse(const ModeReset& rs, const std::vector<double>& q,
                       std::vector<double>& qd) const;
-    // Mass-metric velocity projection onto the active constraint rows
-    // (the same projection step() uses, reused at events).
-    void projectVelocities(const std::vector<double>& q, std::vector<double>& qd) const;
     // Weight drives: pay cord and draw energy for |dtheta| of the hosts.
     void accountWeights(const std::vector<double>& qStart,
                         const std::vector<double>& qEnd) const;
 
+    // --- M6c unilateral contact ---------------------------------------------
+    // Contact force of touch ti at a state (solves the KKT system once).
+    double contactForce(int ti, const std::vector<double>& q,
+                        const std::vector<double>& qd) const;
+    // Level-triggered: disengage any engaged contact that would have to pull.
+    void settleContacts(std::vector<double>& q, std::vector<double>& qd, double tNow) const;
+    // Touch-down: re-anchor, then Newton impact with restitution e.
+    void applyImpact(int ti, std::vector<double>& q, std::vector<double>& qd,
+                     double tNow) const;
+
     mutable std::vector<double> lastReaction_;
+    mutable std::vector<double> lastContact_;
+    mutable double lastDriveWork_ = 0.0;   // J of the last integrate() call
     mutable HybridStats stats_;
 };
 

@@ -77,7 +77,8 @@ int ConstraintSystem::rowCount() const {
     for (const MeshJoint& mm : m.meshes) {
         rows += mm.tangent ? 2 : 1;
     }
-    rows += (int)m.touches.size();
+    for (const TouchJoint& tj : m.touches)
+        if (tj.engaged) ++rows;        // M6c: a lifted-off contact adds no row
     return rows;
 }
 
@@ -137,6 +138,7 @@ void ConstraintSystem::residuals(const std::vector<double>& q, double t,
         }
     }
     for (const TouchJoint& tj : m.touches) {
+        if (!tj.engaged) continue;
         c[r++] = m.touchState(tj, q).gap - tj.roller;
     }
 }
@@ -229,25 +231,29 @@ void ConstraintSystem::jacobian(const std::vector<double>& q,
         }
     }
     for (const TouchJoint& tj : m.touches) {
-        const ContactState cs = m.touchState(tj, q);
-        const Profile& pr = m.profiles[(size_t)tj.profile];
-        const Body& bp = m.bodies[(size_t)tj.body];
-        const Body& bh = m.bodies[(size_t)pr.body];
-        const Vec2 n = cs.normal;
-        if (bp.qOffset >= 0) {
-            const Vec2 rl = rotate(bp.anchors[(size_t)tj.anchor].local, q[bp.qOffset + 0]);
-            addJ(J, cols, r, bp.qOffset + 0, dot(n, perp(rl)));
-            addJ(J, cols, r, bp.qOffset + 1, n.x);
-            addJ(J, cols, r, bp.qOffset + 2, n.y);
-        }
-        if (bh.qOffset >= 0) {
-            const Vec2 origin = bh.anchors[(size_t)pr.hostAnchor].local;
-            const Vec2 rl = rotate(origin + cs.footLocal, q[bh.qOffset + 0]);
-            addJ(J, cols, r, bh.qOffset + 0, -dot(n, perp(rl)));
-            addJ(J, cols, r, bh.qOffset + 1, -n.x);
-            addJ(J, cols, r, bh.qOffset + 2, -n.y);
-        }
+        if (!tj.engaged) continue;
+        touchRow(tj, q, &J[(size_t)r * cols]);
         ++r;
+    }
+}
+
+void ConstraintSystem::touchRow(const TouchJoint& tj, const std::vector<double>& q,
+                                double* row) const {
+    const ContactState cs = m.touchState(tj, q);
+    const Profile& pr = m.profiles[(size_t)tj.profile];
+    const Body& bp = m.bodies[(size_t)tj.body];
+    const Body& bh = m.bodies[(size_t)pr.body];
+    const Vec2 n = cs.normal;
+    if (bp.qOffset >= 0) {
+        const Vec2 rl = rotate(bp.anchors[(size_t)tj.anchor].local, q[bp.qOffset + 0]);
+        row[bp.qOffset + 0] += dot(n, perp(rl));
+        row[bp.qOffset + 1] += n.x;
+        row[bp.qOffset + 2] += n.y;
+    }
+    if (bh.qOffset >= 0) {
+        row[bh.qOffset + 0] += -dot(n, perp(cs.footArm));
+        row[bh.qOffset + 1] += -n.x;
+        row[bh.qOffset + 2] += -n.y;
     }
 }
 
