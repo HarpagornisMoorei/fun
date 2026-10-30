@@ -1,0 +1,98 @@
+// clock — a complete weight-driven mechanical clock: pendulum, anchor
+// escapement (a mode element), weight, going train, motion work, and three
+// hands. The M5 flagship.
+//
+//   pendulum:   beat 1s (a seconds pendulum — compound length 1.4909 m)
+//   escapement: 30-tooth wheel advancing half a pitch (6 deg) per beat
+//   weight:     4 kg falling 1.5 m on a 0.02 m barrel (~12 min of run),
+//               unwinding clockwise — the direction clock hands sweep
+//   train:      reduce 1:60 from the escape arbor to the minute arbor
+//               (10:78 x 13:100, teeth, positions and meshes synthesized)
+//   motion work: minute -> hour at the dial centre, the horologist's
+//               equal-tooth-sum stack: a 10-leaf cannon on the minute
+//               arbor meshes a 30-tooth wheel (and an 8-leaf pinion meshes
+//               the 32-tooth hour wheel) on one intermediate arbor —
+//               10+30 = 8+32, so both meshes sit at the same 0.12 m
+//               centre distance and the hour wheel runs coaxial with the
+//               cannon. 10/30 * 8/32 = 1:12 exactly.
+//   hands:      the escape wheel arbor turns 6 deg/s = one rev per minute,
+//               so the hand on it IS the second hand (a small-seconds
+//               sub-dial); the minute and hour hands share the main dial.
+//
+//   mech run examples/clock.mech
+//   mech run examples/clock.mech --headless 12
+//
+// The escapement is the language's one non-smooth element: a state machine
+// over constraint sets. Locked states hold the wheel still (the pallet is
+// engaged); between them the weight runs the wheel free for half a tooth
+// (~30 ms — visible as a flick), and each relock feeds the pendulum exactly
+// the energy it needs to hold a 3 degree swing. When the cord runs out the
+// wheel stops mid-state and the clock runs down. Every joule is bookkept.
+mechanism clock {
+  world { gravity: 9.81 }
+
+  ground frame {
+    anchor pivot at (0, 0)            // pendulum suspension
+    anchor axle   at (0.42, 0)        // escape wheel arbor (small seconds)
+    anchor center at (1.02, 0.42)     // the motion-work arbor: minute + hour
+    anchor stud   at (1.02, 0.54)      // motion-work intermediate wheel
+  }
+
+  // the timekeeper: a seconds pendulum released at full swing
+  rod pend on frame.pivot { beat: 1s, from: -87 deg }
+
+  // the escape wheel: 30 teeth (half a pitch = 6 deg per beat), heavy
+  // enough that the unlock flick takes ~30 ms instead of a blur
+  shaft escape at frame.axle
+  gear ewheel { teeth: 30, module: 0.008, mass: 0.5 } on escape
+
+  // the energy source: a weight on a cord wound on a 0.02 m barrel,
+  // with 1.5 m of fall in the bank, unwinding clockwise
+  drive escape weight 4 kg barrel 0.02 drop 1.5 m cw
+
+  // the escapement. Locked states hold the wheel; free states let the
+  // weight run it half a tooth; each relock tops the pendulum up to a
+  // 3 degree swing. 'advance' is signed travel, so the clockwise wheel
+  // guards on -6 degrees.
+  mode esc {
+    state tick { hold escape }     // entry pallet engaged
+    state run1 { }                 // unlocked by the upswing
+    state tock { hold escape }     // exit pallet engaged
+    state run2 { }                 // unlocked by the downswing
+    tick -> run1 when pend.theta     > -87.5 deg
+    run1 -> tock when escape.advance < -6 deg: impulse pend maintain 3 deg
+    tock -> run2 when pend.theta     < -92.5 deg
+    run2 -> tick when escape.advance < -6 deg: impulse pend maintain 3 deg
+  }
+
+  // the minute arbor (1 rev/h) and the hour arbor (1 rev/12 h) run coaxial
+  // at the dial centre — two shafts on one anchor, the way real motion
+  // work stacks on a cannon
+  shaft minute at frame.center
+  shaft hour   at frame.center
+  shaft stud   at frame.stud
+
+  // the going train: one line from the escape arbor to the minute arbor —
+  // tooth counts, meshes and the intermediate shaft's position included
+  reduce escape->minute ratio 1:60 same module: 0.008 spread: 45 deg
+
+  // the motion work: cannon on the minute arbor, intermediate wheel +
+  // pinion on the stud, hour wheel on the hour arbor. Equal tooth sums
+  // (10+30 = 8+32) put both meshes at the same centre distance, so the
+  // hour wheel is coaxial with the cannon; 10/30 * 8/32 = 1/12 exactly.
+  gear cannon { teeth: 10, module: 0.006 } on minute
+  gear studw  { teeth: 30, module: 0.006 } on stud
+  gear studp  { teeth: 8,  module: 0.006 } on stud
+  gear hourw  { teeth: 32, module: 0.006 } on hour
+  mesh cannon studw
+  mesh studp hourw
+
+  // the face: small seconds on the escape arbor, minute + hour coaxial
+  // on the main dial
+  hand second on escape { length: 0.16 }
+  hand minute on minute { length: 0.36 }
+  hand hour   on hour   { length: 0.24 }
+
+  dial at frame.axle   { radius: 0.19, minor: 12, major: 4 }
+  dial at frame.center { radius: 0.42 }
+}

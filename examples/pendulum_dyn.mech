@@ -1,0 +1,13 @@
+// pendulum_dyn — a real pendulum: no drive at all, just a rod, a pin and
+// gravity. Released from 60 degrees, it swings with its natural period
+// T = 2*pi*sqrt(2L/(3g)) (a compound rod pendulum: the mass is spread along
+// the rod, not lumped at the tip). The window title shows the live energy,
+// which stays flat — that is the integrator's conservation guarantee.
+//
+//   mech run examples/pendulum_dyn.mech
+//
+mechanism pendulum_dyn {
+  world { gravity: 9.81 }
+  ground frame { anchor pivot at (0, 0) }
+  rod arm { length: 1.0, from: 60 deg } on frame.pivot
+}

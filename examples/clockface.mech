@@ -1,0 +1,40 @@
+// clockface — a clock that is everything but the escapement (that is M5).
+// The pendulum is declared by its beat, the going train by its ratio, the
+// face by a hand and a dial. Until M5, a rate drive at the escape position
+// stands in for the escapement; the numbers are already clock numbers:
+//
+//   pendulum: beat 1s -> compound length 1.4907 m (a seconds pendulum)
+//   going train: 1800:1, so 30 rpm in -> 1 rev / 60 s out
+//   second hand: exactly one revolution per minute
+//
+//   mech run examples/clockface.mech
+//
+// The pendulum and the train are not yet connected — that handshake is the
+// escapement's whole job, next milestone.
+mechanism clockface {
+  world { gravity: 9.81 }
+
+  ground frame {
+    anchor pivot at (0, 0)          // pendulum mount
+    anchor escape at (0.42, 0.0)    // where the escape wheel will live (M5)
+  }
+
+  // the timekeeper: released 3 degrees off vertical, swings with a 2 s period
+  rod pend on frame.pivot { beat: 1s, from: -87 deg }
+
+  // the going train: everything below is synthesized from this one line —
+  // three stages of gearing (12 x 12 x 12.5), shaft positions included
+  shaft s1 at frame.escape
+  shaft s2
+  shaft s3
+  shaft s4
+  reduce s1->s4 ratio 1:1800 via s2 s3 module: 0.006 spread: 15 deg
+
+  // stand-in for the escapement: drive the fast shaft; the slow shaft then
+  // turns exactly once per minute — a second hand's worth of motion
+  drive s1 at 30 rpm
+
+  // the face: a second hand and a dial that sizes itself around it
+  hand second on s4 { length: 0.36 }
+  dial
+}

@@ -1,0 +1,25 @@
+// crankslider — the engine mechanism: crank, connecting rod, piston.
+// The piston is a free body whose 'guide' anchor rides a ground rail
+// (a prismatic joint). This is the canonical mechanism that needs both
+// a revolute and a translational freedom in one loop.
+mechanism crankslider {
+  ground base {
+    anchor main at (0, 0)
+    anchor rail at (0.9, 0) dir (1, 0)
+  }
+
+  rod crank on base.main { length: 0.3 }
+
+  body piston {
+    anchor guide at (0, 0) dir (1, 0)
+    anchor wrist at (0.22, 0)
+  }
+
+  rod conrod { length: 1.0 }
+
+  pin conrod.A -> crank.B
+  pin conrod.B -> piston.wrist
+  slide piston.guide -> base.rail
+
+  drive crank at 90 deg/s from 45 deg
+}

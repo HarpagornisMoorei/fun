@@ -1,0 +1,20 @@
+// undriven — deliberately missing its drive, to demonstrate the DOF type
+// system. `mech check` reports 1 residual DOF (indeterminate motion) and
+// `mech run` warns instead of guessing an motion. Fix it by adding:
+//
+//   drive crank at 36 deg/s from 60 deg
+//
+mechanism undriven {
+  ground base {
+    anchor p1 at (0, 0)
+    anchor p2 at (3, 0)
+  }
+  rod crank   { length: 0.8 }
+  rod coupler { length: 2.6 }
+  rod rocker  { length: 2.2 }
+
+  pin crank.A   -> base.p1
+  pin coupler.A -> crank.B
+  pin rocker.A  -> base.p2
+  pin coupler.B -> rocker.B
+}

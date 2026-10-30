@@ -1,0 +1,28 @@
+// geartrain — a two-stage compound train, the backbone of every clock.
+// Stage 1: pinion g1 (8t) on shaft a drives wheel g2 (40t) on shaft b.
+// Stage 2: pinion g3 (8t), also on shaft b, drives wheel g4 (40t) on shaft c.
+//
+// Each stage divides by 5 and flips direction; two stages divide by 25 and
+// restore it: 60 rpm in -> 2.4 rpm out. Compound gears (two gears keyed to
+// one shaft) are just two features of one body.
+mechanism geartrain {
+  ground frame {
+    anchor s1 at (0, 0)
+    anchor s2 at (0.24, 0)
+    anchor s3 at (0.36, 0.20784610)
+  }
+
+  shaft a at frame.s1
+  shaft b at frame.s2
+  shaft c at frame.s3
+
+  gear g1 { teeth: 8 } on a
+  gear g2 { teeth: 40 } on b
+  gear g3 { teeth: 8 } on b
+  gear g4 { teeth: 40 } on c
+
+  mesh g1 g2
+  mesh g3 g4
+
+  drive a at 60 rpm
+}

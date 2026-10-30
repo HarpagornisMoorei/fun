@@ -1,0 +1,15 @@
+// flywheel — energy injection instead of prescribed motion. A torque drive
+// spins a heavy gear disc (mass 2 kg, pitch radius 0.2 m, so I = 0.04 kg*m^2
+// plus the shaft's own inertia). Nothing is prescribed: the rotor's angle is
+// whatever the physics says, omega(t) = tau/I * t, and the reaction-free
+// spin-up is exact. This is the drive style a clock's weight would use.
+//
+//   mech run examples/flywheel.mech
+//
+mechanism flywheel {
+  world { gravity: 0 }
+  ground frame { anchor axle at (0, 0) }
+  shaft rotor at frame.axle
+  gear disc { teeth: 40, module: 0.01, mass: 2 } on rotor
+  drive rotor torque 0.001
+}

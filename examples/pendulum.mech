@@ -1,0 +1,12 @@
+// pendulum — the smallest honest mechanism: one rod, one pin, one drive.
+// M1 is kinematic, so the arm sweeps at a prescribed rate (a windshield
+// wiper); the gravity-driven swing arrives with dynamics in M3.
+mechanism pendulum {
+  ground frame {
+    anchor pivot at (0, 0)
+  }
+  rod arm { length: 1.0 }
+
+  pin arm.A -> frame.pivot
+  drive arm at 40 deg/s from -60 deg
+}

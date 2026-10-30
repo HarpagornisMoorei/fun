@@ -1,0 +1,17 @@
+// orbit — a planet rolling inside a fixed ring with NO carrier, NO pins on
+// the planet: the `tangent` mesh row is the entire joint. It enforces both
+// pitch-circle contact and roll-without-slip, so a free gear, given only an
+// initial position, orbits exactly as if an invisible carrier held it.
+// Kinematically psi = -N_p/(N_r - N_p) * theta: this planet revolves once
+// backwards for every four of its own turns.
+//
+//   mech run examples/orbit.mech
+//
+mechanism orbit {
+  ground frame { anchor o at (0, 0) }
+  gear gr { teeth: 40, module: 0.01 } on frame.o
+  body pl { anchor c at (0.15, 0) }
+  gear gp { teeth: 10, module: 0.01 } on pl.c
+  mesh gp gr tangent
+  drive pl at 60 deg/s
+}

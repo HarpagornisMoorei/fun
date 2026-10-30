@@ -1,0 +1,15 @@
+// doublepend — two rods, two pins, two drives: chains compose, and each
+// free DOF needs exactly one drive to be determined.
+mechanism doublepend {
+  ground frame {
+    anchor pivot at (0, 0)
+  }
+  rod upper { length: 0.9 }
+  rod lower { length: 0.7 }
+
+  pin upper.A -> frame.pivot
+  pin lower.A -> upper.B
+
+  drive upper at 25 deg/s from 80 deg
+  drive lower at -47 deg/s from -40 deg
+}

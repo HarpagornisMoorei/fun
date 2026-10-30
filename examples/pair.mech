@@ -1,0 +1,18 @@
+// pair — the smallest gear train: two shafts, two gears, one mesh.
+// 8 teeth vs 40 teeth: one turn of the pinion = 1/5 turn of the wheel,
+// direction reversed. The teeth ticks make both rotations visible.
+mechanism pair {
+  ground frame {
+    anchor p1 at (0, 0)
+    anchor p2 at (0.24, 0)
+  }
+
+  shaft a at frame.p1
+  shaft b at frame.p2
+
+  gear g1 { teeth: 8 } on a
+  gear g2 { teeth: 40 } on b
+
+  mesh g1 g2
+  drive a at 60 rpm
+}

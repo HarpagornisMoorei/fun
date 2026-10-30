@@ -1,0 +1,21 @@
+// fourbar — the flagship M1 demo: a closed kinematic loop, which tree-based
+// formats (URDF/SDF) cannot express. Watch the coupler curve:
+//
+//   mech run examples/fourbar.mech --trace coupler.B
+//
+mechanism fourbar {
+  ground base {
+    anchor p1 at (0, 0)
+    anchor p2 at (3, 0)
+  }
+  rod crank   { length: 0.8 }
+  rod coupler { length: 2.6 }
+  rod rocker  { length: 2.2 }
+
+  pin crank.A   -> base.p1
+  pin coupler.A -> crank.B
+  pin rocker.A  -> base.p2
+  pin coupler.B -> rocker.B
+
+  drive crank at 36 deg/s from 60 deg
+}

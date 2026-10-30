@@ -1,0 +1,17 @@
+// oscillator — a cart on a rail pulled by a spring: the simplest mechanism
+// whose motion is *solved from forces*, not prescribed. The cart starts at
+// x = 0; the spring's rest length puts the equilibrium at x = -0.5, so the
+// cart oscillates as x(t) = -0.5 + 0.5*cos(3t) with omega = sqrt(k/m) = 3.
+//
+//   mech run examples/oscillator.mech
+//
+mechanism oscillator {
+  world { gravity: 0 }
+  ground frame {
+    anchor rail at (0, 0) dir (1, 0)
+    anchor wall at (-1.2, 0)
+  }
+  body cart { anchor guide at (0, 0) dir (1, 0), mass: 1 }
+  slide cart.guide -> frame.rail
+  spring sp frame.wall -> cart.guide { k: 9, rest: 0.7 }
+}

@@ -1,0 +1,22 @@
+// train — the intent layer in one line. The author declares four shafts,
+// pins only the first, and states the speed ratio; the compiler chooses the
+// stage count, the tooth counts, and where every unpinned shaft sits.
+//
+//   mech check examples/train.mech     -> see what it synthesized
+//   mech run   examples/train.mech     -> watch it turn
+//
+// ratio 1:1800 needs three stages (12 x 12 x 12.5 = 1800); the input turns
+// 1800 times for one turn of the output. Odd stage count means the output
+// runs opposite to the input — check says so, and the animation shows it.
+mechanism train {
+  ground frame { anchor p at (0, 0) }
+
+  shaft s1 at frame.p      // driven: 30 rpm in
+  shaft s2                 // placed by the reduce
+  shaft s3                 // placed by the reduce
+  shaft s4                 // placed by the reduce; 1 rev / 60 s out
+
+  reduce s1->s4 ratio 1:1800 via s2 s3 module: 0.006
+
+  drive s1 at 30 rpm
+}

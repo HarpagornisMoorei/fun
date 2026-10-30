@@ -1,0 +1,26 @@
+// planetary — the epicyclic flagship, impossible before M3:
+//
+//   sun (10t) pinned to ground at the center
+//   carrier arm, also pinned at the center, driven at 30 deg/s
+//   planet (20t) riding the arm's tip
+//   ring (50t) fixed to ground around everything (internal mesh)
+//
+// Both meshes have MOVING centers, so the roll law must carry the carrier's
+// rotation — the psi term in the mesh row. Kinematics: with the ring fixed,
+//   omega_sun = (1 + N_ring/N_sun) * omega_carrier = 6x, same direction.
+// Watch the sun's index line spin six times for every carrier turn.
+//
+//   mech run examples/planetary.mech
+//
+mechanism planetary {
+  ground frame { anchor o at (0, 0) }
+  shaft sun at frame.o
+  rod arm on frame.o { length: 0.15 }
+  shaft pl at arm.B
+  gear gs { teeth: 10, module: 0.01 } on sun
+  gear gp { teeth: 20, module: 0.01 } on pl
+  gear gr { teeth: 50, module: 0.01 } on frame.o
+  mesh gs gp
+  mesh gp gr
+  drive arm at 30 deg/s
+}
