@@ -1,4 +1,4 @@
-# The mech language — M6f specification
+# The mech language — M8 specification
 
 This document pins down the M6f kernel: lexical structure, grammar, static
 semantics, the kinematic solver's mathematical formulation, the
@@ -9,7 +9,8 @@ higher pair — bilateral in kinematic files, unilateral with lift-off and
 impact in dynamic ones), plate cams stated as displacement diagrams, and
 non-circular gear pairs (`mesh` between two profiles), and polygon profiles
 with filleted corners (ratchets and anything with teeth), and Coulomb friction at
-contacts. It is the contract the implementation is tested against (`mech test`).
+contacts, plus (M8) named parameters, numeric expressions and sweeps. It is the contract
+the implementation is tested against (`mech test`).
 
 ---
 
@@ -65,8 +66,9 @@ Four principles govern the design:
   `points`, `roller`, `restitution`, `ellipse`, `focus`, `polygon`, `fillet`, `friction`) and the M6b cam vocabulary (`cam` at statement start,
   `base`, `start`, `turn`, `rise`, `fall`, `return`, `over`, `dwell`,
   `cycloidal`, `harmonic`, `modtrap`) are *contextual* identifiers (not
-  keywords), usable as names — a body called `cam` is fine.
-* Punctuation: `{ } ( ) , : ; . - -> < >`
+  keywords), usable as names — a body called `cam` is fine. So is `param`, which
+  only means something at statement start (M8, see below).
+* Punctuation: `{ } ( ) , : ; . - -> < > + * / =`
 * Comments: `// line` and `# line`.
 * Whitespace (including newlines) is insignificant; statements may be
   separated by `;` or `,` or nothing.
@@ -84,7 +86,8 @@ stmt        = groundDecl | bodyDecl | rodDecl | shaftDecl | worldDecl
             | reduceDecl | handDecl | dialDecl
             | modeDecl | weightDriveDecl                 (* M5 *)
             | profileDecl | touchDecl                      (* M6 *)
-            | camDecl ;                                   (* M6b *)
+            | camDecl                                     (* M6b *)
+            | paramDecl ;                                 (* M8 *)
 
 groundDecl  = "ground" IDENT "{" { anchorDecl } "}" ;
 bodyDecl    = "body" IDENT "{" { anchorDecl | "mass" ":" num
@@ -99,6 +102,16 @@ shaftDecl   = "shaft" IDENT [ attach ] ;        (* M4: attach optional *)
 attach      = ( "on" | "at" ) ref ;                    (* pins anchor A *)
 
 worldDecl   = "world" "{" { ( "gravity" | "step" ) ":" num } "}" ;
+
+paramDecl   = "param" IDENT "=" expr ;                       (* M8 *)
+(* Everywhere this grammar writes `num`, M8 accepts an expression that evaluates to one. *)
+expr        = term { ( "+" | "-" ) term } ;
+term        = unary { ( "*" | "/" ) unary } ;
+unary       = [ "-" | "+" ] unary | primary ;
+primary     = NUMBER | "pi" | IDENT                          (* a declared parameter *)
+            | FUNC1 "(" expr ")"                             (* sqrt sin cos tan atan abs *)
+            | FUNC2 "(" expr "," expr ")"                    (* min max pow *)
+            | "(" expr ")" ;
 
 gearDecl    = "gear" IDENT "{" { gearProp } "}" "on" ref ;
 gearProp    = ( "teeth" | "module" | "radius" | "mass" ) ":" num ;
@@ -218,6 +231,20 @@ Checks run at model build time, each error pointing at a source line:
   the escapement's pair (a wheel driven by a weight and locked by a pallet).
   One hold row exists per held body across the whole mechanism: two modes
   cannot hold the same body.
+
+**M8 parameter checks:**
+
+* `param name = expr` is a parse-time constant: it may use only earlier parameters,
+  the numbers it is written with, `pi` and the functions above. A parameter is
+  scoped to its mechanism, and declaring one twice is an error.
+* A parameter name may not be a unit token (`deg`, `rpm`, ...), `pi` or a function
+  name. Division by zero, a domain error (`sqrt(-1)`), a non-finite result, an unknown
+  function and a wrong argument count are errors at the offending token.
+* `--set name=value` replaces the declared right-hand side before anything that uses it
+  is read, so every dependent parameter follows. An override naming no parameter is an
+  error that lists the declared ones. Parameters leave no trace in the model: a file
+  built with `--set` is bit-for-bit the model of the file with the number edited.
+* `mech sweep` is specified in [`PARAMS.md`](PARAMS.md).
 
 **M6e polygon checks:**
 
@@ -992,7 +1019,7 @@ resistance, more than one contact point per `touch`, and compliant
 
 ## 8. Test matrix
 
-`mech test` (14482 checks) covers: lexer tokens/units/keywords/comments/errors;
+`mech test` (14682 checks) covers: lexer tokens/units/keywords/comments/errors;
 parser AST shapes for all M3 and M4 forms and all error classes; model checks,
 desugaring, gear radius arithmetic, module rules, mass derivation (rods,
 discs, compound assemblies, overrides), DOF arithmetic including tangent
@@ -1156,6 +1183,20 @@ ground-hosted probe, `--csv` without `--headless`, `--every 0`, `--dt` on a dyna
 file — refused with a nonzero status). Dropping friction from the exported ledger,
 flipping the normal, mis-indexing the probe, or ignoring `--every` breaks checks.
 
+The M8 suite adds: expression precedence, associativity and unary signs against
+hand-computed values; every function and its domain errors; parameters in every
+numeric position of every statement (the parameterized model equals the literal one
+bit for bit, assembled state included); `--set` overrides, dependent parameters
+following them, and the unused-override error; sweep axes (ranges including
+inclusive endpoints with floating-point steps, lists, refusals); kinematic sweeps
+against closed forms for all cells of a grid, first axis slowest; the jumpcam
+lift-off threshold within one step of the closed-form 443.9 rpm; a design that stops
+building partway through a sweep reporting the compiler's message in its own row; each
+metric reduction against its definition; and the command line end to end, including
+exit status 2 for a sweep with invalid designs. Reversing subtraction or division,
+ignoring an override, accepting an unused one, swapping grid order, or dropping the
+absolute value in the ledger metric breaks checks.
+
 ## 9. Milestone history & reserved ground
 
 M1 walked the skeleton (lexer/parser/rods/pins/drives); M2 added shafts,
@@ -1216,6 +1257,10 @@ energies, and every term of the energy ledger *with its residual as a column*, s
 conservation is something to plot rather than a number at the end. It is built on a
 `Recorder` that the tests drive directly; the exported contact normal reproduces the
 plate cam's design pressure angle (20.590 deg against the formula's 20.59 deg).
+
+M8 added `param` and numeric expressions, `--set`, and `mech sweep` (see
+`docs/PARAMS.md`): the language stays a description of one mechanism, and designs are
+compared by running many of it. Reusable parts and composition remain open.
 
 The rest is reserved: static friction proper (the regularization creeps at ~2 mm/s
 instead of sticking), tangential impact impulses, curve-against-curve contact (the

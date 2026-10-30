@@ -257,8 +257,20 @@ struct ModeDecl {
     int line = 0;
 };
 
+// M7 — a named number. `param rpm = 600` makes `rpm` usable wherever a number can
+// appear, and `--set rpm=300` on the command line replaces the value without editing
+// the file. Parameters are resolved while parsing, so the model never sees them.
+struct ParamDecl {
+    std::string name;
+    double declared = 0.0;      // the value written in the file
+    double value = 0.0;         // the value in force (declared, or overridden by --set)
+    bool overridden = false;
+    int line = 0;
+};
+
 struct MechanismDecl {
     std::string name;
+    std::vector<ParamDecl> params;     // M7
     WorldDecl world;
     std::vector<BodyDecl> bodies;
     std::vector<JointDecl> joints;

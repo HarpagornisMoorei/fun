@@ -17,7 +17,7 @@ screenshot-capable binary with:
 
     g++ -std=c++17 -O2 -Isrc -DHAVE_VIEWER=1 \
         src/main.cpp src/viewer.cpp tests/tests.cpp \
-        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp \
+        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/sweep.cpp \
         src/kinematics.cpp src/dynamics.cpp \
         scripts/glfw_shim.cpp -o mech-shot -lOSMesa -lGL
 
@@ -30,7 +30,7 @@ GL/gl.h:
 
     g++ -std=c++17 -O2 -Isrc -Iscripts/glfw3Stub -DHAVE_VIEWER=1 \
         src/main.cpp src/viewer.cpp tests/tests.cpp \
-        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp \
+        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/sweep.cpp \
         src/kinematics.cpp src/dynamics.cpp \
         scripts/glfw_shim_softgl.cpp -o mech-shot
 

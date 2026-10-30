@@ -14,11 +14,21 @@
 // again with an impact. Slow the cam to 300 rpm and the force needed drops 4x
 // (2.5 N): the contact never lets go.
 //
+// Both the cam speed and the spring are parameters, so the threshold can be found by
+// asking the tool instead of by hand:
+//
+//   mech sweep examples/jumpcam.mech --set speed=500:800:25 --time 0.15 --report liftoffs
+//   mech sweep examples/jumpcam.mech --set speed=600 --set preload_k=100:400:50 --report liftoffs
+//   mech run   examples/jumpcam.mech --headless 1 --set speed=300       (it never lets go)
+//
 // 'restitution' is Newton's coefficient for the landing: 0 sticks, 1 bounces
 // back with the speed it came in at. Every joule is bookkept: the energy
 // ledger at the end of the run counts the cam's work, and what each impact
 // discarded.
 mechanism jumpcam {
+  param speed = 600          // cam speed, rpm
+  param preload_k = 200      // follower spring stiffness, N/m
+
   world { gravity: 9.81  step: 0.0005 }
 
   ground frame {
@@ -41,8 +51,8 @@ mechanism jumpcam {
     mass: 0.1
   }
   slide follower.tip -> frame.rail
-  spring preload follower.tip -> frame.axle { k: 200  rest: 0.020 }
+  spring preload follower.tip -> frame.axle { k: preload_k  rest: 0.020 }
   touch follower.tip on lobe restitution 0.3
 
-  drive cam at 600 rpm
+  drive cam at speed rpm
 }

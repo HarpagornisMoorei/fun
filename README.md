@@ -80,6 +80,19 @@ python3 scripts/summarize_run.py jump.csv 'follower.tip@lobe.N[N]'
 
 See [`docs/EXPORT.md`](docs/EXPORT.md) for the columns and recipes.
 
+## Parameters and sweeps
+
+Numbers can be named, computed and overridden, and a design swept over a grid:
+
+```bash
+mech run   examples/jumpcam.mech --headless 1 --set speed=300
+mech sweep examples/jumpcam.mech --set speed=300:700:100 --time 0.15 --report liftoffs
+mech sweep examples/platecam.mech --set rise_deg=100,60,30,20,10 --time 2 --report max:follower.y
+```
+
+Designs the compiler rejects (an undercut cam, say) are reported in their own row.
+See [`docs/PARAMS.md`](docs/PARAMS.md).
+
 ## Examples
 
 | file | shows |
@@ -100,5 +113,6 @@ semantics, solver formulation — and the contract `mech test` checks the
 implementation against. [`docs/design/contact.md`](docs/design/contact.md)
 is the design for contact (cams, Geneva drives, ratchets, non-circular
 gears); M6a through M6f (profiles, cam synthesis, unilateral contact,
-non-circular gears, polygons and a ratchet, friction) are implemented. `scripts/` holds offscreen-rendering harnesses for
+non-circular gears, polygons and a ratchet, friction) are implemented, as are
+parameters and sweeps ([`docs/PARAMS.md`](docs/PARAMS.md)). `scripts/` holds offscreen-rendering harnesses for
 screenshots without a display.

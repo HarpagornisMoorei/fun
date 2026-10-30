@@ -70,6 +70,15 @@
 //                | 'polygon' ':' ( '(' num ',' num ')' )+ 'fillet' num   (M6e)
 //   touchDecl   := 'touch' ref 'on' IDENT { 'roller' num | 'restitution' num | 'friction' num }
 //
+// M7 ('param' is contextual at statement start; the names `pi`, sqrt sin cos tan atan
+// abs min max pow and the cam item words are reserved as parameter names):
+//   paramDecl   := 'param' IDENT '=' expr
+//   num         := expr       (every number in the language is now an expression)
+//   expr        := term { ('+' | '-') term }
+//   term        := unary { ('*' | '/') unary }
+//   unary       := ['-' | '+'] unary | primary
+//   primary     := NUMBER | 'pi' | PARAM | FUNC '(' expr {',' expr} ')' | '(' expr ')'
+//
 // M6b ('cam' is contextual at statement start so `cam` stays usable as a
 // body name; the items below are contextual identifiers too):
 //   camDecl     := 'cam' IDENT [ 'on' IDENT ['.' IDENT] ]
@@ -87,13 +96,17 @@
 
 #include "parser.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <set>
+
 namespace mech {
 
 namespace {
 
 class Parser {
 public:
-    explicit Parser(const std::vector<Token>& toks) : t_(toks) {}
+    Parser(const std::vector<Token>& toks, const ParamOverrides& ov) : t_(toks), ov_(ov) {}
 
     Program program() {
         Program p;
@@ -101,11 +114,24 @@ public:
             expectKw("mechanism");
             p.mechanisms.push_back(mechanism());
         }
+        // an override that matched no parameter is a typo, not a no-op
+        for (const auto& kv : ov_) {
+            if (used_.count(kv.first)) continue;
+            std::string known;
+            for (const MechanismDecl& m : p.mechanisms)
+                for (const ParamDecl& pd : m.params) known += (known.empty() ? "" : ", ") + pd.name;
+            throw ParseError{1, 1, "--set '" + kv.first + "': the file declares no such parameter (" +
+                                   (known.empty() ? std::string("it declares none") : "it declares: " + known) +
+                                   ")"};
+        }
         return p;
     }
 
 private:
     const std::vector<Token>& t_;
+    const ParamOverrides& ov_;
+    std::set<std::string> used_;                 // overrides that found their parameter
+    std::map<std::string, double> params_;       // parameters declared so far (this mechanism)
     size_t pos_ = 0;
 
     // --- token helpers -----------------------------------------------------
@@ -146,12 +172,139 @@ private:
         while (acceptSym(";") || acceptSym(",")) {}
     }
 
-    double parseNum() {
-        bool neg = acceptSym("-");
-        if (cur().type != Tok::Number) fail("expected number, got '" + cur().text + "'");
-        double v = cur().num;
-        next();
-        return neg ? -v : v;
+    // --- numeric expressions (M7) --------------------------------------------------------
+    //   expr    := term { ('+' | '-') term }
+    //   term    := unary { ('*' | '/') unary }
+    //   unary   := ('-' | '+') unary | primary
+    //   primary := NUMBER | 'pi' | PARAM | FUNC '(' expr { ',' expr } ')' | '(' expr ')'
+    // FUNC: sqrt sin cos tan atan abs min max pow (angles in radians). Only an operator
+    // continues an expression, so a bare number followed by a unit word (`4 kg`, `1 s`,
+    // `100 deg`) or the next item ends it exactly as before.
+    double parseNum() { return parseSum(); }
+
+    static bool isFunc(const std::string& n) {
+        return n == "sqrt" || n == "sin" || n == "cos" || n == "tan" || n == "atan" ||
+               n == "abs" || n == "min" || n == "max" || n == "pow";
+    }
+    static bool isReservedParam(const std::string& n) {
+        return n == "pi" || isFunc(n) || n == "base" || n == "roller" || n == "start" ||
+               n == "turn" || n == "rise" || n == "fall" || n == "return" || n == "dwell";
+    }
+    // Can the next token begin a number? (For items where a number is optional.)
+    bool startsNumber() const {
+        const Token& t = cur();
+        if (t.type == Tok::Number) return true;
+        if (t.type == Tok::Sym) return t.text == "-" || t.text == "+" || t.text == "(";
+        return t.type == Tok::Ident && (t.text == "pi" || params_.count(t.text) > 0);
+    }
+
+    double checkFinite(double v) const {
+        if (!std::isfinite(v)) fail("this expression does not evaluate to a finite number");
+        return v;
+    }
+
+    double parseSum() {
+        double v = parseProd();
+        while (cur().type == Tok::Sym && (cur().text == "+" || cur().text == "-")) {
+            const bool plus = cur().text == "+";
+            next();
+            const double r = parseProd();
+            v = plus ? v + r : v - r;
+        }
+        return v;
+    }
+
+    double parseProd() {
+        double v = parseUnary();
+        while (cur().type == Tok::Sym && (cur().text == "*" || cur().text == "/")) {
+            const bool mul = cur().text == "*";
+            next();
+            const double r = parseUnary();
+            if (!mul && r == 0.0) fail("division by zero");
+            v = mul ? v * r : v / r;
+        }
+        return v;
+    }
+
+    double parseUnary() {
+        if (acceptSym("-")) return -parseUnary();
+        if (acceptSym("+")) return parseUnary();
+        return parsePrimary();
+    }
+
+    double parsePrimary() {
+        const Token t = cur();
+        if (t.type == Tok::Number) { next(); return t.num; }
+        if (acceptSym("(")) {
+            const double v = parseSum();
+            expectSym(")");
+            return v;
+        }
+        if (t.type == Tok::Ident) {
+            if (t.text == "pi") { next(); return kPi; }
+            auto it = params_.find(t.text);
+            if (it != params_.end()) { next(); return it->second; }
+            if (isFunc(t.text) && pos_ + 1 < t_.size() && t_[pos_ + 1].type == Tok::Sym &&
+                t_[pos_ + 1].text == "(") {
+                next();
+                expectSym("(");
+                std::vector<double> a;
+                a.push_back(parseSum());
+                while (acceptSym(",")) a.push_back(parseSum());
+                expectSym(")");
+                return callFunc(t, a);
+            }
+            fail("'" + t.text + "' is not a number or a declared parameter "
+                 "(declare it with 'param " + t.text + " = ...' first)");
+        }
+        fail("expected number, got '" + t.text + "'");
+    }
+
+    double callFunc(const Token& f, const std::vector<double>& a) {
+        const std::string& n = f.text;
+        const bool two = n == "min" || n == "max" || n == "pow";
+        if (a.size() != (two ? 2u : 1u)) {
+            throw ParseError{f.line, f.col, "'" + n + "' takes " + (two ? "two arguments" : "one argument")};
+        }
+        double v = 0.0;
+        if (n == "sqrt") {
+            if (a[0] < 0.0) throw ParseError{f.line, f.col, "sqrt of a negative number"};
+            v = std::sqrt(a[0]);
+        } else if (n == "sin") v = std::sin(a[0]);
+        else if (n == "cos") v = std::cos(a[0]);
+        else if (n == "tan") v = std::tan(a[0]);
+        else if (n == "atan") v = std::atan(a[0]);
+        else if (n == "abs") v = std::fabs(a[0]);
+        else if (n == "min") v = std::min(a[0], a[1]);
+        else if (n == "max") v = std::max(a[0], a[1]);
+        else v = std::pow(a[0], a[1]);
+        if (!std::isfinite(v)) throw ParseError{f.line, f.col, "'" + n + "' does not give a finite number here"};
+        return v;
+    }
+
+    // param NAME = expr
+    void paramDecl(MechanismDecl& m) {
+        const Token name = expectIdent();
+        if (isReservedParam(name.text)) {
+            throw ParseError{name.line, name.col, "'" + name.text + "' cannot be a parameter name "
+                             "(it is a constant, a function, or part of the cam vocabulary)"};
+        }
+        if (params_.count(name.text)) {
+            throw ParseError{name.line, name.col, "parameter '" + name.text + "' is already declared"};
+        }
+        expectSym("=");
+        ParamDecl pd;
+        pd.name = name.text;
+        pd.line = name.line;
+        pd.declared = pd.value = checkFinite(parseNum());
+        auto ov = ov_.find(name.text);
+        if (ov != ov_.end()) {
+            pd.value = ov->second;
+            pd.overridden = true;
+            used_.insert(name.text);
+        }
+        params_[name.text] = pd.value;
+        m.params.push_back(pd);
     }
 
     void parseRef(std::string& body, std::string& anchor) {
@@ -164,6 +317,7 @@ private:
 
     MechanismDecl mechanism() {
         MechanismDecl m;
+        params_.clear();                        // parameters are per mechanism
         Token name = expectIdent();
         m.name = name.text;
         m.line = name.line;
@@ -196,6 +350,7 @@ private:
         else if (acceptKw("profile")) profileDecl(m);
         else if (acceptKw("touch")) touchDecl(m);
         else if (cur().type == Tok::Ident && cur().text == "cam") { next(); camDecl(m); }
+        else if (cur().type == Tok::Ident && cur().text == "param") { next(); paramDecl(m); }
         else fail("expected a statement ('ground', 'body', 'rod', 'shaft', 'world', 'gear', "
                   "'mesh', 'spring', 'pin', 'slide', 'drive', 'reduce', 'hand', 'dial', "
                   "'mode', 'profile', 'touch' or 'cam'), got '" + cur().text + "'");
@@ -571,7 +726,7 @@ private:
                 CamSegment seg;
                 if (item.text == "dwell") {
                     seg.kind = CamSegment::Kind::Dwell;
-                    if (cur().type == Tok::Number || (cur().type == Tok::Sym && cur().text == "-")) {
+                    if (startsNumber()) {
                         seg.angle = deg2rad(parseNum());
                         expectDeg("the dwell angle");
                     } else {
@@ -1024,8 +1179,8 @@ private:
 
 } // namespace
 
-Program parse(const std::vector<Token>& tokens) {
-    Parser p(tokens);
+Program parse(const std::vector<Token>& tokens, const ParamOverrides& overrides) {
+    Parser p(tokens, overrides);
     return p.program();
 }
 

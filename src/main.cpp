@@ -14,6 +14,7 @@
 #include "dynamics.hpp"
 #include "kinematics.hpp"
 #include "record.hpp"
+#include "sweep.hpp"
 #include "lexer.hpp"
 #include "model.hpp"
 #include "parser.hpp"
@@ -45,7 +46,7 @@ std::string readFile(const std::string& path) {
     return ss.str();
 }
 
-Program loadAndParse(const std::string& path) {
+Program loadAndParse(const std::string& path, const ParamOverrides& overrides = {}) {
     std::string src;
     try {
         src = readFile(path);
@@ -58,7 +59,7 @@ Program loadAndParse(const std::string& path) {
         throw ToolError{path, e.line, e.col, e.msg};
     }
     try {
-        return parse(toks);
+        return parse(toks, overrides);
     } catch (const ParseError& e) {
         throw ToolError{path, e.line, e.col, e.msg};
     }
@@ -105,6 +106,8 @@ void printHelp() {
         "usage:\n"
         "  mech check <file.mech>              parse + DOF analysis + initial assembly\n"
         "  mech run <file.mech> [options]      animate in an OpenGL window\n"
+        "  mech sweep <file.mech> --set name=a:b:step [options]\n"
+        "                                      run the design over a range of `param` values\n"
         "  mech test                           run unit tests\n"
         "\n"
         "run options:\n"
@@ -119,15 +122,43 @@ void printHelp() {
         "  --dt <sec>          kinematic frame step (default 1/60; dynamic files use their\n"
         "                      world step)\n"
         "  --every <n>         record every n-th step\n"
+        "  --set <name=value>  (repeatable; also on check) replace a `param` without editing\n"
+        "                      the file\n"
         "  --trace <b.a>       draw the path of body b's anchor a (coupler curve)\n"
         "  --speed <x>         initial speed multiplier (default 1)\n"
         "  --paused            start paused\n"
         "\n"
+        "sweep options:\n"
+        "  --set <name=a:b:step | name=v1,v2,... | name=v>   (repeatable: a grid)\n"
+        "  --time <sec>        simulated time per run (default 2)\n"
+        "  --report <metric>   max:<col> min:<col> mean:<col> final:<col> maxres liftoffs\n"
+        "                      impacts ledger (repeatable; default: a sensible few)\n"
+        "  --probe <b.a>       record an anchor so max:<b.a.y> etc. can be reported\n"
+        "  --csv <file>        also write the table\n"
+        "\n"
         "mechanism window: SPACE pause | R reset | F refit | wheel zoom | drag pan | 1-6 speed | Q quit\n");
 }
 
-int cmdCheck(const std::string& path) {
-    Program prog = loadAndParse(path);
+// "name=value" from --set; the value is a plain number.
+bool parseSetArg(const std::string& a, ParamOverrides& ov, std::string& err) {
+    const size_t eq = a.find('=');
+    if (eq == std::string::npos || eq == 0 || eq + 1 >= a.size()) {
+        err = "--set expects name=value, got '" + a + "'";
+        return false;
+    }
+    char* end = nullptr;
+    const std::string val = a.substr(eq + 1);
+    const double v = std::strtod(val.c_str(), &end);
+    if (end == val.c_str() || *end != '\0' || !std::isfinite(v)) {
+        err = "--set " + a.substr(0, eq) + ": '" + val + "' is not a number";
+        return false;
+    }
+    ov[a.substr(0, eq)] = v;
+    return true;
+}
+
+int cmdCheck(const std::string& path, const ParamOverrides& overrides = {}) {
+    Program prog = loadAndParse(path, overrides);
     if (prog.mechanisms.empty()) {
         throw ToolError{path, 0, 0, "file contains no mechanism"};
     }
@@ -140,6 +171,14 @@ int cmdCheck(const std::string& path) {
         for (int i = 0; i < std::max(1, 46 - (int)m.name.size()); ++i) std:: putchar('-');
         std::printf("\n");
 
+        if (!decl.params.empty()) {
+            std::printf("params:");
+            for (const ParamDecl& pd : decl.params) {
+                std::printf("  %s = %g", pd.name.c_str(), pd.value);
+                if (pd.overridden) std::printf(" (set; the file says %g)", pd.declared);
+            }
+            std::printf("\n");
+        }
         std::printf("mode: %s", m.world.dynamic ? "dynamic" : "kinematic");
         if (m.world.dynamic) {
             std::printf(" (gravity %g m/s^2, step %g ms)", m.world.gravity,
@@ -481,6 +520,7 @@ int cmdCheck(const std::string& path) {
 
 // What `mech run --headless` should export (M7).
 struct RunExport {
+    ParamOverrides set;               // --set name=value
     std::string csv;                  // output path ("" = none)
     std::vector<std::string> probes;  // body.anchor, each recorded as world x, y
     double dt = 0.0;                  // kinematic frame step in seconds (0 = 1/60)
@@ -501,7 +541,7 @@ struct CsvSink {
 
 int cmdRun(const std::string& path, double headlessSecs, bool headless,
            const std::string& traceRef, double speed, bool paused, const RunExport& ex) {
-    Program prog = loadAndParse(path);
+    Program prog = loadAndParse(path, ex.set);
     if (prog.mechanisms.empty()) {
         throw ToolError{path, 0, 0, "file contains no mechanism"};
     }
@@ -726,6 +766,72 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
 
 } // namespace
 
+// mech sweep <file> --set name=range ... [--time s] [--dt s] [--report m]... [--probe b.a] [--csv f]
+int cmdSweep(const std::string& path, const std::vector<std::string>& setSpecs, const SweepOptions& opt,
+             const std::string& csvPath) {
+    const std::string src = readFile(path);
+    std::vector<SweepAxis> axes;
+    for (const std::string& spec : setSpecs) {
+        SweepAxis ax;
+        std::string err;
+        if (!parseAxis(spec, ax, err)) throw ToolError{path, 0, 0, err};
+        axes.push_back(ax);
+    }
+    if (axes.empty()) {
+        throw ToolError{path, 0, 0, "nothing to sweep: give at least one --set name=start:stop:step "
+                                    "(or name=v1,v2,...)"};
+    }
+    SweepResult r;
+    try {
+        r = runSweep(src, axes, opt);
+    } catch (const LexError& e) {
+        throw ToolError{path, e.line, e.col, e.msg};
+    } catch (const std::runtime_error& e) {
+        throw ToolError{path, 0, 0, e.what()};
+    }
+
+    std::printf("sweep of '%s': %zu run%s of %g s (%s)\n", path.c_str(), r.rows.size(),
+                r.rows.size() == 1 ? "" : "s", opt.seconds, r.dynamic ? "dynamic" : "kinematic");
+    std::string head;
+    char buf[64];
+    for (const std::string& a : r.axisNames) { std::snprintf(buf, sizeof buf, "%-12s", a.c_str()); head += buf; }
+    for (const std::string& m : r.metricLabels) { std::snprintf(buf, sizeof buf, " %-22s", m.c_str()); head += buf; }
+    std::printf("%s\n", head.c_str());
+    int errors = 0;
+    for (const SweepRow& row : r.rows) {
+        std::string line;
+        for (double v : row.params) { std::snprintf(buf, sizeof buf, "%-12.6g", v); line += buf; }
+        if (!row.error.empty()) {
+            line += " ERROR: " + row.error;
+            ++errors;
+        } else {
+            for (double v : row.metrics) { std::snprintf(buf, sizeof buf, " %-22.6g", v); line += buf; }
+        }
+        std::printf("%s\n", line.c_str());
+    }
+    if (errors) std::printf("\n%d of %zu design%s could not be built or run (see ERROR rows).\n",
+                           errors, r.rows.size(), r.rows.size() == 1 ? "" : "s");
+    if (!csvPath.empty()) {
+        std::FILE* f = std::fopen(csvPath.c_str(), "w");
+        if (!f) throw ToolError{path, 0, 0, "cannot write '" + csvPath + "'"};
+        std::string h;
+        for (const std::string& a : r.axisNames) h += a + ",";
+        for (const std::string& m : r.metricLabels) h += m + ",";
+        std::fprintf(f, "%serror\n", h.c_str());
+        for (const SweepRow& row : r.rows) {
+            std::string l;
+            for (double v : row.params) { std::snprintf(buf, sizeof buf, "%.12g,", v); l += buf; }
+            for (double v : row.metrics) { std::snprintf(buf, sizeof buf, "%.12g,", v); l += buf; }
+            std::string e = row.error;
+            for (char& c : e) if (c == ',' || c == '\n') c = ';';
+            std::fprintf(f, "%s%s\n", l.c_str(), e.c_str());
+        }
+        std::fclose(f);
+        std::printf("wrote %s\n", csvPath.c_str());
+    }
+    return errors ? 2 : 0;
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) { printHelp(); return 0; }
     const std::string cmd = argv[1];
@@ -735,8 +841,44 @@ int main(int argc, char** argv) {
         if (cmd == "test") return runAllTests() == 0 ? 0 : 1;
 
         if (cmd == "check") {
-            if (argc < 3) { std::fprintf(stderr, "usage: mech check <file.mech>\n"); return 1; }
-            return cmdCheck(argv[2]);
+            if (argc < 3) { std::fprintf(stderr, "usage: mech check <file.mech> [--set name=value ...]\n"); return 1; }
+            ParamOverrides ov;
+            for (int i = 3; i < argc; ++i) {
+                const std::string a = argv[i];
+                std::string err;
+                if (a == "--set" && i + 1 < argc) {
+                    if (!parseSetArg(argv[++i], ov, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+                } else {
+                    std::fprintf(stderr, "unknown option '%s'\n", a.c_str());
+                    return 1;
+                }
+            }
+            return cmdCheck(argv[2], ov);
+        }
+        if (cmd == "sweep") {
+            if (argc < 3) {
+                std::fprintf(stderr, "usage: mech sweep <file.mech> --set name=start:stop:step "
+                                     "[--time s] [--report metric]...\n");
+                return 1;
+            }
+            std::vector<std::string> sets;
+            SweepOptions opt;
+            std::string csvPath;
+            for (int i = 3; i < argc; ++i) {
+                const std::string a = argv[i];
+                if (a == "--set" && i + 1 < argc) sets.push_back(argv[++i]);
+                else if (a == "--time" && i + 1 < argc) opt.seconds = std::atof(argv[++i]);
+                else if (a == "--dt" && i + 1 < argc) opt.dt = std::atof(argv[++i]);
+                else if (a == "--report" && i + 1 < argc) opt.reports.push_back(argv[++i]);
+                else if (a == "--probe" && i + 1 < argc) opt.probes.push_back(argv[++i]);
+                else if (a == "--csv" && i + 1 < argc) csvPath = argv[++i];
+                else { std::fprintf(stderr, "unknown option '%s'\n", a.c_str()); return 1; }
+            }
+            if (!(opt.seconds > 0.0) || !(opt.dt > 0.0)) {
+                std::fprintf(stderr, "--time and --dt must be positive\n");
+                return 1;
+            }
+            return cmdSweep(argv[2], sets, opt, csvPath);
         }
         if (cmd == "run") {
             if (argc < 3) {
@@ -760,6 +902,9 @@ int main(int argc, char** argv) {
                     speed = std::atof(argv[++i]);
                 } else if (a == "--paused") {
                     paused = true;
+                } else if (a == "--set" && i + 1 < argc) {
+                    std::string err;
+                    if (!parseSetArg(argv[++i], ex.set, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
                 } else if (a == "--csv" && i + 1 < argc) {
                     ex.csv = argv[++i];
                 } else if (a == "--probe" && i + 1 < argc) {

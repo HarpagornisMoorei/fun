@@ -1,0 +1,157 @@
+# Parameters, expressions and sweeps (M8)
+
+A design is rarely one set of numbers. M8 lets a `.mech` file name its numbers,
+override them from the command line, and ask the tool to run many variants and
+report one number per variant.
+
+Nothing here changes what a mechanism *means*: parameters are resolved while
+parsing, so by the time the model is built every number is a plain `double`
+and the solver, dynamics and tests see exactly what they saw before.
+
+## 1. Declaring parameters
+
+```
+mechanism jumpcam {
+  param speed    = 600            // cam speed, rpm
+  param preload_k = 200           // spring stiffness, N/m
+  param lift     = 0.012
+  param half     = lift / 2
+
+  drive cam at speed rpm
+  spring s a -> b { k: preload_k  rest: 0.020 }
+}
+```
+
+* `param name = expression` appears inside a `mechanism`, anywhere a statement may.
+* A parameter can only be used **after** its declaration (it is a parse-time
+  constant, not a lazily solved equation). Later parameters may use earlier ones.
+* The name is an ordinary identifier, with two restrictions: it must not collide
+  with a unit token (`rpm`, `deg`, `mm`, ...: `param rpm = 5` is rejected, use
+  `speed`), and it may not be declared twice.
+* Parameters are scoped to their mechanism.
+
+## 2. Expressions
+
+Wherever the grammar wanted a number it now accepts an expression:
+
+| form | meaning |
+| --- | --- |
+| `a + b`, `a - b`, `a * b`, `a / b` | usual precedence; `*` `/` bind tighter than `+` `-` |
+| `-a`, `+a` | unary sign |
+| `( ... )` | grouping |
+| `pi` | 3.14159... |
+| `sqrt sin cos tan atan abs` `(x)` | one argument; trig in **radians** |
+| `min max pow` `(x, y)` | two arguments |
+| a parameter name | its current value (declared or overridden) |
+
+Units still attach to the finished number: `rise lift * 2 over 100 deg` is
+`rise (lift*2) over 100 deg`. Expressions are checked as they are evaluated:
+division by zero, a domain error (`sqrt(-1)`), a non-finite result, an unknown
+function or the wrong number of arguments are parse errors pointing at the
+offending token.
+
+Because `-` is now an operator, `a-b` is a subtraction. A negative literal such
+as `at (-0.01, 0)` works as before.
+
+## 3. Overriding from the command line
+
+```bash
+mech check examples/jumpcam.mech --set speed=300
+mech run   examples/jumpcam.mech --headless 1 --set speed=300 --set preload_k=400
+```
+
+`--set name=value` replaces the number on the right of the `param`. Every other
+parameter that uses it follows, because the override is applied when the
+declaration is read.
+
+* The value must be a number (no expressions on the command line).
+* An override naming a parameter the file does not declare is an **error**, not
+  a silent no-op, and the message lists what the file does declare.
+* `mech check` prints the effective values and what the file said:
+  `params:  speed = 300 (set; the file says 600)`.
+
+`--set` is accepted by `check` and `run` (headless and the viewer alike), and
+`sweep` takes it in the extended axis form below.
+
+## 4. Sweeps
+
+```bash
+mech sweep FILE --set AXIS [--set AXIS ...] --time T --report METRIC [...]
+```
+
+An **axis** is a parameter with several values:
+
+| form | values |
+| --- | --- |
+| `name=a:b:s` | a, a+s, ... up to b (inclusive; no accumulated drift) |
+| `name=v1,v2,v3` | exactly these |
+| `name=v` | a single value (fixes the parameter) |
+
+With several axes the tool runs the full grid, **first axis slowest**. Grids over
+5000 points are refused.
+
+A **metric** reduces one run to one number:
+
+| form | meaning |
+| --- | --- |
+| `max:COL`, `min:COL`, `mean:COL`, `final:COL` | over the sampled rows of a CSV column (see `docs/EXPORT.md`); the unit may be omitted, `follower.y` resolves to `follower.y[m]` |
+| `liftoffs`, `impacts` | counts of contact events |
+| `maxres` | worst constraint residual over the run |
+| `ledger` | worst absolute energy-ledger residual |
+
+Output is an aligned table; `--csv FILE` writes it as `axes...,metrics...,error`.
+
+```bash
+# where does the follower start to leave the cam?
+mech sweep examples/jumpcam.mech --set speed=300:800:50 --time 0.15 --report liftoffs
+
+# how much does eccentricity change the follower stroke?
+mech sweep examples/eccentric.mech --set e=0.005:0.02:0.005 \
+     --time 1 --report max:follower.y --report min:follower.y
+
+# a two-axis grid
+mech sweep examples/jumpcam.mech --set speed=300:700:200 --set preload_k=100,200,400 \
+     --time 0.15 --report liftoffs
+```
+
+### 4.1 Designs that do not build
+
+A sweep is exactly where a variant crosses a limit the compiler enforces (an
+undercut cam, a gear pair that cannot mesh, a mechanism that cannot assemble).
+Such a row is **not fatal**: its metrics are blank (`nan`), its `error` column
+carries the compiler's own message, and the command exits with status 2 so a
+script can tell that some designs were invalid. The first design in the grid
+must build, otherwise the file itself is broken and the sweep stops with that
+error. For `platecam.mech`:
+
+```bash
+mech sweep examples/platecam.mech --set rise_deg=100,60,30,20,10 --time 2 --report max:follower.y
+```
+
+builds the 100, 60 and 30 degree rises (stroke 43 mm each) and reports the 20 and
+10 degree ones as undercut, with the compiler's own message, then exits with
+status 2.
+
+### 4.2 Choosing `--time`
+
+Metrics are over the simulated window only. A shaft driven at 30 deg/s needs
+12 s to complete a turn, so `max:follower.y` over 1 s sees only the first 30
+degrees of the lift. Pick a window that covers the event you care about.
+
+## 5. Checked against closed forms
+
+* `jumpcam` follower lift-off: the sweep brackets the threshold at 444 rpm; the
+  closed form (spring + gravity can accelerate the follower down no faster than
+  the cam surface's peak deceleration) gives 443.9 rpm.
+* `eccentric`: the maximum follower height is `R + rho + e`, the minimum
+  `R + rho - e`, for each `e` in the sweep.
+* Overrides are bit-equal to editing the number in the file (the test builds
+  both and compares every field of the model).
+
+## 6. Limits
+
+* Parameters are numbers. There are no parameter-valued strings, lists, or
+  conditionals; structure cannot depend on a parameter.
+* Command-line overrides are literals.
+* Sweeps re-parse and rebuild the model per row; a 1000-row sweep of a
+  kinematic design takes seconds, of a hybrid-dynamic one proportionally more.
