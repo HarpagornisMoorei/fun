@@ -2,6 +2,7 @@
 #include "tests.hpp"
 
 #include "../src/geom.hpp"
+#include "../src/cam.hpp"
 #include "../src/dynamics.hpp"
 #include "../src/kinematics.hpp"
 #include "../src/lexer.hpp"
@@ -3443,6 +3444,506 @@ void testKinematicsM6() {
     }
 }
 
+
+// ---- M6b: cam synthesis from displacement diagrams -----------------------------
+
+// A plate cam on a shaft, a roller follower on a rail through the axle. `camBody`
+// is spliced into the cam block; `touchTail` after the touch.
+std::string plateCamSrc(const std::string& camBody, const char* rate, const char* touchTail = "") {
+    std::string s =
+        "mechanism pc {\n"
+        "  ground frame { anchor axle at (0, 0)  anchor rail at (0, 0.09) dir (0, 1) }\n"
+        "  shaft cam at frame.axle\n"
+        "  cam lobe on cam.A { " + camBody + " }\n"
+        "  body follower { anchor tip at (0, 0) dir (1, 0) }\n"
+        "  slide follower.tip -> frame.rail\n"
+        "  touch follower.tip on lobe ";
+    s += touchTail;
+    s += "\n  drive cam at ";
+    s += rate;
+    s += " deg/s\n}\n";
+    return s;
+}
+
+const char* kCamBody =
+    "base 0.025 roller 0.006 rise 0.012 over 100 deg cycloidal dwell 60 deg "
+    "return over 140 deg modtrap dwell";
+
+void testCamLaws() {
+    std::printf("[cam M6b]\n");
+
+    const MotionLaw laws[] = {MotionLaw::Cycloidal, MotionLaw::Harmonic, MotionLaw::ModTrap};
+    const double peakA[] = {2.0 * kPi, 0.5 * kPi * kPi, 4.8881};   // textbook coefficients
+    for (int li = 0; li < 3; ++li) {
+        const MotionLaw L = laws[li];
+        // rest-to-rest, 0 -> 1
+        CHECK_APPROX(evalLaw(L, 0.0).s, 0.0, 1e-15);
+        CHECK_APPROX(evalLaw(L, 1.0).s, 1.0, 1e-12);
+        CHECK_APPROX(evalLaw(L, 0.0).v, 0.0, 1e-12);
+        CHECK_APPROX(evalLaw(L, 1.0).v, 0.0, 1e-12);
+        double worstV = 0.0, worstA = 0.0, peak = 0.0, minV = 1e9, symm = 0.0;
+        for (int k = 1; k < 1000; ++k) {
+            const double x = k / 1000.0, h = 1e-6;
+            const LawValue f = evalLaw(L, x), p = evalLaw(L, x + h), m = evalLaw(L, x - h);
+            worstV = std::max(worstV, std::fabs((p.s - m.s) / (2 * h) - f.v));
+            worstA = std::max(worstA, std::fabs((p.v - m.v) / (2 * h) - f.a));
+            peak = std::max(peak, std::fabs(f.a));
+            minV = std::min(minV, f.v);
+            symm = std::max(symm, std::fabs(f.s + evalLaw(L, 1.0 - x).s - 1.0));
+        }
+        CHECK(worstV < 1e-8);     // v is really ds/dx
+        CHECK(worstA < 1e-7);     // a is really dv/dx (continuous: no jumps hiding in the grid)
+        CHECK(minV >= -1e-12);    // monotone: the follower never backs up
+        CHECK(symm < 1e-12);      // s(x) + s(1-x) = 1
+        CHECK_APPROX(peak, peakA[li], 2e-4);
+    }
+    CHECK(std::string(lawName(MotionLaw::ModTrap)) == "modtrap");
+}
+
+void testCamDiagram() {
+    std::printf("[cam diagram M6b]\n");
+
+    auto seg = [](CamSegment::Kind k, double lift, double deg, bool rest = false) {
+        CamSegment c;
+        c.kind = k;
+        c.lift = lift;
+        c.angle = deg2rad(deg);
+        c.restOfTurn = rest;
+        return c;
+    };
+    using K = CamSegment::Kind;
+    auto build = [&](std::vector<CamSegment> segs, CamError& err) {
+        CamSpec sp;
+        sp.base = 0.03;
+        sp.segments = std::move(segs);
+        CamDiagram d;
+        const bool ok = d.build(sp, err);
+        return ok;
+    };
+    CamError err;
+
+    // a good diagram: values at known angles; dwells are exactly flat
+    {
+        CamSpec sp;
+        sp.base = 0.03;
+        sp.segments = {seg(K::Rise, 0.012, 100), seg(K::Dwell, 0, 60),
+                       seg(K::Return, 0, 140), seg(K::Dwell, 0, 0, true)};
+        CamDiagram d;
+        CHECK(d.build(sp, err));
+        CHECK_APPROX(d.maxLift(), 0.012, 1e-15);
+        double s, ds, dds;
+        d.eval(deg2rad(50.0), s, ds, dds);               // cycloidal midpoint
+        CHECK_APPROX(s, 0.006, 1e-12);
+        CHECK_APPROX(ds, 2.0 * 0.012 / deg2rad(100.0), 1e-9);   // peak velocity 2h/beta
+        CHECK_APPROX(dds, 0.0, 1e-9);
+        for (double deg : {101.0, 130.0, 159.9}) {        // dwell at the top
+            d.eval(deg2rad(deg), s, ds, dds);
+            CHECK(s == 0.012 && ds == 0.0 && dds == 0.0);
+        }
+        for (double deg : {301.0, 330.0, 359.9}) {        // closing dwell at the base
+            d.eval(deg2rad(deg), s, ds, dds);
+            CHECK(s == 0.0 && ds == 0.0 && dds == 0.0);
+        }
+        d.eval(deg2rad(10.0 + 360.0), s, ds, dds);        // periodic
+        double s2, a2, b2;
+        d.eval(deg2rad(10.0), s2, a2, b2);
+        CHECK_APPROX(s, s2, 1e-15);
+        d.eval(deg2rad(-350.0), s, ds, dds);
+        CHECK_APPROX(s, s2, 1e-12);
+    }
+
+    // errors name the problem
+    auto fails = [&](std::vector<CamSegment> segs, const char* needle, int segIdx = -2) {
+        CamError e;
+        CHECK(!build(std::move(segs), e));
+        CHECK(e.msg.find(needle) != std::string::npos);
+        if (segIdx != -2) CHECK(e.segment == segIdx);
+    };
+    fails({}, "no motion segments");
+    fails({seg(K::Rise, 0.01, 180), seg(K::Dwell, 0, 0, true)}, "does not close");
+    fails({seg(K::Rise, 0.01, 100), seg(K::Return, 0, 100)}, "200 of 360");   // not a full turn
+    fails({seg(K::Rise, 0.01, 200), seg(K::Return, 0, 200)}, "more than one turn");
+    fails({seg(K::Rise, 0.01, 100), seg(K::Fall, 0.02, 100), seg(K::Dwell, 0, 0, true)},
+          "below the base circle", 1);
+    fails({seg(K::Return, 0, 100), seg(K::Dwell, 0, 0, true)}, "nothing to return from", 0);
+    fails({seg(K::Rise, 0.0, 100), seg(K::Dwell, 0, 0, true)}, "positive lift", 0);
+    fails({seg(K::Dwell, 0, 0, true), seg(K::Rise, 0.01, 100)}, "must be the last", 0);
+    fails({seg(K::Rise, 0.01, 180), seg(K::Return, 0, 180), seg(K::Dwell, 0, 0, true)},
+          "no angle left", 2);
+    fails({seg(K::Rise, 0.01, -5), seg(K::Dwell, 0, 0, true)}, "positive angle", 0);
+}
+
+void testCamDesign() {
+    std::printf("[cam design M6b]\n");
+
+    using K = CamSegment::Kind;
+    auto seg = [](K k, double lift, double deg, bool rest = false) {
+        CamSegment c;
+        c.kind = k;
+        c.lift = lift;
+        c.angle = deg2rad(deg);
+        c.restOfTurn = rest;
+        return c;
+    };
+
+    // zero lift: the pitch curve is the prime circle, so its radius of
+    // curvature is exactly base + roller and the pressure angle is zero
+    {
+        CamSpec sp;
+        sp.base = 0.03;
+        sp.roller = 0.006;
+        sp.segments = {seg(K::Dwell, 0, 0, true)};
+        CamDiagram d;
+        CamError e;
+        CHECK(d.build(sp, e));
+        const CamDesign cd = designCam(sp, d);
+        CHECK_APPROX(cd.minConvexRadius, 0.036, 1e-9);
+        CHECK_APPROX(cd.maxPressure, 0.0, 1e-15);
+        CHECK(!cd.undercut);
+        // the surface is the base circle (offset in by the roller)
+        double worst = 0.0;
+        for (const Vec2& p : cd.surface) worst = std::max(worst, std::fabs(vlen(p) - 0.03));
+        CHECK(worst < 1e-12);
+    }
+
+    // pressure angle against a hand calculation: a lone cycloidal rise, then
+    // maximize atan((h/beta)(1 - cos 2 pi x) / (r0 + h(x - sin(2 pi x)/2pi))) over x
+    {
+        const double h = 0.012, beta = deg2rad(100.0), r0 = 0.031;
+        CamSpec sp;
+        sp.base = 0.025;
+        sp.roller = 0.006;
+        sp.segments = {seg(K::Rise, h, 100), seg(K::Dwell, 0, 60), seg(K::Return, 0, 100),
+                       seg(K::Dwell, 0, 0, true)};
+        sp.segments[2].law = MotionLaw::Cycloidal;
+        CamDiagram d;
+        CamError e;
+        CHECK(d.build(sp, e));
+        const CamDesign cd = designCam(sp, d);
+        double hand = 0.0, handX = 0.0;
+        for (int k = 0; k <= 2000000; ++k) {
+            const double x = k / 2000000.0;
+            const double a = std::atan((h / beta) * (1.0 - std::cos(2.0 * kPi * x)) /
+                                       (r0 + h * (x - std::sin(2.0 * kPi * x) / (2.0 * kPi))));
+            if (a > hand) { hand = a; handX = x; }
+        }
+        CHECK_APPROX(cd.maxPressure, hand, 1e-6);
+        // rise and return mirror each other, so the maximum occurs twice: on the
+        // rise's early half (smaller radius) and the return's late half; either
+        // may be reported. Return starts at 160 deg and is 100 deg long.
+        const double at = rad2deg(cd.maxPressureAt);
+        const double riseAt = rad2deg(handX * beta);
+        const double returnAt = 160.0 + 100.0 - riseAt;
+        CHECK(std::fabs(at - riseAt) < 0.06 || std::fabs(at - returnAt) < 0.06);   // 0.05 deg grid
+    }
+
+    // radius of curvature against the polar formula
+    //   kappa = (r^2 + 2 r'^2 - r r'') / (r^2 + r'^2)^(3/2),  r = r0 + s(theta)
+    // (an independent route from the vector formula used by the synthesizer)
+    {
+        CamSpec sp;
+        sp.base = 0.025;
+        sp.roller = 0.006;
+        sp.segments = {seg(K::Rise, 0.012, 100), seg(K::Dwell, 0, 60),
+                       seg(K::Return, 0, 140), seg(K::Dwell, 0, 0, true)};
+        sp.segments[2].law = MotionLaw::ModTrap;
+        CamDiagram d;
+        CamError e;
+        CHECK(d.build(sp, e));
+        const CamDesign cd = designCam(sp, d);
+        double minR = 1e9;
+        for (int k = 0; k < 7200; ++k) {
+            double s, ds, dds;
+            d.eval(2.0 * kPi * k / 7200.0, s, ds, dds);
+            const double r = 0.031 + s;
+            const double kappa = (r * r + 2.0 * ds * ds - r * dds) /
+                                 std::pow(r * r + ds * ds, 1.5);
+            if (kappa > 1e-12) minR = std::min(minR, 1.0 / kappa);
+        }
+        CHECK_APPROX(cd.minConvexRadius, minR, 1e-9);
+        CHECK(cd.minConvexRadius > 0.006 && !cd.undercut);
+    }
+
+    // a tight lobe under a big roller undercuts
+    {
+        CamSpec sp;
+        sp.base = 0.02;
+        sp.roller = 0.015;
+        sp.segments = {seg(K::Rise, 0.02, 40), seg(K::Return, 0, 40), seg(K::Dwell, 0, 0, true)};
+        CamDiagram d;
+        CamError e;
+        CHECK(d.build(sp, e));
+        CHECK(designCam(sp, d).undercut);
+    }
+}
+
+void testParserModelM6b() {
+    std::printf("[parser+model M6b]\n");
+
+    // parse: every item, host either side, 'cam' still a fine body name
+    {
+        const Program p = parseText(
+            "mechanism m { ground g { anchor a at (0,0) } shaft cam at g.a "
+            "cam lobe { base 0.03 roller 0.005 start 100 deg turn cw "
+            "rise 0.01 over 90 deg harmonic fall 0.004 over 45 deg dwell 10 deg "
+            "return over 100 deg modtrap dwell } on cam }");
+        const CamDecl& c = p.mechanisms[0].cams[0];
+        CHECK(c.name == "lobe" && c.host == "cam" && c.hostAnchor.empty());
+        CHECK(c.hasBase);
+        CHECK_APPROX(c.spec.base, 0.03, 1e-15);
+        CHECK_APPROX(c.spec.roller, 0.005, 1e-15);
+        CHECK_APPROX(c.spec.startRad, deg2rad(100.0), 1e-12);
+        CHECK(c.spec.turn == -1);
+        CHECK(c.spec.segments.size() == 5 && c.segLines.size() == 5);
+        CHECK(c.spec.segments[0].kind == CamSegment::Kind::Rise);
+        CHECK(c.spec.segments[0].law == MotionLaw::Harmonic);
+        CHECK(c.spec.segments[1].kind == CamSegment::Kind::Fall);
+        CHECK(c.spec.segments[1].law == MotionLaw::Cycloidal);       // the default
+        CHECK(!c.spec.segments[2].restOfTurn);
+        CHECK_APPROX(c.spec.segments[2].angle, deg2rad(10.0), 1e-12);
+        CHECK(c.spec.segments[3].kind == CamSegment::Kind::Return);
+        CHECK(c.spec.segments[3].law == MotionLaw::ModTrap);
+        CHECK(c.spec.segments[4].restOfTurn);
+    }
+
+    auto expectParseError = [&](const char* src, const char* needle) {
+        bool threw = false;
+        try {
+            parseText(src);
+        } catch (const ParseError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find(needle) != std::string::npos);
+            CHECK(e.line >= 1);
+        }
+        CHECK(threw);
+    };
+    expectParseError("mechanism m { cam c on s { rise 0.01 over 90 deg bouncy } }", "unknown motion law 'bouncy'");
+    expectParseError("mechanism m { cam c on s { rise 0.01 over 90 } }", "expected 'deg'");
+    expectParseError("mechanism m { cam c on s { rise 0.01 90 deg } }", "expected 'over'");
+    expectParseError("mechanism m { cam c on s { turn sideways } }", "'ccw' or 'cw'");
+    expectParseError("mechanism m { cam c on s { jump 3 } }", "expected cam item");
+    expectParseError("mechanism m { cam c { base 1 } }", "needs a host");
+    expectParseError("mechanism m { cam c on s { start 90 } }", "expected 'deg'");
+
+    // model
+    auto expectModelError = [&](const std::string& body, const char* needle, int line = -1) {
+        bool threw = false;
+        try {
+            buildFromText(plateCamSrc(body, "30").c_str());
+        } catch (const SemanticError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find(needle) != std::string::npos);
+            if (line >= 0) CHECK(e.line == line);
+        }
+        CHECK(threw);
+    };
+    expectModelError("rise 0.01 over 100 deg dwell", "needs a 'base'");
+    expectModelError("base 0 rise 0.01 over 100 deg return over 100 deg dwell", "'base' must be positive");
+    expectModelError("base 0.03 roller -1 rise 0.01 over 100 deg return over 100 deg dwell", "cannot be negative");
+    expectModelError("base 0.03 rise 0.01 over 100 deg", "100 of 360");
+    expectModelError("base 0.03 rise 0.01 over 100 deg dwell", "does not close");
+    expectModelError("base 0.02 roller 0.015 rise 0.02 over 40 deg return over 40 deg dwell", "undercut");
+
+    // the segment's own source line is reported (line 3 of the spliced source)
+    {
+        bool threw = false;
+        try {
+            buildFromText(
+                "mechanism m {\n  ground g { anchor a at (0,0) }\n  shaft cam at g.a\n"
+                "  cam lobe on cam.A {\n    base 0.03\n    return over 100 deg\n    dwell\n  }\n}");
+        } catch (const SemanticError& e) {
+            threw = true;
+            CHECK(e.line == 6);
+            CHECK(std::string(e.msg).find("cam 'lobe'") != std::string::npos);
+        }
+        CHECK(threw);
+    }
+
+    // shared namespace, host resolution
+    {
+        bool threw = false;
+        try {
+            buildFromText(
+                "mechanism m { ground g { anchor a at (0,0) } shaft cam at g.a "
+                "profile lobe on cam { circle: 0.03 } "
+                "cam lobe on cam { base 0.03 rise 0.01 over 90 deg return over 90 deg dwell } }");
+        } catch (const SemanticError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find("duplicate profile name") != std::string::npos);
+        }
+        CHECK(threw);
+        threw = false;
+        try {
+            buildFromText("mechanism m { ground g { anchor a at (0,0) } "
+                          "cam lobe on nope { base 0.03 rise 0.01 over 90 deg return over 90 deg dwell } }");
+        } catch (const SemanticError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find("cam 'lobe' refers to unknown host body") != std::string::npos);
+        }
+        CHECK(threw);
+    }
+
+    // what the model records; a touch follows the cam's roller by default
+    {
+        Model m = buildFromText(plateCamSrc(kCamBody, "30").c_str());
+        CHECK(m.cams.size() == 1 && m.profiles.size() == 1);
+        CHECK(m.profiles[0].fromCam);
+        CHECK_APPROX(m.profiles[0].designRoller, 0.006, 1e-15);
+        CHECK_APPROX(m.touches[0].roller, 0.006, 1e-15);
+        CHECK_APPROX(m.cams[0].maxLift, 0.012, 1e-15);
+        CHECK(m.cams[0].maxPressure > 0.0 && m.cams[0].minConvexRadius > 0.006);
+        CHECK(m.dofReport().residualDof == 0);
+        std::vector<double> q;
+        CHECK(m.assemble(q).empty());        // no roller-mismatch warning
+
+        // an explicit, different roller still works but is flagged at assembly
+        Model mm = buildFromText(plateCamSrc(kCamBody, "30", "roller 0.01").c_str());
+        CHECK_APPROX(mm.touches[0].roller, 0.01, 1e-15);
+        const std::vector<std::string> w = mm.assemble(q);
+        CHECK(w.size() == 1 && w[0].find("was cut for") != std::string::npos);
+        // an explicit matching roller is fine
+        Model m3 = buildFromText(plateCamSrc(kCamBody, "30", "roller 0.006").c_str());
+        CHECK(m3.assemble(q).empty());
+    }
+}
+
+// y of the follower centre over two turns vs r0 + s(delta), delta the diagram
+// angle the follower currently sits on. Returns the worst deviation; also the
+// worst pressure-angle error against atan(|s'|/r) read from the real contact.
+void camFollowsDiagram(const std::string& src, double rateDegPerSec, double* worstY,
+                       double* worstPressure, double* worstRes) {
+    Model m = buildFromText(src.c_str());
+    const CamSpec spec = m.cams[0].spec;
+    CamDiagram dia;
+    CamError ce;
+    dia.build(spec, ce);
+    ConstraintSystem sys(m);
+    std::vector<double> q;
+    m.assemble(q);
+    int iters = 0;
+    double res = 0.0;
+    sys.solve(q, 0.0, iters, &res);
+    const int ifol = m.bodyIndex("follower"), icam = m.bodyIndex("cam");
+    const double r0 = spec.base + spec.roller;
+    const double sg = (double)spec.turn;
+    *worstY = *worstPressure = *worstRes = 0.0;
+    const double dt = 5.0 / std::fabs(rateDegPerSec);
+    for (int k = 0; k <= 144; ++k) {
+        const double t = k * dt;
+        sys.solve(q, t, iters, &res);
+        *worstRes = std::max(*worstRes, res);
+        const double thCam = q[(size_t)m.bodies[icam].qOffset];
+        // the follower sits on rail angle 90 deg; in the cam frame that is 90 - thCam
+        const double delta = sg * (spec.startRad - (kPi / 2.0 - thCam));
+        double s, ds, dds;
+        dia.eval(delta, s, ds, dds);
+        *worstY = std::max(*worstY, std::fabs(q[(size_t)m.bodies[ifol].qOffset + 2] - (r0 + s)));
+        // pressure angle from the actual contact normal vs the rail (+y)
+        const ContactState cs = m.touchState(m.touches[0], q);
+        const double alphaGeom = std::fabs(std::atan2(cs.normal.x, cs.normal.y));
+        const double alphaDiag = std::atan2(std::fabs(ds), r0 + s);
+        *worstPressure = std::max(*worstPressure, std::fabs(alphaGeom - alphaDiag));
+    }
+}
+
+void testKinematicsM6b() {
+    std::printf("[kinematics M6b]\n");
+
+    // ---- the follower follows the diagram, for every law -------------------------
+    const char* laws[] = {"cycloidal", "harmonic", "modtrap"};
+    for (const char* law : laws) {
+        const std::string body = std::string(
+            "base 0.025 roller 0.006 rise 0.012 over 100 deg ") + law +
+            " dwell 60 deg return over 140 deg " + law + " dwell";
+        double wy, wp, wr;
+        camFollowsDiagram(plateCamSrc(body, "30"), 30.0, &wy, &wp, &wr);
+        CHECK(wy < 1e-8);       // the surface is a 720-point spline: error ~1e-11
+        // The contact normal agrees with tan(alpha) = s'/r. Harmonic motion has
+        // a jump in acceleration at each segment end, so the true surface has a
+        // curvature discontinuity there that a C2 spline cannot hold: the normal
+        // is off by ~0.045 deg at those two junctions (positions are not).
+        CHECK(wp < (std::string(law) == "harmonic" ? 2e-3 : 1e-6));
+        CHECK(wr < 1e-9);
+    }
+
+    // knife-edge follower (no roller): the surface IS the pitch curve
+    {
+        double wy, wp, wr;
+        camFollowsDiagram(plateCamSrc(
+            "base 0.03 rise 0.01 over 120 deg dwell 60 deg return over 120 deg dwell", "30"),
+            30.0, &wy, &wp, &wr);
+        CHECK(wy < 1e-8 && wp < 1e-6 && wr < 1e-9);
+    }
+
+    // a cam driven the other way ('turn cw', negative rate) and a rotated start
+    {
+        double wy, wp, wr;
+        camFollowsDiagram(plateCamSrc(
+            "base 0.025 roller 0.006 turn cw rise 0.012 over 100 deg dwell 60 deg "
+            "return over 140 deg dwell", "-30"), -30.0, &wy, &wp, &wr);
+        CHECK(wy < 1e-8 && wp < 1e-6 && wr < 1e-9);
+        camFollowsDiagram(plateCamSrc(
+            "base 0.025 roller 0.006 start 150 deg rise 0.012 over 100 deg dwell 60 deg "
+            "return over 140 deg dwell", "30"), 30.0, &wy, &wp, &wr);
+        CHECK(wy < 1e-8 && wp < 1e-6 && wr < 1e-9);
+    }
+
+    // the dwell is exactly flat: 60 degrees of cam rotation, the follower does not move
+    {
+        Model m = buildFromText(plateCamSrc(kCamBody, "30").c_str());
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        const int ifol = m.bodyIndex("follower");
+        double lo = 1e9, hi = -1e9;
+        for (int k = 0; k <= 50; ++k) {                         // 105 .. 155 degrees
+            sys.solve(q, (105.0 + k) / 30.0, iters, &res);
+            const double y = q[(size_t)m.bodies[ifol].qOffset + 2];
+            lo = std::min(lo, y);
+            hi = std::max(hi, y);
+        }
+        CHECK(hi - lo < 1e-9);
+        CHECK_APPROX(hi, 0.025 + 0.006 + 0.012, 1e-8);
+    }
+
+    // the shipped example
+    {
+        std::ifstream in("examples/platecam.mech");
+        if (!in) {
+            std::fprintf(stderr, "note: examples/platecam.mech not found (cwd?)\n");
+        } else {
+            std::stringstream ss;
+            ss << in.rdbuf();
+            Model m = buildModel(parse(lex(ss.str())).mechanisms[0]);
+            CHECK(m.cams.size() == 1);
+            CHECK(m.dofReport().residualDof == 0);
+            CHECK(m.cams[0].maxPressure < deg2rad(30.0));
+            ConstraintSystem sys(m);
+            std::vector<double> q;
+            CHECK(m.assemble(q).empty());
+            int iters = 0;
+            double res = 0.0;
+            CHECK(sys.solve(q, 0.0, iters, &res));
+            CHECK(m.validateAssembly(q).empty());
+            const int ifol = m.bodyIndex("follower");
+            double lo = 1e9, hi = -1e9, worst = 0.0;
+            for (int k = 1; k <= 480; ++k) {
+                sys.solve(q, k * 0.0125, iters, &res);
+                worst = std::max(worst, res);
+                const double y = q[(size_t)m.bodies[ifol].qOffset + 2];
+                lo = std::min(lo, y);
+                hi = std::max(hi, y);
+            }
+            CHECK(worst < 1e-8);
+            CHECK_APPROX(lo, 0.031, 1e-8);
+            CHECK_APPROX(hi, 0.043, 1e-8);
+        }
+    }
+}
+
 } // namespace (anonymous)
 
 namespace mech {
@@ -3469,6 +3970,11 @@ int runAllTests() {
     testParserM6();
     testModelM6();
     testKinematicsM6();
+    testCamLaws();
+    testCamDiagram();
+    testCamDesign();
+    testParserModelM6b();
+    testKinematicsM6b();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

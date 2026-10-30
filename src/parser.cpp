@@ -68,6 +68,17 @@
 //                | 'points' ':' ( '(' num ',' num ')' )+
 //   touchDecl   := 'touch' ref 'on' IDENT [ 'roller' num ]
 //
+// M6b ('cam' is contextual at statement start so `cam` stays usable as a
+// body name; the items below are contextual identifiers too):
+//   camDecl     := 'cam' IDENT [ 'on' IDENT ['.' IDENT] ]
+//                  '{' camItem* '}' [ 'on' IDENT ['.' IDENT] ]
+//   camItem     := 'base' num | 'roller' num | 'start' num 'deg'
+//                | 'turn' ('ccw' | 'cw')
+//                | ('rise' | 'fall') num 'over' num 'deg' [law]
+//                | 'return' 'over' num 'deg' [law]
+//                | 'dwell' [ num 'deg' ]
+//   law         := 'cycloidal' | 'harmonic' | 'modtrap'
+//
 // 'dir', 'tangent' and all property names are contextual identifiers (not
 // keywords), so they remain usable as ordinary names. Comments ('//', '#')
 // are lexed away.
@@ -182,9 +193,10 @@ private:
         else if (acceptKw("mode")) modeDecl(m);
         else if (acceptKw("profile")) profileDecl(m);
         else if (acceptKw("touch")) touchDecl(m);
+        else if (cur().type == Tok::Ident && cur().text == "cam") { next(); camDecl(m); }
         else fail("expected a statement ('ground', 'body', 'rod', 'shaft', 'world', 'gear', "
                   "'mesh', 'spring', 'pin', 'slide', 'drive', 'reduce', 'hand', 'dial', "
-                  "'mode', 'profile' or 'touch'), got '" + cur().text + "'");
+                  "'mode', 'profile', 'touch' or 'cam'), got '" + cur().text + "'");
     }
 
     void anchorBodyDecl(MechanismDecl& m, BodyDecl::Kind kind) {
@@ -457,6 +469,100 @@ private:
                 "' needs a host — e.g. 'profile " + p.name + " on cam.A { ... }'"};
         }
         m.profiles.push_back(p);
+    }
+
+    // M6b — cam lobe on cam.A { base 0.03 roller 0.006 rise 0.01 over 120 deg ... }
+    // Every item is a contextual identifier; angles require the 'deg' unit.
+    void camDecl(MechanismDecl& m) {
+        CamDecl c;
+        Token name = expectIdent();
+        c.name = name.text;
+        c.line = name.line;
+        bool hasHost = false;
+        auto host = [&]() {
+            c.host = expectIdent().text;
+            if (acceptSym(".")) c.hostAnchor = expectIdent().text;
+            hasHost = true;
+        };
+        auto expectDeg = [&](const char* what) {
+            if (cur().type != Tok::UnitDeg)
+                fail(std::string("expected 'deg' after ") + what + ", got '" + cur().text + "'");
+            next();
+        };
+        auto expectWord = [&](const char* w) {
+            if (cur().type != Tok::Ident || cur().text != w)
+                fail(std::string("expected '") + w + "', got '" + cur().text + "'");
+            next();
+        };
+        auto isItem = [](const std::string& t) {
+            return t == "base" || t == "roller" || t == "start" || t == "turn" ||
+                   t == "rise" || t == "fall" || t == "return" || t == "dwell";
+        };
+        // optional motion law after a segment
+        auto law = [&](CamSegment& seg) {
+            if (cur().type != Tok::Ident || isItem(cur().text)) return;
+            if (cur().text == "cycloidal") seg.law = MotionLaw::Cycloidal;
+            else if (cur().text == "harmonic") seg.law = MotionLaw::Harmonic;
+            else if (cur().text == "modtrap") seg.law = MotionLaw::ModTrap;
+            else fail("unknown motion law '" + cur().text +
+                      "' (expected 'cycloidal', 'harmonic' or 'modtrap')");
+            next();
+        };
+
+        if (acceptKw("on")) host();
+        expectSym("{");
+        while (!acceptSym("}")) {
+            if (atEnd()) fail("unterminated '{' in cam '" + c.name + "'");
+            if (cur().type != Tok::Ident || !isItem(cur().text)) {
+                fail("expected cam item ('base', 'roller', 'start', 'turn', 'rise', 'fall', "
+                     "'return' or 'dwell'), got '" + cur().text + "'");
+            }
+            const Token item = cur();
+            next();
+            if (item.text == "base") {
+                c.spec.base = parseNum();
+                c.hasBase = true;
+            } else if (item.text == "roller") {
+                c.spec.roller = parseNum();
+            } else if (item.text == "start") {
+                c.spec.startRad = deg2rad(parseNum());
+                expectDeg("the start angle");
+            } else if (item.text == "turn") {
+                if (cur().type == Tok::Ident && cur().text == "ccw") c.spec.turn = +1;
+                else if (cur().type == Tok::Ident && cur().text == "cw") c.spec.turn = -1;
+                else fail("expected 'ccw' or 'cw' after 'turn', got '" + cur().text + "'");
+                next();
+            } else {
+                CamSegment seg;
+                if (item.text == "dwell") {
+                    seg.kind = CamSegment::Kind::Dwell;
+                    if (cur().type == Tok::Number || (cur().type == Tok::Sym && cur().text == "-")) {
+                        seg.angle = deg2rad(parseNum());
+                        expectDeg("the dwell angle");
+                    } else {
+                        seg.restOfTurn = true;
+                    }
+                } else {
+                    seg.kind = item.text == "rise" ? CamSegment::Kind::Rise
+                             : item.text == "fall" ? CamSegment::Kind::Fall
+                                                   : CamSegment::Kind::Return;
+                    if (seg.kind != CamSegment::Kind::Return) seg.lift = parseNum();
+                    expectWord("over");
+                    seg.angle = deg2rad(parseNum());
+                    expectDeg("the segment angle");
+                    law(seg);
+                }
+                c.spec.segments.push_back(seg);
+                c.segLines.push_back(item.line);
+            }
+            skipSeparators();
+        }
+        if (!hasHost && acceptKw("on")) host();
+        if (!hasHost) {
+            throw ParseError{name.line, name.col, "cam '" + c.name +
+                "' needs a host — e.g. 'cam " + c.name + " on cam.A { ... }'"};
+        }
+        m.cams.push_back(c);
     }
 
     // M6 — touch follower.tip on lobe [roller 0.008]

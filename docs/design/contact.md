@@ -1,8 +1,9 @@
 # Design note: contact and higher pairs (M6)
 
-Status: **6a implemented** (profiles `circle`/`polar`/`points`, bilateral
-kinematic `touch`, the eccentric and plate-cam examples). 6b–6d remain a
-proposal. This note fixed the representation before code was written,
+Status: **6a and 6b implemented** (profiles `circle`/`polar`/`points`,
+bilateral kinematic `touch`, `cam` displacement-diagram synthesis with
+pressure-angle and undercut reports; the eccentric, lobe-cam and plate-cam
+examples). 6c–6d remain a proposal. This note fixed the representation before code was written,
 because contact is where the design is hardest to change afterwards.
 
 ## Why
@@ -126,6 +127,25 @@ rows are, before the code.
 | **6b** | `cam` displacement-diagram sugar (rise / dwell / return; cycloidal, harmonic, modified-trapezoid laws); `mech check` reports pressure angle and **undercut** (min radius of curvature vs roller radius) | dwell is exactly flat; pressure angle matches hand calculation |
 | **6c** | unilateral `touch` in dynamics, `gap`/`force` guards, restitution, ledger | follower with spring preload jumps at high speed; ledger closes |
 | **6d** | `roll` contact (arc-length matching of two profiles) generalizing `mesh` | elliptical gear pair; a circle–circle `roll` reproduces `mesh` exactly |
+
+**6b as implemented, and where it departed from the table.**
+
+* Segments are *sequential* (`rise 0.012 over 100 deg`, `dwell 60 deg`), not
+  absolute angle ranges (`over 0..120 deg`): they cannot overlap or leave gaps,
+  and a bare final `dwell` fills the rest of the turn.
+* **Undercut is an error, not a report.** A cam whose inward offset folds over
+  itself cannot be cut, so there is nothing sensible to simulate.
+* The pressure angle is the diagram formula `tan(a) = s'/r`, exact for a rail
+  through the axle, which is what `cam` synthesizes. A pressure-angle sweep
+  for *arbitrary* profiles and followers (offset rails, swing arms) needs the
+  follower's allowed direction of motion at each pose and is left for later.
+* A `touch` on a cam defaults to the roller the cam was cut for; an explicit
+  different roller draws an assembly warning.
+* `modtrap` has the lowest peak *acceleration* of the laws that ease in and
+  out (4.888 vs 6.283), but the same peak velocity as `cycloidal` (2.0);
+  `harmonic` has the lowest peak velocity (1.571) but an acceleration jump
+  at each end, which a C2 spline surface cannot represent (normal off by
+  ~0.045 degrees at those two junctions).
 
 Acceptance examples to add under `examples/`: `eccentric`, `platecam`,
 `geneva`, `ratchet`, `ellipgears`.

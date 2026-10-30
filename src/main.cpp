@@ -208,6 +208,50 @@ int cmdCheck(const std::string& path) {
             }
         }
 
+        // M6b: what the cam synthesizer decided, and whether it will work
+        for (const CamInfo& ci : m.cams) {
+            const Profile& pr = m.profiles[(size_t)ci.profile];
+            std::string segs;
+            for (const CamSegment& sg : ci.spec.segments) {
+                char b[96];
+                if (!segs.empty()) segs += " | ";
+                switch (sg.kind) {
+                case CamSegment::Kind::Rise:
+                    std::snprintf(b, sizeof b, "rise %g m over %g deg %s", sg.lift,
+                                  rad2deg(sg.angle), lawName(sg.law)); break;
+                case CamSegment::Kind::Fall:
+                    std::snprintf(b, sizeof b, "fall %g m over %g deg %s", sg.lift,
+                                  rad2deg(sg.angle), lawName(sg.law)); break;
+                case CamSegment::Kind::Return:
+                    std::snprintf(b, sizeof b, "return over %g deg %s", rad2deg(sg.angle),
+                                  lawName(sg.law)); break;
+                case CamSegment::Kind::Dwell:
+                    if (sg.restOfTurn) std::snprintf(b, sizeof b, "dwell (rest of turn)");
+                    else std::snprintf(b, sizeof b, "dwell %g deg", rad2deg(sg.angle));
+                    break;
+                }
+                segs += b;
+            }
+            std::printf("cam %s on %s.%s: base %.4f m, roller %.4f m, lift %.4f m, "
+                        "turns %s, rail at %g deg\n",
+                        ci.name.c_str(), m.bodies[(size_t)pr.body].name.c_str(),
+                        m.bodies[(size_t)pr.body].anchors[(size_t)pr.hostAnchor].name.c_str(),
+                        ci.spec.base, ci.spec.roller, ci.maxLift,
+                        ci.spec.turn > 0 ? "ccw" : "cw", rad2deg(ci.spec.startRad));
+            std::printf("  %s\n", segs.c_str());
+            const double pa = rad2deg(ci.maxPressure);
+            std::printf("  pressure angle: max %.2f deg at %.1f deg of rotation (rail through "
+                        "the axle)%s\n", pa, rad2deg(ci.maxPressureAt),
+                        pa > 30.0 ? "  [warn] above the usual 30 deg limit — the follower "
+                                    "may bind; enlarge the base circle or lengthen the rise"
+                                  : "  [ok]");
+            if (ci.minConvexRadius < 1e299) {
+                std::printf("  undercut: smallest convex pitch-curve radius %.4f m at %.1f deg "
+                            "vs roller %.4f m  [ok]\n", ci.minConvexRadius,
+                            rad2deg(ci.minConvexAt), ci.spec.roller);
+            }
+        }
+
         // M4: what the intent layer synthesized
         for (const ReduceInfo& ri : m.reduceInfos) {
             std::string stages;

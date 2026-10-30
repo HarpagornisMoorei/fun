@@ -50,6 +50,7 @@ make test       # unit tests
 | joints | `pin` (revolute), `slide` (prismatic) |
 | gears | `gear`, `mesh` (external, internal, epicyclic) |
 | contact | `profile` (circle, polar table, point list), `touch` — cams with translating or swinging followers, optional roller |
+| cams | `cam` — state the motion (`rise`, `dwell`, `return`; cycloidal, harmonic, modified-trapezoid) and the compiler cuts the surface; `check` reports pressure angle and rejects undercut |
 | forces | gravity, `spring`, torque and weight `drive`s |
 | hybrid | `mode` state machines (the escapement) |
 | intent | `reduce`, `beat`, `hand`, `dial` — solved into the kernel |
@@ -67,7 +68,7 @@ dynamics, with an energy ledger that has to close.
 |---|---|
 | `fourbar`, `crankslider` | closed loops, prismatic joints |
 | `geartrain`, `train`, `planetary` | meshes, synthesized reductions, epicyclics |
-| `eccentric`, `lobecam` | cams: a closed-form eccentric disc, and a plate cam from a polar table |
+| `eccentric`, `lobecam`, `platecam` | cams: a closed-form eccentric disc, a plate cam from a polar table, and one synthesized from a displacement diagram |
 | `pendulum`, `doublepend`, `flywheel`, `oscillator`, `orbit` | dynamics |
 | `clock`, `clockface` | the flagship: a complete weight-driven clock |
 

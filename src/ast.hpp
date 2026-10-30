@@ -1,5 +1,6 @@
 // mech — ast.hpp: parse tree for the .mech language (M6)
 #pragma once
+#include "cam.hpp"
 #include "geom.hpp"
 #include <map>
 #include <string>
@@ -165,6 +166,29 @@ struct ProfileDecl {
     int line = 0;
 };
 
+// M6b — a plate cam stated as motion, not as a curve. The compiler cuts the
+// surface (see cam.hpp); it lands in the model as an ordinary closed profile.
+//   cam lobe on cam.A {
+//     base 0.030  roller 0.006
+//     rise 0.010 over 120 deg cycloidal
+//     dwell 60 deg
+//     return over 120 deg
+//     dwell                          // the rest of the turn
+//   }
+// Segments run in the order the follower meets them as the cam turns; angles
+// are cam rotation. `start` (default 90 deg) is where the follower's rail
+// lies in the cam's own frame at theta = 0; `turn cw` for a cam driven
+// the other way.
+struct CamDecl {
+    std::string name;
+    std::string host;
+    std::string hostAnchor;               // "" -> default anchor "A"
+    bool hasBase = false;
+    CamSpec spec;
+    std::vector<int> segLines;            // source line of each segment
+    int line = 0;
+};
+
 // touch follower.tip on lobe [roller 0.008] — a point of one body rides a
 // profile of another: one row, the signed gap to the curve (less the roller
 // radius, if any) is zero.
@@ -234,6 +258,7 @@ struct MechanismDecl {
     std::vector<ModeDecl> modes;       // M5 hybrid elements
     std::vector<ProfileDecl> profiles; // M6 contact curves
     std::vector<TouchDecl> touches;    // M6 point-on-curve contacts
+    std::vector<CamDecl> cams;         // M6b plate-cam synthesis
     int line = 0;
 };
 

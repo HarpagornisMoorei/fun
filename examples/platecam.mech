@@ -1,0 +1,48 @@
+// platecam — a plate cam stated as motion, not as a curve. The follower
+// rises 12 mm over 100 degrees of cam rotation, dwells for 60, returns over
+// 140 and dwells the rest of the turn. The compiler cuts the cam surface that
+// produces exactly that, with the roller (6 mm) offset in and the base circle
+// (25 mm) as the floor, then reports what the design costs:
+//
+//   mech check examples/platecam.mech
+//
+//   pressure angle   how hard the cam pushes sideways on the rail; above
+//                    ~30 degrees a translating follower tends to bind
+//   undercut         whether the roller is too big for the tightest curve
+//
+// The follower centre then follows the diagram exactly: 31 mm above the axle
+// at rest (base + roller), 43 mm at the top of the lift.
+//
+//   mech run examples/platecam.mech --headless 2
+//   mech run examples/platecam.mech --trace follower.tip
+//
+// The motion laws trade off (for a unit lift over a unit time):
+//   cycloidal (default)  peak velocity 2.00, peak acceleration 6.28, eases in and out
+//   harmonic             peak velocity 1.57 (gentlest pressure angle), peak
+//                        acceleration 4.93, but the acceleration jumps at both ends
+//   modtrap              peak velocity 2.00, peak acceleration 4.89 (the lowest of
+//                        the laws that ease in and out)
+mechanism platecam {
+  ground frame {
+    anchor axle at (0, 0)
+    anchor rail at (0, 0.09) dir (0, 1)     // follower line of travel, through the axle
+  }
+
+  shaft cam at frame.axle
+  cam lobe on cam.A {
+    base   0.025
+    roller 0.006
+    rise 0.012 over 100 deg cycloidal
+    dwell 60 deg
+    return over 140 deg modtrap
+    dwell
+  }
+
+  body follower {
+    anchor tip at (0, 0) dir (1, 0)
+  }
+  slide follower.tip -> frame.rail
+  touch follower.tip on lobe          // takes the roller the cam was cut for
+
+  drive cam at 30 rpm
+}

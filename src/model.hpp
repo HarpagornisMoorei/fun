@@ -36,6 +36,7 @@
 
 #pragma once
 #include "ast.hpp"
+#include "cam.hpp"
 #include "geom.hpp"
 #include "profile.hpp"
 #include <memory>
@@ -124,6 +125,19 @@ struct Profile {
     int body = -1;
     int hostAnchor = 0;
     std::shared_ptr<const ProfileCurve> curve;
+    bool fromCam = false;        // M6b: synthesized by a `cam` statement
+    double designRoller = 0.0;   // M6b: the roller the cam was cut for
+    int line = 0;
+};
+
+// M6b — what the cam synthesizer decided, kept for reporting and tests.
+struct CamInfo {
+    std::string name;
+    int profile = -1;
+    CamSpec spec;
+    double maxLift = 0.0;
+    double maxPressure = 0.0, maxPressureAt = 0.0;     // rad
+    double minConvexRadius = 0.0, minConvexAt = 0.0;   // m, rad
     int line = 0;
 };
 
@@ -338,6 +352,7 @@ public:
     std::vector<Mode> modes;          // M5: hybrid state machines
     std::vector<Profile> profiles;    // M6: contact curves
     std::vector<TouchJoint> touches;  // M6: point-on-curve contacts
+    std::vector<CamInfo> cams;        // M6b: synthesized plate cams
 
     int nq() const { return 3 * (int)(bodies.size() - 1); }
 

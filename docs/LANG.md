@@ -1,11 +1,11 @@
-# The mech language — M6a specification
+# The mech language — M6b specification
 
-This document pins down the M6a kernel: lexical structure, grammar, static
+This document pins down the M6b kernel: lexical structure, grammar, static
 semantics, the kinematic solver's mathematical formulation, the
 constrained-dynamics integrator, the intent layer's synthesis rules, the
 hybrid elements (`mode` blocks with weight drives — the escapement's kernel),
-and kinematic contact (`profile` curves and point-on-curve `touch` joints —
-the first higher pair).
+kinematic contact (`profile` curves and point-on-curve `touch` joints — the
+first higher pair), and plate cams stated as displacement diagrams.
 It is the contract the implementation is tested against (`mech test`).
 
 ---
@@ -59,8 +59,10 @@ Four principles govern the design:
   `radius`, and the whole M5 hybrid vocabulary (`state`, `when`, `hold`,
   `impulse`, `maintain`, `theta`, `omega`, `advance`, `weight`, `barrel`,
   `drop`, `kg`, `m`, `mJ`) and the M6 contact vocabulary (`circle`, `polar`,
-  `points`, `roller`) are *contextual* identifiers (not keywords), usable as
-  names.
+  `points`, `roller`) and the M6b cam vocabulary (`cam` at statement start,
+  `base`, `start`, `turn`, `rise`, `fall`, `return`, `over`, `dwell`,
+  `cycloidal`, `harmonic`, `modtrap`) are *contextual* identifiers (not
+  keywords), usable as names — a body called `cam` is fine.
 * Punctuation: `{ } ( ) , : ; . - -> < >`
 * Comments: `// line` and `# line`.
 * Whitespace (including newlines) is insignificant; statements may be
@@ -78,7 +80,8 @@ stmt        = groundDecl | bodyDecl | rodDecl | shaftDecl | worldDecl
             | driveDecl
             | reduceDecl | handDecl | dialDecl
             | modeDecl | weightDriveDecl                 (* M5 *)
-            | profileDecl | touchDecl ;                    (* M6 *)
+            | profileDecl | touchDecl                      (* M6 *)
+            | camDecl ;                                   (* M6b *)
 
 groundDecl  = "ground" IDENT "{" { anchorDecl } "}" ;
 bodyDecl    = "body" IDENT "{" { anchorDecl | "mass" ":" num } "}" ;
@@ -143,6 +146,17 @@ shape       = "circle" ":" num
             | "polar" ":" { "(" num [ "deg" ] "," num ")" }      (* angle, radius *)
             | "points" ":" { "(" num "," num ")" } ;
 touchDecl   = "touch" ref "on" IDENT [ "roller" num ] ;
+
+(* M6b: a plate cam stated as motion. Segments run in the order the follower
+   meets them as the cam turns, and must fill exactly one turn. *)
+camDecl     = "cam" IDENT [ "on" IDENT [ "." IDENT ] ] "{" { camItem } "}"
+              [ "on" IDENT [ "." IDENT ] ] ;
+camItem     = "base" num | "roller" num | "start" num "deg"
+            | "turn" ( "ccw" | "cw" )
+            | ( "rise" | "fall" ) num "over" num "deg" [ law ]
+            | "return" "over" num "deg" [ law ]
+            | "dwell" [ num "deg" ] ;                (* bare dwell: rest of the turn *)
+law         = "cycloidal" | "harmonic" | "modtrap" ;
 
 ref         = IDENT "." IDENT ;
 num         = [ "-" ] NUMBER ;
@@ -216,6 +230,23 @@ Checks run at model build time, each error pointing at a source line:
 * **M6a is kinematic only:** a `touch` in a dynamic mechanism (world block,
   spring, torque or weight drive, or any `mode`) is an error. Unilateral
   contact with separation and impact is planned for M6c.
+
+**M6b cam checks** (each pointing at the offending segment's own line):
+
+* `base` is required and positive; `roller` is non-negative. The cam shares
+  the profile namespace and host rules (`touch f.tip on lobe` works for both).
+* The diagram must be a closed, full-turn, non-negative motion: segment
+  angles positive and summing to exactly 360 degrees (a bare final `dwell`
+  fills the remainder, and must come last), no `fall` below the base circle,
+  no `return` from the base circle, and the follower back on the base circle at
+  the end ("does not close" names the leftover height).
+* **Undercut is an error.** If the pitch curve's radius of curvature, over its
+  convex parts, falls to the roller radius or below, the inward offset folds
+  over itself and no such cam can be cut. The message gives the radius, the
+  cam angle, and the levers (`base`, lift, segment length, `roller`).
+* A `touch` on a cam takes the roller the cam was cut for unless it gives its
+  own; an explicit different roller is accepted but `assemble` warns that the
+  follower will not follow the diagram.
 
 **M4 intent checks** (all with line-accurate diagnostics):
 
@@ -344,6 +375,62 @@ otherwise it auto-centers on the average hand mount (captured at assembly,
 like mesh phase); `radius` defaults to 1.2x the longest hand. `major` ticks
 (default 12) are drawn longer and brighter than `minor` (default 60); the
 clock face reads with 12 o'clock up.
+
+### 4.4 Cam synthesis (M6b)
+
+`cam` is intent-layer sugar over the M6a kernel, in the spirit of `reduce`:
+the author states the *motion*, the compiler solves the *geometry*, and what
+lands in the model is an ordinary closed `points` profile. The solver never
+learns cams exist.
+
+**Setting.** A translating roller follower on a rail through the axle, or a
+knife-edge tip (`roller` omitted). With base radius `Rb` and roller radius
+`rho` the prime circle has radius `r0 = Rb + rho`, and the roller centre — the
+*pitch point* — sits at `r(theta) = r0 + s(theta)`, `s` being the displacement
+diagram. The cam turns by `theta`; in its own frame the rail lies along polar
+angle `phi = start - sigma*theta` (`start` defaults to 90 degrees, i.e. the
+rail along the cam frame's +y at `theta = 0`; `sigma = +1` for `turn ccw`, the
+default, `-1` for `turn cw`). The pitch curve is `P(theta) = r(theta)(cos phi,
+sin phi)` and the **cam surface is that curve offset inward by `rho`** along its
+outward normal, sampled at 720 points and splined. With the follower meeting
+the cam on a rail through the axle, the follower height is then `r0 + s(theta)`
+exactly (verified over two turns to 1e-8, for every law, both turning senses
+and a rotated `start`). Offset rails and swinging followers are not
+synthesized; a cam still works under them as a plain profile.
+
+**The diagram.** Segments are `rise h`, `fall h`, `return` (back to the base
+circle) and `dwell`, each over an angle, in the order the follower meets them.
+Within a segment of lift `L` over angle `beta`, `s = s0 + L f(x)`,
+`x = (theta - theta0)/beta`, where `f` is a normalized rest-to-rest law:
+
+| law | `f(x)` | peak `f'` | peak `f''` | at the ends |
+|-----|--------|-----------|------------|-------------|
+| `cycloidal` (default) | `x - sin(2 pi x)/(2 pi)` | 2.000 | 6.283 | `f'' = 0`: eases in and out |
+| `harmonic` | `(1 - cos(pi x))/2` | 1.571 | 4.935 | `f'' = 4.935`: **acceleration jumps** |
+| `modtrap` | modified trapezoid (sine ramps around a constant-acceleration plateau; closed form, antisymmetric about `x = 1/2`) | 2.000 | 4.888 | `f'' = 0`: eases in and out |
+
+`harmonic` has the lowest peak velocity — hence the gentlest pressure angle —
+but the jump in acceleration at its ends puts a curvature discontinuity in the
+surface; the sampled C2 spline cannot hold it, so the contact normal is off by
+about 0.045 degrees at those junctions (the follower *position* still matches
+to 1e-8). `modtrap` has the lowest peak acceleration of the two laws that
+ease in and out. A dwell has `s' = s'' = 0` exactly.
+
+**Diagnostics**, computed on a 0.05-degree grid and printed by `mech check`:
+
+```text
+pressure angle   tan(alpha) = s'(theta) / r(theta)        (rail through the axle)
+undercut         kappa = -sigma * crossz(P', P'') / |P'|^3   (> 0: convex)
+                 smallest 1/kappa over convex parts must exceed rho
+```
+
+The pressure angle is the angle between the contact normal and the rail; the
+report warns above 30 degrees, the usual limit for a translating follower.
+It was checked two independent ways: against a brute-force maximization of the
+formula over the diagram, and against the *actual contact normal* of the
+solved mechanism at every step (agreement to 1e-6 rad). The curvature radius
+was checked against the polar-curve formula `(r^2 + 2r'^2 - r r'')/(r^2 +
+r'^2)^(3/2)`, and a zero-lift cam reports exactly `r0`.
 
 ## 5. Kinematic semantics
 
@@ -635,7 +722,9 @@ order: identical inputs give bit-identical trajectories (tested).
 | `profile p on b.c { circle: R }` | closed curve `c(s) = R(cos s, sin s)` at anchor `b.c`, riding `b` | M6a |
 | `profile p on b.c { polar: ... }` | periodic cubic spline `r(phi)` through the `(angle, radius)` knots | M6a |
 | `profile p on b.c { points: ... }` | periodic cubic splines through the points, normalised counter-clockwise | M6a |
-| `touch f.tip on p [roller r]` | row `signedGap(f.tip, p) - r` (bilateral, kinematic) | M6a |
+| `touch f.tip on p [roller r]` | row `signedGap(f.tip, p) - r` (bilateral, kinematic); on a cam, `r` defaults to the cam's roller | M6a |
+| `cam c on b.a { base Rb roller rho rise h over a deg ... }` | solve the pitch curve `r0 + s(theta)`, offset inward by `rho`, emit a 720-point closed `points` profile; reject undercut | M6b |
+| `rise/fall/return/dwell` segments | piecewise displacement diagram `s(theta)` with rest-to-rest laws; must close on the base circle in exactly one turn | M6b |
 | `drive b at w from a0 deg` | row `theta_b - (a0 + w*t)` | M1 |
 | `drive b torque tau` | force `Q_theta_b += tau` | M3 |
 | `spring sp a.p -> b.q { k }` | Hooke force pair at the anchors | M3 |
@@ -656,7 +745,7 @@ order: identical inputs give bit-identical trajectories (tested).
 
 ## 8. Test matrix
 
-`mech test` (13553 checks) covers: lexer tokens/units/keywords/comments/errors;
+`mech test` (13723 checks) covers: lexer tokens/units/keywords/comments/errors;
 parser AST shapes for all M3 and M4 forms and all error classes; model checks,
 desugaring, gear radius arithmetic, module rules, mass derivation (rods,
 discs, compound assemblies, overrides), DOF arithmetic including tangent
@@ -728,6 +817,22 @@ circle; an unreachable contact is reported rather than hidden; and both
 shipped cams (`eccentric`, `lobecam`) build, assemble and solve over two
 turns, with the plate cam's follower dwelling at 36 mm and 46 mm to 20 um.
 
+The M6b suite adds: the three motion laws (rest-to-rest, `v` and `a` really
+the derivatives, monotone, `s(x) + s(1-x) = 1`, and the textbook peak
+accelerations 6.283, 4.935 and 4.888); the diagram (exact values at known
+angles, dwells flat to the bit, periodicity, and every closure and range
+error with its segment index); the design numbers (pressure angle against a
+brute-force maximization of the hand formula — including the fact that a
+symmetric rise and return share their maximum — curvature radius against the
+independent polar formula, a zero-lift cam reporting exactly `r0`, and
+undercut detection); the grammar and every model diagnostic with its source
+line, the shared namespace, and the roller default and mismatch warning; and
+the kinematics: through the real solver, for each law, the follower height
+equals `r0 + s(theta)` to 1e-8 over two turns (knife-edge, `turn cw` with a
+negative rate, and a rotated `start` included), the contact normal agrees with
+the pressure-angle formula, and a 60-degree dwell leaves the follower still to
+1e-9. Reversing the sign of the roller offset breaks twelve of these checks.
+
 ## 9. Milestone history & reserved ground
 
 M1 walked the skeleton (lexer/parser/rods/pins/drives); M2 added shafts,
@@ -750,8 +855,15 @@ from the design note: the foot of the perpendicular is searched afresh at
 each evaluation rather than tracked like `psi`, which keeps the row a pure
 function of `q`.
 
-The rest of M6 is reserved: cam displacement-diagram sugar with pressure-angle
-and undercut reports (6b), unilateral contact with separation, impact and
+M6b added the first intent-layer sugar over contact: `cam` states a
+displacement diagram and the compiler cuts the surface — `rise`, `fall`,
+`return` and `dwell` with cycloidal, harmonic or modified-trapezoid motion —
+and `mech check` reports the pressure angle and refuses an undercut cam. Not
+yet covered: offset and swinging followers (the cam is synthesized for a rail
+through the axle), flat-faced followers, and a pressure-angle sweep for
+arbitrary profiles.
+
+The rest of M6 is reserved: unilateral contact with separation, impact and
 restitution in the dynamics (6c), and rolling contact between arbitrary
 curves generalizing `mesh` (6d). Also reserved: motion-work *synthesis* (the
 compiler choosing the equal-tooth-sum stack itself, rather than the flagship
