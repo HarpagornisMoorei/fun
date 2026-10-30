@@ -3197,7 +3197,7 @@ void testParserM6() {
     expectParseError("mechanism m { profile p { } on s }", "no shape");
     expectParseError("mechanism m { profile p { circle: 1 } }", "needs a host");
     expectParseError("mechanism m { profile p on s { circle: 1 circle: 2 } }", "already has a shape");
-    expectParseError("mechanism m { profile p on s { square: 1 } }", "'points' or 'ellipse'");
+    expectParseError("mechanism m { profile p on s { square: 1 } }", "'ellipse' or 'polygon'");
     expectParseError("mechanism m { profile p on s { polar: } }", "needs (angle, radius)");
     expectParseError("mechanism m { touch f.tip p }", "expected 'on'");
 }
@@ -4792,6 +4792,7 @@ void testNonCircularMesh() {
             }
         }
         CHECK(worstWork < 1e-6);                           // KE = tau dtheta to a micro-joule (of ~0.03 J)
+        CHECK_APPROX(dyn.hybridStats().driveWork, 0.002 * (q[(size_t)m.bodies[ia].qOffset] - thA0), 1e-6);  // the ledger counts it
         CHECK(worstRatio < 1e-6);                          // wB / wA = -rho(phi_A) all along
         CHECK(maxRatio > 2.5 && minRatio < 0.4);           // and it did surge, through most of the range
         CHECK(q[(size_t)m.bodies[ia].qOffset] - thA0 > 1.0);      // it really spun up
@@ -4828,6 +4829,264 @@ void testNonCircularMesh() {
     }
 }
 
+
+// ---- M6e: polygon profiles and the ratchet -------------------------------------------
+
+void testPolygonRatchet() {
+    std::printf("[polygon M6e]\n");
+
+    // ---- exact geometry on a rounded square (given clockwise, to prove it is normalized) ----
+    {
+        const std::vector<Vec2> sq = {{-0.02, 0.02}, {0.02, 0.02}, {0.02, -0.02}, {-0.02, -0.02}};
+        const ProfileCurve c = ProfileCurve::polygon(sq, 0.005);
+        CHECK(c.pieces() == 8);                                    // 4 edges + 4 fillets
+        CHECK_APPROX(c.period(), 4.0 * (0.04 - 0.01) + 2.0 * kPi * 0.005, 1e-12);
+        CHECK_APPROX(c.minFillet(), 0.005, 1e-15);
+        CHECK(!c.starShaped());
+        CHECK_APPROX(c.nearest({0.0, 0.0}).signedDist, -0.02, 1e-12);          // inside: negative
+        CHECK_APPROX(c.nearest({0.05, 0.0}).signedDist, 0.03, 1e-12);          // outside: positive
+        // off a corner: the distance to the fillet circle's center (0.015, 0.015), less its radius
+        CHECK_APPROX(c.nearest({0.05, 0.05}).signedDist, std::hypot(0.035, 0.035) - 0.005, 1e-12);
+        const ProfileCurve::Foot top = c.nearest({0.0, 0.03});
+        CHECK_APPROX(top.point.y, 0.02, 1e-12);
+        CHECK_APPROX(top.normal.y, 1.0, 1e-12);                                // outward, even though the input was clockwise
+        CHECK_APPROX(top.curvature, 0.0, 1e-15);                               // a straight edge
+        CHECK_APPROX(c.nearest({0.05, 0.05}).curvature, 200.0, 1e-9);          // 1 / fillet radius
+
+        // against brute force over the curve itself; signs against an independent inside test
+        unsigned seed = 3;
+        auto rnd = [&]() {
+            seed = seed * 1664525u + 1013904223u;
+            return ((seed >> 8) & 0xFFFF) / 65535.0 * 0.1 - 0.05;
+        };
+        double worst = 0.0;
+        int signBad = 0;
+        for (int t = 0; t < 400; ++t) {
+            const Vec2 u{rnd(), rnd()};
+            const ProfileCurve::Foot f = c.nearest(u);
+            double best = 1e9;
+            for (int k = 0; k < 30000; ++k) {
+                Vec2 p, a, b;
+                c.eval(c.period() * k / 30000.0, p, a, b);
+                best = std::min(best, vlen(u - p));
+            }
+            worst = std::max(worst, std::fabs(std::fabs(f.signedDist) - best));
+            const double ax = std::fabs(u.x), ay = std::fabs(u.y);
+            const bool inside = (ax <= 0.015 || ay <= 0.015) ? (ax < 0.02 && ay < 0.02)
+                                                              : std::hypot(ax - 0.015, ay - 0.015) < 0.005;
+            if ((f.signedDist < 0.0) != inside) ++signBad;
+        }
+        CHECK(worst < 2e-7);       // brute-force grid resolution is ~5e-6 m
+        CHECK(signBad == 0);
+        // the curve is C1: the unit tangent is continuous across every junction
+        double jump = 0.0;
+        for (int k = 0; k < 400; ++k) {
+            Vec2 p, a, b, p2, a2, b2;
+            const double sk = c.period() * k / 400.0;
+            c.eval(sk - 1e-9, p, a, b);
+            c.eval(sk + 1e-9, p2, a2, b2);
+            jump = std::max(jump, vlen(a - a2));
+        }
+        CHECK(jump < 1e-6);
+    }
+    {   // a reflex corner: the L-shape's fillet curves the other way (curvature -1/r), and a
+        // point in the notch is OUTSIDE (positive) at distance r - |p - center| from the arc
+        const std::vector<Vec2> L = {{0, 0}, {0.04, 0}, {0.04, 0.01}, {0.01, 0.01}, {0.01, 0.04}, {0, 0.04}};
+        const ProfileCurve c = ProfileCurve::polygon(L, 0.002);
+        // (0.0115, 0.0115) is down-left of the fillet circle's center (0.012, 0.012), so the
+        // nearest point of that circle lies on the arc (the arc is its lower-left quarter)
+        const ProfileCurve::Foot f = c.nearest({0.0115, 0.0115});
+        CHECK_APPROX(f.signedDist, 0.002 - std::hypot(0.0005, 0.0005), 1e-12);
+        CHECK_APPROX(f.curvature, -500.0, 1e-9);
+    }
+    {   // a fillet that does not fit is clamped to half the shorter edge
+        const std::vector<Vec2> rect = {{0, 0}, {0.04, 0}, {0.04, 0.01}, {0, 0.01}};
+        CHECK_APPROX(ProfileCurve::polygon(rect, 0.02).minFillet(), 0.005, 1e-12);
+        CHECK_APPROX(ProfileCurve::polygon(rect, 0.003).minFillet(), 0.003, 1e-15);
+    }
+
+    // ---- grammar and diagnostics ------------------------------------------------------------
+    {
+        const Program p = parseText("mechanism m { ground g { anchor a at (0,0) } shaft s at g.a "
+                                    "profile t on s { polygon: (0,0) (0.04,0) (0.04,0.01) (0,0.01) fillet 0.001 } }");
+        const ProfileDecl& pd = p.mechanisms[0].profiles[0];
+        CHECK(pd.kind == ProfileDecl::Kind::Polygon && pd.points.size() == 4);
+        CHECK(pd.hasFillet && std::fabs(pd.fillet - 0.001) < 1e-15);
+        // a free body may now carry a release angle, like a rod
+        const Program q = parseText("mechanism m { ground g { anchor a at (0,0) } body w { anchor c at (0,0) mass: 2 from: 30 deg } }");
+        CHECK_APPROX(q.mechanisms[0].bodies[1].props.at("from"), 30.0, 1e-12);
+        CHECK_APPROX(q.mechanisms[0].bodies[1].props.at("mass"), 2.0, 1e-12);
+    }
+    auto expectModelError = [&](const std::string& body, const char* needle) {
+        bool threw = false;
+        try {
+            buildFromText(("mechanism m { ground g { anchor a at (0,0) } shaft s at g.a profile t on s { " +
+                           body + " } }").c_str());
+        } catch (const SemanticError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find(needle) != std::string::npos);
+        }
+        CHECK(threw);
+    };
+    expectModelError("polygon: (0,0) (0.04,0) (0.04,0.01) (0,0.01)", "needs a positive 'fillet'");
+    expectModelError("polygon: (0,0) (0.04,0) (0.04,0.01) (0,0.01) fillet 0", "needs a positive 'fillet'");
+    expectModelError("polygon: (0,0) (0.04,0) fillet 0.001", "at least 3 vertices");
+    expectModelError("polygon: (0,0) (0,0) (0.04,0.01) fillet 0.001", "coincident");
+    expectModelError("polygon: (0,0) (0.02,0) (0.04,0) fillet 0.001", "no area");
+    expectModelError("polygon: (0,0) (0.04,0) (0.04,0.01) (0,0.01) fillet 0.2", "does not fit");
+    buildFromText("mechanism m { ground g { anchor a at (0,0) } shaft s at g.a "
+                  "profile t on s { polygon: (0,0) (0.04,0) (0.04,0.01) (0,0.01) fillet 0.001 } }");
+
+    // ---- the ratchet ------------------------------------------------------------------------------
+    std::string ratchetSrc;
+    {
+        std::ifstream in("examples/ratchet.mech");
+        if (!in) {
+            std::fprintf(stderr, "note: examples/ratchet.mech not found (cwd?)\n");
+            return;
+        }
+        std::stringstream ss;
+        ss << in.rdbuf();
+        ratchetSrc = ss.str();
+    }
+    auto withTorque = [&](const char* torque) {
+        std::string t = ratchetSrc;
+        const size_t pos = t.find("drive wheel torque -0.004");
+        t.replace(pos, std::string("drive wheel torque -0.004").size(), std::string("drive wheel torque ") + torque);
+        return t;
+    };
+    {
+        Model m = buildFromText(ratchetSrc.c_str());
+        CHECK(m.profiles.size() == 1 && m.profiles[0].curve->pieces() == 48);   // 24 edges + 24 fillets
+        std::vector<double> q0;
+        m.assemble(q0);
+        CHECK(!m.touches[0].engaged);                                           // placed just above the root
+    }
+
+    // forward: one click per tooth, and every joule accounted for
+    {
+        Model m = buildFromText(ratchetSrc.c_str());
+        ConstraintSystem sys(m);
+        DynamicsSystem dyn(m, sys);
+        std::vector<double> q, qd((size_t)m.nq(), 0.0);
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        dyn.projectVelocities(q, qd);
+        const double E0 = dyn.kinetic(q, qd) + dyn.potential(q);
+        const int iw = m.bodyIndex("wheel");
+        const double th0 = q[(size_t)m.bodies[iw].qOffset];
+        const double h = m.world.step;
+        double worstEngaged = 0.0, deepest = 0.0, worstForce = 1e9, worstRes = 0.0;
+        for (long k = 0; k < 3000; ++k) {                         // 1.5 s
+            dyn.step(q, qd, k * h);
+            const TouchJoint& tj = m.touches[0];
+            const double gap = m.touchState(tj, q).gap - tj.roller;
+            if (tj.engaged) {
+                worstEngaged = std::max(worstEngaged, std::fabs(gap));
+                std::vector<double> qdd;
+                dyn.accelerations(q, qd, qdd);
+                worstForce = std::min(worstForce, dyn.contactForces()[0]);
+            } else {
+                deepest = std::min(deepest, gap);                 // flight never digs into a tooth
+            }
+            if (k % 50 == 0) worstRes = std::max(worstRes, sys.maxResidual(q, k * h));
+        }
+        const HybridStats& hs = dyn.hybridStats();
+        const double turned = th0 - q[(size_t)m.bodies[iw].qOffset];   // clockwise = positive
+        const double teeth = turned / deg2rad(30.0);
+        CHECK(turned > deg2rad(240.0));                           // it really ratcheted around
+        // one lift-off per tooth tip passed, each ending in an impact
+        CHECK(std::fabs((double)hs.liftoffs - std::floor(teeth)) <= 1.0);
+        CHECK(hs.impacts >= hs.liftoffs && hs.impacts <= hs.liftoffs + 2);
+        CHECK(worstEngaged < 1e-8);
+        CHECK(deepest > -2e-6);
+        CHECK(worstForce > -1e-6);
+        CHECK(worstRes < 1e-8);
+        // the ledger: torque work in, impacts out, the change in energy in between
+        const double dE = dyn.kinetic(q, qd) + dyn.potential(q) - E0;
+        CHECK_APPROX(hs.driveWork, 0.004 * turned, 2e-5);         // the torque's work is tau x angle
+        CHECK(std::fabs(dE - (hs.driveWork - hs.impactLoss)) < 2e-6);
+        CHECK(hs.impactLoss > 0.005);
+    }
+
+    // reverse: the radial face meets the tip and the wheel locks. A frictionless pawl and
+    // wheel are a conservative system, so the jammed pair keeps ringing (about a degree);
+    // what must hold regardless is that the wheel is held, and that the contact force is
+    // the force that balances the torque. That is the wheel's own equation of motion,
+    //   I dw/dt = tau - N cross(footArm, n),
+    // integrated over a window:  integral of N cross dt = tau T - I (w_end - w_start).
+    {
+        Model m = buildFromText(withTorque("0.004").c_str());
+        ConstraintSystem sys(m);
+        DynamicsSystem dyn(m, sys);
+        std::vector<double> q, qd((size_t)m.nq(), 0.0);
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        dyn.projectVelocities(q, qd);
+        const int iw = m.bodyIndex("wheel");
+        const double h = m.world.step;
+        const double I = m.mass[(size_t)iw].inertia, tau = 0.004;
+        double impulse = 0.0, w0 = 0.0, prev = 0.0, thMin = 1e9, thMax = -1e9;
+        bool have = false;
+        const long k0 = 800, k1 = 2800;                              // the window: 0.4 s .. 1.4 s
+        for (long k = 0; k < k1; ++k) {
+            if (k == k0) w0 = qd[(size_t)m.bodies[iw].qOffset];
+            dyn.step(q, qd, k * h);
+            if (k < k0) continue;
+            const TouchJoint& tj = m.touches[0];
+            double cur = 0.0;
+            if (tj.engaged) {
+                std::vector<double> qdd;
+                dyn.accelerations(q, qd, qdd);
+                const ContactState cs = m.touchState(tj, q);
+                cur = dyn.contactForces()[0] * crossz(cs.footArm, cs.normal);
+            }
+            if (have) impulse += 0.5 * (prev + cur) * h;
+            prev = cur;
+            have = true;
+            const double th = q[(size_t)m.bodies[iw].qOffset];
+            thMin = std::min(thMin, th);
+            thMax = std::max(thMax, th);
+        }
+        const double T = (double)(k1 - k0) * h;
+        const double w1 = qd[(size_t)m.bodies[iw].qOffset];
+        CHECK(thMax < deg2rad(5.0) && thMin > -deg2rad(1.0));      // held: it never gets past the tooth
+        CHECK(thMax - thMin < deg2rad(2.0));                       // ringing, not creeping
+        CHECK_APPROX(impulse, tau * T - I * (w1 - w0), 2e-6);      // the contact force balances the torque
+        CHECK_APPROX(impulse / T, tau, 0.08 * tau);                // so on average it IS the torque
+        CHECK(dyn.hybridStats().liftoffs <= 4);                    // and it is not bouncing
+        CHECK(sys.maxResidual(q, k1 * h) < 1e-8);
+    }
+
+    // determinism
+    {
+        auto run = [&](std::vector<double>& qOut, HybridStats& stOut) {
+            Model m = buildFromText(ratchetSrc.c_str());
+            ConstraintSystem sys(m);
+            DynamicsSystem dyn(m, sys);
+            std::vector<double> q, qd((size_t)m.nq(), 0.0);
+            m.assemble(q);
+            int iters = 0;
+            double res = 0.0;
+            sys.solve(q, 0.0, iters, &res);
+            dyn.projectVelocities(q, qd);
+            for (long k = 0; k < 1000; ++k) dyn.step(q, qd, k * m.world.step);
+            qOut = q;
+            stOut = dyn.hybridStats();
+        };
+        std::vector<double> qa, qb;
+        HybridStats sa, sb;
+        run(qa, sa);
+        run(qb, sb);
+        CHECK(qa == qb);
+        CHECK(sa.liftoffs == sb.liftoffs && sa.impacts == sb.impacts && sa.impactLoss == sb.impactLoss);
+    }
+}
+
 } // namespace (anonymous)
 
 namespace mech {
@@ -4861,6 +5120,7 @@ int runAllTests() {
     testKinematicsM6b();
     testContactDynamics();
     testNonCircularMesh();
+    testPolygonRatchet();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

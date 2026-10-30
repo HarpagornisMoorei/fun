@@ -157,13 +157,16 @@ struct DialDecl {
 //   profile lobe on cam.A { polar: (0 deg, 0.030) (90 deg, 0.034) ... }
 //   profile lobe on cam.A { points: (x, y) (x, y) ... }
 //   profile gear on shaft.A { ellipse: 0.05 0.043 focus }   (M6d)
+//   profile tooth on wheel.A { polygon: (x, y) (x, y) ... fillet 0.0005 }   (M6e)
 struct ProfileDecl {
-    enum class Kind { None, Circle, Polar, Points, Ellipse };
+    enum class Kind { None, Circle, Polar, Points, Ellipse, Polygon };
     Kind kind = Kind::None;
     std::string name;
     double radius = 0.0;                          // circle
     double ellipseA = 0.0, ellipseB = 0.0;        // ellipse semi-axes
     bool ellipseFocus = false;                    // anchor at the focus (a gear pivot)
+    bool hasFillet = false;                       // polygon: corner radius (required)
+    double fillet = 0.0;
     std::vector<std::pair<double, double>> polar; // (angle rad, radius)
     std::vector<Vec2> points;
     std::string host;

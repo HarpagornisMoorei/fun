@@ -1,6 +1,6 @@
 # Design note: contact and higher pairs (M6)
 
-Status: **6a, 6b, 6c and 6d implemented** (profiles `circle`/`polar`/`points`,
+Status: **6a, 6b, 6c and 6d implemented, plus 6e (polygons and the ratchet)** (profiles `circle`/`polar`/`points`,
 bilateral kinematic `touch`, `cam` displacement-diagram synthesis with
 pressure-angle and undercut reports; the eccentric, lobe-cam and plate-cam
 examples; unilateral contact in the dynamics with `jumpcam`; non-circular
@@ -207,6 +207,24 @@ shipped is `mesh` over two profiles, and the reasons are worth recording.
   It never mattered because the first attempt nearly always converges; an
   elliptical pair started on its singular symmetric pose was the first mechanism
   to need a restart. Both are fixed.
+
+**6e: sharp-cornered parts (not in the original plan).** The Geneva drive and the
+ratchet both need corners, and the spline-based `points` profile cannot hold one (a
+cubic spline through a corner rings by tens of percent, and the contact normal
+with it). `polygon` is therefore an *exact* curve of edges and tangent circular
+fillets, not a spline, with an analytic nearest-point search; `fillet` is required
+because a perfectly sharp corner has no contact normal. The ratchet is the
+sharpest test of 6c — contact made and lost once per tooth, an impact each time.
+
+What it taught: (1) **the ledger needed torque work** (a torque drive does work too;
+without it a torque-driven contact mechanism reported a misleading residual);
+(2) **a frictionless locked pawl rings** — the system is conservative, so it
+oscillates about the jam instead of settling, and the right assertion is the
+wheel's own equation of motion (impulse-momentum, to 0.01%) rather than "at
+rest"; (3) a pawl spring strong enough to matter *stalls* the forward direction
+(its normal force on the ramp cancels the drive torque), which is correct physics.
+The Geneva drive remains open: it needs two-sided slot contact and a locking arc
+(curve-against-curve contact, not point-on-curve).
 
 Acceptance examples to add under `examples/`: `eccentric`, `platecam`,
 `geneva`, `ratchet`, `ellipgears`.

@@ -567,7 +567,7 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
             const float* col = kPalette[(size_t)(pr.body > 0 ? pr.body - 1 : 0) % 5];
             const std::vector<Vec2> pts = pr.curve->outline(240);
             auto toWorld = [&](Vec2 p) { return rotate(origin + p, th) + tr; };
-            if (pr.curve->kind() != ProfileCurve::Kind::Points) {   // star-shaped: fan from the origin
+            if (pr.curve->starShaped()) {   // star-shaped: fan from the origin
                 glColor4f(col[0], col[1], col[2], 0.16f);
                 glBegin(GL_TRIANGLE_FAN);
                 const Vec2 c = toWorld(Vec2{0.0, 0.0});

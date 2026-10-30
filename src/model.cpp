@@ -1018,6 +1018,47 @@ Model buildModel(const MechanismDecl& decl) {
                     "': circle needs a positive radius"};
             }
             pr.curve = std::make_shared<const ProfileCurve>(ProfileCurve::circle(pd.radius));
+        } else if (pd.kind == ProfileDecl::Kind::Polygon) {
+            const std::vector<Vec2>& pts = pd.points;
+            if (pts.size() < 3) {
+                throw SemanticError{pd.line, "profile '" + pd.name +
+                    "': polygon needs at least 3 vertices"};
+            }
+            if (pts.size() > kMaxKnots) {
+                throw SemanticError{pd.line, "profile '" + pd.name +
+                    "': polygon has too many vertices (max 1024)"};
+            }
+            if (!pd.hasFillet || !(pd.fillet > 0.0)) {
+                throw SemanticError{pd.line, "profile '" + pd.name +
+                    "': polygon needs a positive 'fillet' radius — a perfectly sharp corner "
+                    "has no contact normal (a small one, like 0.0002, is fine)"};
+            }
+            double area2 = 0.0, perim = 0.0;
+            for (size_t i = 0; i < pts.size(); ++i) {
+                const Vec2& a = pts[i];
+                const Vec2& b = pts[(i + 1) % pts.size()];
+                const double edge = vlen(b - a);
+                if (edge < 1e-9) {
+                    throw SemanticError{pd.line, "profile '" + pd.name +
+                        "': polygon has two coincident neighbouring vertices"};
+                }
+                area2 += crossz(a, b);
+                perim += edge;
+            }
+            if (std::fabs(area2) < 1e-9 * perim * perim) {
+                throw SemanticError{pd.line, "profile '" + pd.name +
+                    "': polygon encloses no area (collinear?)"};
+            }
+            const ProfileCurve pg = ProfileCurve::polygon(pts, pd.fillet);
+            if (pg.minFillet() < 0.05 * pd.fillet) {
+                char buf[300];
+                std::snprintf(buf, sizeof buf,
+                    "profile '%s': the %g m fillet does not fit — at some corner the edges are "
+                    "too short, and it would shrink to %g m; shorten 'fillet' or lengthen the "
+                    "edges", pd.name.c_str(), pd.fillet, pg.minFillet());
+                throw SemanticError{pd.line, buf};
+            }
+            pr.curve = std::make_shared<const ProfileCurve>(pg);
         } else if (pd.kind == ProfileDecl::Kind::Ellipse) {
             if (!(pd.ellipseA > 0.0) || !(pd.ellipseB > 0.0)) {
                 throw SemanticError{pd.line, "profile '" + pd.name +

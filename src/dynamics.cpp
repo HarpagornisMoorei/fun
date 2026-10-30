@@ -406,17 +406,20 @@ void DynamicsSystem::integrate(std::vector<double>& q, std::vector<double>& qd,
     // semi-implicit Euler drifts at first order on this non-separable system
     // (the mass matrix depends on q); RK4 keeps chaotic mechanisms' energy
     // flat to well under a percent at the default 2 ms step.
-    // M6c: the rate drives' power (reaction torque x prescribed rate) at each
-    // stage, for the energy ledger: Simpson over the four stages.
-    auto power = [&]() {
+    // M6c: the drives' power at each stage, for the energy ledger: Simpson over
+    // the four stages. A rate drive delivers (reaction torque x prescribed rate);
+    // a torque drive delivers (torque x the body's angular velocity there).
+    auto power = [&](const std::vector<double>& v) {
         double P = 0.0;
         for (size_t di = 0; di < m.drives.size(); ++di)
             if (m.drives[di].enabled) P += lastReaction_[di] * m.drives[di].omegaRad;
+        for (const TorqueDrive& td : m.torques)
+            P += td.torque * v[(size_t)m.bodies[(size_t)td.body].qOffset];
         return P;
     };
     std::vector<double> a1, a2, a3, a4;
     accelerations(q, qd, a1);
-    const double P1 = power();
+    const double P1 = power(qd);
 
     std::vector<double> qS(nq), qdS(nq);
     for (int i = 0; i < nq; ++i) {
@@ -424,21 +427,21 @@ void DynamicsSystem::integrate(std::vector<double>& q, std::vector<double>& qd,
         qdS[i] = qd[i] + 0.5 * h * a1[i];
     }
     accelerations(qS, qdS, a2);
-    const double P2 = power();
+    const double P2 = power(qdS);
 
     for (int i = 0; i < nq; ++i) {
         qS[i] = q[i] + 0.5 * h * qd[i] + 0.25 * h * h * a1[i];
         qdS[i] = qd[i] + 0.5 * h * a2[i];
     }
     accelerations(qS, qdS, a3);
-    const double P3 = power();
+    const double P3 = power(qdS);
 
     for (int i = 0; i < nq; ++i) {
         qS[i] = q[i] + h * qd[i] + 0.5 * h * h * a2[i];
         qdS[i] = qd[i] + h * a3[i];
     }
     accelerations(qS, qdS, a4);
-    lastDriveWork_ = h / 6.0 * (P1 + 2.0 * P2 + 2.0 * P3 + power());
+    lastDriveWork_ = h / 6.0 * (P1 + 2.0 * P2 + 2.0 * P3 + power(qdS));
 
     for (int i = 0; i < nq; ++i)
         qd[i] += h / 6.0 * (a1[i] + 2.0 * a2[i] + 2.0 * a3[i] + a4[i]);

@@ -1,13 +1,14 @@
-# The mech language — M6d specification
+# The mech language — M6e specification
 
-This document pins down the M6d kernel: lexical structure, grammar, static
+This document pins down the M6e kernel: lexical structure, grammar, static
 semantics, the kinematic solver's mathematical formulation, the
 constrained-dynamics integrator, the intent layer's synthesis rules, the
 hybrid elements (`mode` blocks with weight drives — the escapement's kernel),
 contact (`profile` curves and point-on-curve `touch` joints — the first
 higher pair — bilateral in kinematic files, unilateral with lift-off and
 impact in dynamic ones), plate cams stated as displacement diagrams, and
-non-circular gear pairs (`mesh` between two profiles). It is the contract the implementation is tested against (`mech test`).
+non-circular gear pairs (`mesh` between two profiles), and polygon profiles
+with filleted corners (ratchets and anything with teeth). It is the contract the implementation is tested against (`mech test`).
 
 ---
 
@@ -60,7 +61,7 @@ Four principles govern the design:
   `radius`, and the whole M5 hybrid vocabulary (`state`, `when`, `hold`,
   `impulse`, `maintain`, `theta`, `omega`, `advance`, `weight`, `barrel`,
   `drop`, `kg`, `m`, `mJ`) and the M6 contact vocabulary (`circle`, `polar`,
-  `points`, `roller`, `restitution`, `ellipse`, `focus`) and the M6b cam vocabulary (`cam` at statement start,
+  `points`, `roller`, `restitution`, `ellipse`, `focus`, `polygon`, `fillet`) and the M6b cam vocabulary (`cam` at statement start,
   `base`, `start`, `turn`, `rise`, `fall`, `return`, `over`, `dwell`,
   `cycloidal`, `harmonic`, `modtrap`) are *contextual* identifiers (not
   keywords), usable as names — a body called `cam` is fine.
@@ -85,7 +86,8 @@ stmt        = groundDecl | bodyDecl | rodDecl | shaftDecl | worldDecl
             | camDecl ;                                   (* M6b *)
 
 groundDecl  = "ground" IDENT "{" { anchorDecl } "}" ;
-bodyDecl    = "body" IDENT "{" { anchorDecl | "mass" ":" num } "}" ;
+bodyDecl    = "body" IDENT "{" { anchorDecl | "mass" ":" num
+                                 | "from" ":" num "deg" } "}" ;      (* from: M6e, as for a rod *)
 anchorDecl  = "anchor" IDENT "at" "(" num "," num ")"
               [ "dir" "(" num "," num ")" ] ;
 
@@ -145,6 +147,7 @@ profileDecl = "profile" IDENT [ "on" IDENT [ "." IDENT ] ] "{" shape "}"
               [ "on" IDENT [ "." IDENT ] ] ;
 shape       = "circle" ":" num
             | "ellipse" ":" num num [ "focus" ]                  (* semi-axes a, b; M6d *)
+            | "polygon" ":" { "(" num "," num ")" } "fillet" num   (* M6e *)
             | "polar" ":" { "(" num [ "deg" ] "," num ")" }      (* angle, radius *)
             | "points" ":" { "(" num "," num ")" } ;
 touchDecl   = "touch" ref "on" IDENT { "roller" num | "restitution" num } ;
@@ -214,6 +217,21 @@ Checks run at model build time, each error pointing at a source line:
   the escapement's pair (a wheel driven by a weight and locked by a pallet).
   One hold row exists per held body across the whole mechanism: two modes
   cannot hold the same body.
+
+**M6e polygon checks:**
+
+* `polygon: (x, y) ... fillet r` is a closed polygon in the anchor's frame whose every
+  corner is rounded by a circular arc of radius `r`. At least 3 vertices (at most
+  1024), no coincident neighbours, a non-degenerate area; clockwise lists are
+  reversed so the curve is counter-clockwise. `fillet` is **required and positive**:
+  a perfectly sharp corner has no contact normal, and a tiny fillet (`0.0002`) costs
+  nothing. At a corner whose adjacent edges are too short for the fillet the arc is
+  clamped so neighbouring fillets never overlap (each uses at most half an edge); if
+  that shrinks any fillet below 5% of the request it is an error ("does not fit")
+  rather than a silent change of shape. The curve is not checked for
+  self-intersection.
+* A free `body` may carry `from: <deg>`, a release angle like a rod's, so a wheel can
+  start at a chosen angle instead of the solver's deterministic tilt.
 
 **M6d non-circular mesh checks:**
 
@@ -535,9 +553,16 @@ better than 1e-6 over random off-manifold states). The foot is searched afresh
 at every evaluation — a coarse scan over a precomputed outline (>= 256
 samples), then a bracketed Newton iteration to machine precision — so the row
 is a pure function of `q` with no tracked state to go stale between solver
-trial steps (unlike `psi`, which must be tracked). Curves are C2: a circle is
-exact; `polar` is the periodic cubic spline `r(phi)`; `points` is a pair of
-periodic cubic splines `x(s)`, `y(s)` on chord length.
+trial steps (unlike `psi`, which must be tracked). Curves are C2: a circle and an
+ellipse are exact; `polar` is the periodic cubic spline `r(phi)`; `points` is a pair
+of periodic cubic splines `x(s)`, `y(s)` on chord length. A **polygon** is exact
+and only C1: straight edges joined by tangent circular fillets, parameterized by
+arc length, so the curvature is 0 on an edge and `+-1/r` on a fillet (negative
+at a reflex corner, where the fillet curves away from the material). Its foot
+search is analytic — the closest point of every edge and arc, best wins — with
+no sample table, and the normal is continuous across every junction. This is
+why polygons exist: a cubic spline through a corner rings by tens of percent, and
+the contact normal with it.
 
 In a *kinematic* mechanism a contact is **bilateral**: the row holds in both
 directions, i.e. force closure is assumed (a spring or gravity keeps a real
@@ -868,6 +893,19 @@ Dynamic runs also now start from velocities consistent with the rate drives
 (previously a driven shaft spun up in the first step, an impulsive start that
 no ledger term covered).
 
+The ledger counts a **torque drive's** work too (`torque x the body's angular
+velocity`, Simpson over the RK4 stages), alongside a rate drive's, so a
+torque-driven ratchet closes: `drive + ... - impact = dE`.
+
+A frictionless contact is conservative, and the ratchet shows what that means. Under
+reverse torque the pawl locks the wheel — it advances a degree or two to bring a
+radial face onto the tip, and is held — but a jammed frictionless pair keeps ringing
+by about a degree, the force swinging around the value that balances the torque
+(from ~0.2 N to over 16 N at the extreme, where the pawl nears dead center). The wheel's own
+equation of motion still holds exactly: `integral of N cross(footArm, n) dt = tau T -
+I (w_end - w_start)`, which the tests check to 0.01%. Only friction (or a damper on
+the wheel) would bring it to rest.
+
 Not modelled: friction (the tangential slip speed `u` is available, so Coulomb
 friction needs no new row), more than one contact point per `touch`, and
 compliant (spring-damper) contact.
@@ -886,6 +924,7 @@ compliant (spring-damper) contact.
 | `mesh g1 g2 tangent` | roll row + live contact row | M3 |
 | `mesh p q` (two profiles, fixed centers) | row `thB - thB0 - F(psi - thA)`, `F = integral of r_A/(d - r_A)`; conjugacy of the pair checked over a full turn at build time | M6d |
 | `profile p on b.A { ellipse: a b [focus] }` | exact ellipse, anchor at the center or the right focus; exact polar form `r, r', r''` | M6d |
+| `profile p on b.A { polygon: ... fillet r }` | exact edges and tangent fillet arcs (clamped per corner), arc-length parameterized, analytic foot search | M6e |
 | `profile p on b.c { circle: R }` | closed curve `c(s) = R(cos s, sin s)` at anchor `b.c`, riding `b` | M6a |
 | `profile p on b.c { polar: ... }` | periodic cubic spline `r(phi)` through the `(angle, radius)` knots | M6a |
 | `profile p on b.c { points: ... }` | periodic cubic splines through the points, normalised counter-clockwise | M6a |
@@ -913,7 +952,7 @@ compliant (spring-damper) contact.
 
 ## 8. Test matrix
 
-`mech test` (13924 checks) covers: lexer tokens/units/keywords/comments/errors;
+`mech test` (13979 checks) covers: lexer tokens/units/keywords/comments/errors;
 parser AST shapes for all M3 and M4 forms and all error classes; model checks,
 desugaring, gear radius arithmetic, module rules, mass derivation (rods,
 discs, compound assemblies, overrides), DOF arithmetic including tangent
@@ -1034,6 +1073,20 @@ kinetic energy to 1e-6 J however the ratio surges, with `wB/wA = -rho` throughou
 Breaking the bias, the sign of the Jacobian, or the ratio `rho` breaks 2, 6 and 12
 of these checks.
 
+The M6e suite adds: the polygon curve in closed form on a rounded square given
+*clockwise* (perimeter, signed distances inside, outside and off a corner,
+curvature `1/r` on a fillet and 0 on an edge, the nearest point against brute
+force on 400 random points with no sign errors, a continuous tangent across every
+junction), a reflex corner (curvature `-1/r`, a notch point correctly *outside*),
+and the fillet clamp; the grammar and every polygon diagnostic; and the ratchet
+as a mechanism: forward, the wheel turns through 10 teeth with one lift-off per
+tooth tip passed (each ending in an impact), never digging into a tooth, and the
+ledger — the torque's work `tau x angle` in, impacts out — closing to 2e-6 J;
+reversed, the wheel is held, and the impulse-momentum identity above holds to
+0.01% through the force spikes; and bit-for-bit determinism. Dropping the torque
+from the ledger, flipping the polygon's normal or the sign of its curvature
+breaks checks.
+
 ## 9. Milestone history & reserved ground
 
 M1 walked the skeleton (lexer/parser/rods/pins/drives); M2 added shafts,
@@ -1079,8 +1132,13 @@ between 3x and 1/3x. Not covered: moving centers (a carrier), internal contact,
 and rolling between arbitrary non-conjugate curves, which needs the contact
 point as an unknown (the arc-length formulation in the design note).
 
-The rest of M6 is reserved: friction, and turning the escapement's event summary
-into contact rows. Also reserved: motion-work *synthesis* (the
+M6e added sharp-cornered parts: `polygon` profiles (exact edges and fillets, so a
+corner is a real corner rather than a ringing spline), torque work in the energy
+ledger, and `from:` on free bodies — `examples/ratchet.mech` is a ratchet wheel
+and gravity pawl that clicks once per tooth forward and locks in reverse.
+
+The rest is reserved: friction (a frictionless ratchet rings when locked), and
+turning the escapement's event summary into contact rows. Also reserved: motion-work *synthesis* (the
 compiler choosing the equal-tooth-sum stack itself, rather than the flagship
 writing it out), contact-rich pallet geometry (impulse faces as constraint
 rows rather than event summaries — what 6c unlocks), and multiple mechanisms

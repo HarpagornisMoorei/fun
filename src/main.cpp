@@ -202,6 +202,11 @@ int cmdCheck(const std::string& path) {
                 if (cv.kind() == ProfileCurve::Kind::Circle) {
                     std::printf("  %-8s on %-10s circle radius %.4f\n",
                                 pr.name.c_str(), where.c_str(), cv.circleRadius());
+                } else if (cv.kind() == ProfileCurve::Kind::Polygon) {
+                    std::printf("  %-8s on %-10s polygon, %zu pieces (edges and fillets), "
+                                "perimeter %.4f m, smallest fillet %.4f m\n",
+                                pr.name.c_str(), where.c_str(), cv.pieces(), cv.period(),
+                                cv.minFillet());
                 } else if (cv.kind() == ProfileCurve::Kind::Ellipse) {
                     std::printf("  %-8s on %-10s ellipse %.4f x %.4f%s\n",
                                 pr.name.c_str(), where.c_str(), cv.ellipseA(), cv.ellipseB(),

@@ -10,6 +10,10 @@
 //            c(phi) = r(phi) (cos phi, sin phi)      (star-shaped about the anchor)
 //   points   periodic cubic splines x(s), y(s) through the given points,
 //            s = cumulative chord length             (any simple closed curve)
+//   polygon  exact: straight edges joined by circular fillets of a given radius,
+//            s = arc length. A cubic spline cannot hold a corner (it rings by tens
+//            of percent), so parts with teeth and corners use this: foot, normal
+//            and curvature are analytic and nothing oscillates.
 //
 // The one query contact needs is `nearest`: the foot of the perpendicular
 // from a point to the curve, with the signed distance (positive outside).
@@ -23,7 +27,7 @@ namespace mech {
 
 class ProfileCurve {
 public:
-    enum class Kind { Circle, Polar, Points, Ellipse };
+    enum class Kind { Circle, Polar, Points, Ellipse, Polygon };
 
     // Preconditions are checked by the model builder (positive radii,
     // strictly increasing angles in [0, 2*pi), >= 3 distinct points).
@@ -35,6 +39,11 @@ public:
                               const std::vector<double>& radii);
     // Orientation is normalized to counter-clockwise (reversed if needed).
     static ProfileCurve points(const std::vector<Vec2>& pts);
+    // A closed polygon with every corner rounded by a circular arc of radius
+    // `fillet` (clamped at a corner so neighbouring fillets never overlap).
+    // Orientation is normalized to counter-clockwise. Use minFillet() to see the
+    // smallest radius actually realized.
+    static ProfileCurve polygon(const std::vector<Vec2>& verts, double fillet);
 
     Kind kind() const { return kind_; }
     double period() const { return period_; }
@@ -57,7 +66,7 @@ public:
     // M6d: star-shaped about the anchor (every ray meets the curve once), so
     // the curve is a polar function r(phi). Circle, polar and ellipse are;
     // a point list in general is not.
-    bool starShaped() const { return kind_ != Kind::Points; }
+    bool starShaped() const { return kind_ != Kind::Points && kind_ != Kind::Polygon; }
     // r, dr/dphi and d2r/dphi2 at polar angle phi (radians, any branch).
     void polarEval(double phi, double& r, double& dr, double& d2r) const;
 
@@ -70,6 +79,10 @@ public:
     size_t knots() const { return a_.t.size(); }
     // Circle radius (0 for the other kinds).
     double circleRadius() const { return radius_; }
+    // Polygon: the smallest fillet radius realized at any corner after clamping
+    // (0 for the other kinds); and the number of straight/arc pieces.
+    double minFillet() const { return minFillet_; }
+    size_t pieces() const { return prims_.size(); }
     // Ellipse parameters (0 for the other kinds).
     double ellipseA() const { return ea_; }
     double ellipseB() const { return eb_; }
@@ -86,6 +99,21 @@ private:
     };
 
     void finish();   // sample table + extent
+
+    // Polygon: one straight edge or one circular fillet, parameterized by arc length.
+    struct Prim {
+        bool arc = false;
+        Vec2 a, dir;              // line: start point, unit direction
+        Vec2 c;                   // arc: center
+        double r = 0.0;           // arc: radius
+        double a0 = 0.0;          // arc: polar angle of the start about c
+        double sgn = 1.0;         // arc: +1 turns left (convex corner), -1 right (reflex)
+        double len = 0.0;         // arc length of this piece
+        double s0 = 0.0;          // arc length at its start
+    };
+    std::vector<Prim> prims_;
+    double minFillet_ = 0.0;
+    Vec2 primPoint(const Prim& q, double u) const;
 
     Kind kind_ = Kind::Circle;
     double radius_ = 0.0;
