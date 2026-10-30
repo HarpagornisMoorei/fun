@@ -2,12 +2,15 @@
 #include "tests.hpp"
 
 #include "../src/geom.hpp"
+#include "../src/cam.hpp"
 #include "../src/dynamics.hpp"
 #include "../src/kinematics.hpp"
 #include "../src/lexer.hpp"
 #include "../src/model.hpp"
 #include "../src/parser.hpp"
+#include "../src/profile.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -2962,6 +2965,1393 @@ void testDynamicsM5() {
     }
 }
 
+
+// ---- M6a: profiles and bilateral contact -------------------------------------
+
+// eccentric disc (R = 0.03, rim centre e = 0.01 off the axle) under a roller
+// follower on a rail through the axle; the profile line is spliced in.
+std::string eccentricSrc(const std::string& profileLine, const char* roller) {
+    std::string s =
+        "mechanism ecc {\n"
+        "  ground frame { anchor axle at (0, 0)  anchor rail at (0, 0.09) dir (0, 1) }\n"
+        "  body cam { anchor axle at (0, 0)  anchor rim at (0.010, 0) }\n"
+        "  pin cam.axle -> frame.axle\n";
+    s += "  " + profileLine + "\n";
+    s += "  body follower { anchor tip at (0, 0) dir (1, 0) }\n"
+         "  slide follower.tip -> frame.rail\n"
+         "  touch follower.tip on disc ";
+    s += roller;
+    s += "\n  drive cam at 30 deg/s\n}\n";
+    return s;
+}
+
+// y(theta) for the eccentric: e sin(theta) + sqrt((R+rho)^2 - e^2 cos^2(theta))
+double eccentricY(double th, double rho) {
+    const double e = 0.010, R = 0.030 + rho;
+    return e * std::sin(th) + std::sqrt(R * R - e * e * std::cos(th) * std::cos(th));
+}
+
+// Run the eccentric over two turns (5 deg steps, warm-started) and return the
+// worst deviation of the follower height from the closed form.
+double eccentricWorstError(const std::string& src, double rho, double* worstRes) {
+    Model m = buildFromText(src.c_str());
+    ConstraintSystem sys(m);
+    std::vector<double> q;
+    m.assemble(q);
+    int iters = 0;
+    double res = 0.0;
+    sys.solve(q, 0.0, iters, &res);
+    const int ifol = m.bodyIndex("follower");
+    double worst = 0.0;
+    *worstRes = 0.0;
+    for (int k = 0; k <= 144; ++k) {
+        const double t = k * (5.0 / 30.0);
+        sys.solve(q, t, iters, &res);
+        *worstRes = std::max(*worstRes, res);
+        worst = std::max(worst, std::fabs(q[(size_t)m.bodies[ifol].qOffset + 2] -
+                                          eccentricY(deg2rad(30.0) * t, rho)));
+    }
+    return worst;
+}
+
+void testProfileCurve() {
+    std::printf("[profile M6a]\n");
+
+    // a polar table of constant radius is exactly a circle (spline reproduces
+    // constants), values and both derivatives
+    {
+        std::vector<double> ang, rad;
+        for (int i = 0; i < 7; ++i) { ang.push_back(0.1 + i * 2.0 * kPi / 7.0); rad.push_back(0.03); }
+        const ProfileCurve pc = ProfileCurve::polar(ang, rad);
+        const ProfileCurve cc = ProfileCurve::circle(0.03);
+        double worst = 0.0;
+        for (int k = 0; k < 200; ++k) {
+            const double s = k * 0.0317;
+            Vec2 p, d1, d2, q, e1, e2;
+            pc.eval(s, p, d1, d2);
+            cc.eval(s, q, e1, e2);
+            worst = std::max({worst, vlen(p - q), vlen(d1 - e1), vlen(d2 - e2)});
+        }
+        CHECK(worst < 1e-12);
+    }
+
+    // spline accuracy on a smooth oval, and periodicity / C2 at the seam
+    {
+        std::vector<double> ang, rad;
+        for (int i = 0; i < 36; ++i) {
+            const double a = i * 2.0 * kPi / 36.0;
+            ang.push_back(a);
+            rad.push_back(0.03 + 0.005 * std::cos(2.0 * a));
+        }
+        const ProfileCurve oval = ProfileCurve::polar(ang, rad);
+        double worstPos = 0.0;
+        for (int k = 0; k < 500; ++k) {
+            const double s = 0.0123 + k * 2.0 * kPi / 500.0;
+            Vec2 p, d1, d2;
+            oval.eval(s, p, d1, d2);
+            const double r = 0.03 + 0.005 * std::cos(2.0 * s);
+            worstPos = std::max(worstPos, vlen(p - Vec2{r * std::cos(s), r * std::sin(s)}));
+        }
+        CHECK(worstPos < 1e-6);
+        Vec2 p0, a0, b0, p1, a1, b1;
+        oval.eval(0.7, p0, a0, b0);
+        oval.eval(0.7 + 2.0 * kPi, p1, a1, b1);
+        CHECK(vlen(p0 - p1) < 1e-12 && vlen(a0 - a1) < 1e-12 && vlen(b0 - b1) < 1e-12);
+        // C2 across a knot: second derivative continuous
+        const double knot = ang[5];
+        Vec2 pl, al, bl, pr, ar, br;
+        oval.eval(knot - 1e-9, pl, al, bl);
+        oval.eval(knot + 1e-9, pr, ar, br);
+        CHECK(vlen(bl - br) < 1e-5);
+        // first derivative really is the derivative of the position
+        Vec2 pa, aa, ba, pb, ab, bb;
+        oval.eval(1.234 - 1e-6, pa, aa, ba);
+        oval.eval(1.234 + 1e-6, pb, ab, bb);
+        Vec2 pm, am, bm;
+        oval.eval(1.234, pm, am, bm);
+        CHECK(vlen((pb - pa) * (0.5e6) - am) < 1e-6);
+    }
+
+    // nearest(): matches brute force on a non-circular curve, signs are right,
+    // and a clockwise point list is normalised (outside stays positive)
+    {
+        std::vector<Vec2> ccw, cw;
+        for (int i = 0; i < 40; ++i) {
+            const double a = i * 2.0 * kPi / 40.0;
+            ccw.push_back({0.05 * std::cos(a), 0.03 * std::sin(a)});
+            cw.push_back({0.05 * std::cos(-a), 0.03 * std::sin(-a)});
+        }
+        const ProfileCurve a = ProfileCurve::points(ccw);
+        const ProfileCurve b = ProfileCurve::points(cw);
+        unsigned seed = 12345;
+        auto rnd = [&]() {
+            seed = seed * 1664525u + 1013904223u;
+            return ((seed >> 8) & 0xFFFF) / 65535.0 * 0.18 - 0.09;
+        };
+        double worstDist = 0.0;
+        bool signsOk = true, orientOk = true;
+        for (int t = 0; t < 300; ++t) {
+            const Vec2 u{rnd(), rnd()};
+            const ProfileCurve::Foot f = a.nearest(u);
+            // reference: dense scan, then ternary-search the best bracket
+            double best = 1e9, sBest = 0.0;
+            const int N = 20000;
+            auto dist = [&](double s) {
+                Vec2 p, d1, d2;
+                a.eval(s, p, d1, d2);
+                return vlen(u - p);
+            };
+            for (int k = 0; k < N; ++k) {
+                const double d = dist(a.period() * k / N);
+                if (d < best) { best = d; sBest = a.period() * k / N; }
+            }
+            double lo = sBest - a.period() / N, hi = sBest + a.period() / N;
+            for (int it = 0; it < 80; ++it) {
+                const double m1 = lo + (hi - lo) / 3.0, m2 = hi - (hi - lo) / 3.0;
+                if (dist(m1) < dist(m2)) hi = m2; else lo = m1;
+            }
+            best = std::min(best, dist(0.5 * (lo + hi)));
+            worstDist = std::max(worstDist, std::fabs(std::fabs(f.signedDist) - best));
+            const bool outside = (u.x / 0.05) * (u.x / 0.05) + (u.y / 0.03) * (u.y / 0.03) > 1.0;
+            if ((f.signedDist > 0.0) != outside) signsOk = false;
+            if (std::fabs(a.nearest(u).signedDist - b.nearest(u).signedDist) > 1e-9)
+                orientOk = false;
+        }
+        CHECK(worstDist < 1e-9);
+        CHECK(signsOk);
+        CHECK(orientOk);
+        const ProfileCurve::Foot f = a.nearest({0.08, 0.0});
+        CHECK_APPROX(f.normal.x, 1.0, 1e-9);
+        CHECK_APPROX(f.signedDist, 0.03, 1e-9);
+    }
+
+    // circle fast path agrees with the generic search on a fine polygonal circle
+    {
+        std::vector<Vec2> pts;
+        for (int i = 0; i < 96; ++i) {
+            const double a = i * 2.0 * kPi / 96.0;
+            pts.push_back({0.03 * std::cos(a), 0.03 * std::sin(a)});
+        }
+        const ProfileCurve gen = ProfileCurve::points(pts);
+        const ProfileCurve cir = ProfileCurve::circle(0.03);
+        CHECK_APPROX(gen.nearest({0.05, 0.02}).signedDist, cir.nearest({0.05, 0.02}).signedDist, 1e-7);
+        CHECK_APPROX(gen.nearest({-0.01, 0.015}).signedDist, cir.nearest({-0.01, 0.015}).signedDist, 1e-7);
+    }
+}
+
+void testParserM6() {
+    std::printf("[parser M6]\n");
+
+    // keywords
+    std::vector<Token> k = lex("profile touch");
+    CHECK(k[0].type == Tok::Kw && k[1].type == Tok::Kw);
+
+    {
+        const Program p = parseText(eccentricSrc("profile disc on cam.rim { circle: 0.03 }",
+                                                 "roller 0.006").c_str());
+        const MechanismDecl& m = p.mechanisms[0];
+        CHECK(m.profiles.size() == 1 && m.touches.size() == 1);
+        CHECK(m.profiles[0].name == "disc");
+        CHECK(m.profiles[0].kind == ProfileDecl::Kind::Circle);
+        CHECK_APPROX(m.profiles[0].radius, 0.03, 1e-12);
+        CHECK(m.profiles[0].host == "cam" && m.profiles[0].hostAnchor == "rim");
+        CHECK(m.touches[0].body == "follower" && m.touches[0].anchor == "tip");
+        CHECK(m.touches[0].profile == "disc");
+        CHECK(m.touches[0].hasRoller);
+        CHECK_APPROX(m.touches[0].roller, 0.006, 1e-12);
+    }
+
+    // host after the block, polar with and without degree units, separators
+    {
+        const Program p = parseText(
+            "mechanism m { ground g { anchor a at (0,0) } shaft s at g.a "
+            "profile p { polar: (0 deg, 0.03), (90 deg, 0.04) (3.5, 0.03) } on s }");
+        const ProfileDecl& pd = p.mechanisms[0].profiles[0];
+        CHECK(pd.kind == ProfileDecl::Kind::Polar);
+        CHECK(pd.polar.size() == 3);
+        CHECK_APPROX(pd.polar[1].first, kPi / 2.0, 1e-12);
+        CHECK_APPROX(pd.polar[2].first, 3.5, 1e-12);   // bare number = radians
+        CHECK(pd.host == "s" && pd.hostAnchor.empty());
+    }
+    {
+        const Program p = parseText(
+            "mechanism m { ground g { anchor a at (0,0) } shaft s at g.a "
+            "profile p on s { points: (0.03, 0) (0, 0.03) (-0.03, 0) (0, -0.03) } "
+            "touch g.a on p }");
+        CHECK(p.mechanisms[0].profiles[0].points.size() == 4);
+        CHECK(!p.mechanisms[0].touches[0].hasRoller);
+    }
+
+    // errors carry a line number and a useful hint
+    auto expectParseError = [&](const char* src, const char* needle) {
+        bool threw = false;
+        try {
+            parseText(src);
+        } catch (const ParseError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find(needle) != std::string::npos);
+            CHECK(e.line >= 1);
+        }
+        CHECK(threw);
+    };
+    expectParseError("mechanism m { profile p { } on s }", "no shape");
+    expectParseError("mechanism m { profile p { circle: 1 } }", "needs a host");
+    expectParseError("mechanism m { profile p on s { circle: 1 circle: 2 } }", "already has a shape");
+    expectParseError("mechanism m { profile p on s { square: 1 } }", "'circle', 'polar' or 'points'");
+    expectParseError("mechanism m { profile p on s { polar: } }", "needs (angle, radius)");
+    expectParseError("mechanism m { touch f.tip p }", "expected 'on'");
+}
+
+void testModelM6() {
+    std::printf("[model M6]\n");
+
+    auto expectModelError = [&](const std::string& src, const char* needle) {
+        bool threw = false;
+        try {
+            buildFromText(src.c_str());
+        } catch (const SemanticError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find(needle) != std::string::npos);
+            CHECK(e.line >= 1);
+        }
+        CHECK(threw);
+    };
+    const std::string head =
+        "mechanism m { ground g { anchor a at (0,0) anchor r at (0,1) dir (0,1) } "
+        "shaft s at g.a  body f { anchor tip at (0,0) dir (1,0) } slide f.tip -> g.r ";
+
+    // good model + DOF bookkeeping: touch removes one DOF
+    {
+        Model m = buildFromText(eccentricSrc("profile disc on cam.rim { circle: 0.03 }",
+                                             "roller 0.006").c_str());
+        CHECK(m.profiles.size() == 1 && m.touches.size() == 1);
+        CHECK(m.profileIndex("disc") == 0);
+        const DofReport d = m.dofReport();
+        CHECK(d.nProfiles == 1 && d.nTouches == 1);
+        CHECK(d.freeDof == 1);
+        CHECK(d.residualDof == 0);
+    }
+
+    expectModelError(head + "profile p on s { circle: 0.03 } profile p on s { circle: 0.02 } }",
+                     "duplicate profile");
+    expectModelError(head + "profile p on nope { circle: 0.03 } }", "unknown host body");
+    expectModelError(head + "profile p on s.zzz { circle: 0.03 } }", "no anchor 'zzz'");
+    expectModelError(head + "profile p on g { circle: 0.03 } }", "explicit anchor");
+    expectModelError(head + "profile p on s { circle: 0 } }", "positive radius");
+    expectModelError(head + "profile p on s { polar: (0 deg, 1) (90 deg, 1) } }", "at least 3");
+    expectModelError(head + "profile p on s { polar: (0 deg, 1) (90 deg, 1) (80 deg, 1) } }",
+                     "strictly increasing");
+    expectModelError(head + "profile p on s { polar: (0 deg, 1) (90 deg, 1) (400 deg, 1) } }",
+                     "[0, 360)");
+    expectModelError(head + "profile p on s { polar: (0 deg, 1) (90 deg, -1) (180 deg, 1) } }",
+                     "positive");
+    expectModelError(head + "profile p on s { points: (0,0) (1,0) } }", "at least 3");
+    expectModelError(head + "profile p on s { points: (0,0) (1,0) (2,0) } }", "enclose no area");
+    expectModelError(head + "profile p on s { points: (0,0) (0,0) (1,1) } }", "coincident");
+
+    const std::string withP = head + "profile p on s { circle: 0.03 } ";
+    expectModelError(withP + "touch nope.tip on p }", "unknown body");
+    expectModelError(withP + "touch f.zzz on p }", "no anchor 'zzz'");
+    expectModelError(withP + "touch f.tip on nope }", "unknown profile");
+    expectModelError(withP + "touch s.A on p }", "its own profile");
+    // a ground point may ride a moving profile; ground cannot touch its own
+    buildFromText((withP + "touch g.a on p }").c_str());
+    expectModelError(head + "profile p on g.a { circle: 0.03 } touch g.r on p }", "its own profile");
+    expectModelError(withP + "touch f.tip on p roller 0 }", "positive radius");
+    // restitution belongs to dynamic mechanisms: it is meaningless where contact is bilateral
+    expectModelError(withP + "touch f.tip on p restitution 0.5 }", "no effect in a kinematic");
+    // ... and in a dynamic one it is range-checked and recorded; touch itself is now legal there
+    expectModelError(withP + "touch f.tip on p restitution 1.5 world { gravity: 9.81 } }", "[0, 1]");
+    {
+        Model m = buildFromText((withP + "touch f.tip on p roller 0.01 restitution 0.4 "
+                                         "world { gravity: 9.81 } }").c_str());
+        CHECK(m.world.dynamic);
+        CHECK_APPROX(m.touches[0].restitution, 0.4, 1e-15);
+        CHECK_APPROX(m.touches[0].roller, 0.01, 1e-15);
+        Model m2 = buildFromText((withP + "touch f.tip on p restitution 0.4 roller 0.01 "
+                                          "world { gravity: 9.81 } }").c_str());
+        CHECK_APPROX(m2.touches[0].restitution, 0.4, 1e-15);   // either order
+    }
+}
+
+void testKinematicsM6() {
+    std::printf("[kinematics M6]\n");
+
+    // ---- acceptance: the eccentric disc matches its closed form -----------------
+    {
+        double res = 0.0;
+        const double e0 = eccentricWorstError(
+            eccentricSrc("profile disc on cam.rim { circle: 0.03 }", ""), 0.0, &res);
+        CHECK(e0 < 1e-9);
+        CHECK(res < 1e-9);
+        const double e1 = eccentricWorstError(
+            eccentricSrc("profile disc on cam.rim { circle: 0.03 }", "roller 0.006"), 0.006, &res);
+        CHECK(e1 < 1e-9);
+        CHECK(res < 1e-9);
+    }
+
+    // a constant-radius polar table goes through the generic spline path and
+    // must land on the same closed form; so must a 64-point spline circle and
+    // the same points listed clockwise
+    {
+        double res = 0.0;
+        std::string polar = "profile disc on cam.rim { polar:";
+        for (int i = 0; i < 9; ++i) {
+            char b[64];
+            std::snprintf(b, sizeof b, " (%d deg, 0.03)", i * 40);
+            polar += b;
+        }
+        polar += " }";
+        CHECK(eccentricWorstError(eccentricSrc(polar, "roller 0.006"), 0.006, &res) < 1e-9);
+
+        for (int cw = 0; cw < 2; ++cw) {
+            std::string pts = "profile disc on cam.rim { points:";
+            for (int i = 0; i < 64; ++i) {
+                const double a = (cw ? -1.0 : 1.0) * i * 2.0 * kPi / 64.0;
+                char b[96];
+                std::snprintf(b, sizeof b, " (%.12f, %.12f)", 0.03 * std::cos(a), 0.03 * std::sin(a));
+                pts += b;
+            }
+            pts += " }";
+            CHECK(eccentricWorstError(eccentricSrc(pts, "roller 0.006"), 0.006, &res) < 2e-6);
+            CHECK(res < 1e-9);
+        }
+    }
+
+    // ---- analytic Jacobian vs central differences ---------------------------------
+    // moving cam with a non-circular spline profile, swing-arm roller follower:
+    // both sides of the touch row move, and the foot sweeps the curve
+    {
+        std::string src =
+            "mechanism swing {\n"
+            "  ground frame { anchor axle at (0, 0)  anchor pivot at (0.12, 0.06) }\n"
+            "  body cam { anchor axle at (0, 0)  anchor c at (0.008, 0.004) }\n"
+            "  pin cam.axle -> frame.axle\n"
+            "  profile oval on cam.c { polar:";
+        for (int i = 0; i < 36; ++i) {
+            const double a = i * 10.0;
+            char b[80];
+            std::snprintf(b, sizeof b, " (%g deg, %.8f)", a,
+                          0.03 + 0.006 * std::cos(2.0 * deg2rad(a)) + 0.002 * std::sin(deg2rad(a)));
+            src += b;
+        }
+        src += " }\n"
+               "  rod arm on frame.pivot { length: 0.12 }\n"
+               "  touch arm.B on oval roller 0.005\n"
+               "  drive cam at 45 deg/s\n}\n";
+        Model m = buildFromText(src.c_str());
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        CHECK(sys.solve(q, 0.0, iters, &res));
+        CHECK(res < 1e-9);
+
+        unsigned seed = 7;
+        auto rnd = [&]() {
+            seed = seed * 1664525u + 1013904223u;
+            return ((seed >> 8) & 0xFFFF) / 65535.0 - 0.5;
+        };
+        double worst = 0.0;
+        for (int trial = 0; trial < 12; ++trial) {
+            std::vector<double> qq = q;
+            for (double& v : qq) v += 0.004 * rnd();     // off the manifold on purpose
+            std::vector<double> J;
+            sys.jacobian(qq, J);
+            const int rows = sys.rowCount();
+            for (int j = 0; j < sys.nq; ++j) {
+                std::vector<double> qp = qq, qm = qq, cp, cm;
+                const double h = 1e-6;
+                qp[(size_t)j] += h;
+                qm[(size_t)j] -= h;
+                sys.residuals(qp, 0.0, cp);
+                sys.residuals(qm, 0.0, cm);
+                for (int i = 0; i < rows; ++i) {
+                    const double fd = (cp[(size_t)i] - cm[(size_t)i]) / (2.0 * h);
+                    worst = std::max(worst, std::fabs(fd - J[(size_t)i * sys.nq + j]));
+                }
+            }
+        }
+        CHECK(worst < 1e-6);
+    }
+
+    // ---- a profile on ground: a rod tip held on a fixed circle ---------------------
+    {
+        Model m = buildFromText(
+            "mechanism gp { ground frame { anchor pivot at (0, 0)  anchor c at (0.1, 0) }\n"
+            "  profile ring on frame.c { circle: 0.04 }\n"
+            "  rod arm on frame.pivot { length: 0.12 }\n"
+            "  touch arm.B on ring }");
+        CHECK(m.dofReport().freeDof == 0);
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        CHECK(sys.solve(q, 0.0, iters, &res));
+        CHECK(res < 1e-9);
+        const Vec2 tip = m.worldAnchor(m.bodyIndex("arm"), 1, q);
+        CHECK_APPROX(vlen(tip), 0.12, 1e-9);
+        CHECK_APPROX(vlen(tip - Vec2{0.1, 0.0}), 0.04, 1e-9);
+        CHECK(m.validateAssembly(q).empty());
+    }
+
+    // ---- an open contact is reported, not hidden -------------------------------------
+    {
+        // rod too short to ever reach the circle: assembly cannot close the gap
+        Model m = buildFromText(
+            "mechanism far { ground frame { anchor pivot at (0, 0)  anchor c at (1.0, 0) }\n"
+            "  profile ring on frame.c { circle: 0.04 }\n"
+            "  rod arm on frame.pivot { length: 0.1 }\n"
+            "  touch arm.B on ring }");
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        CHECK(!sys.solve(q, 0.0, iters, &res));
+        CHECK(res > 0.1);     // the 0.86 m shortfall is shared between pin and contact
+        CHECK(!m.validateAssembly(q).empty());
+    }
+
+    // ---- the shipped examples ----------------------------------------------------------
+    {
+        const char* files[] = { "examples/eccentric.mech", "examples/lobecam.mech" };
+        for (const char* f : files) {
+            std::ifstream in(f);
+            if (!in) { std::fprintf(stderr, "note: %s not found (cwd?)\n", f); continue; }
+            std::stringstream ss;
+            ss << in.rdbuf();
+            Model m = buildModel(parse(lex(ss.str())).mechanisms[0]);
+            CHECK(m.dofReport().residualDof == 0);
+            ConstraintSystem sys(m);
+            std::vector<double> q;
+            CHECK(m.assemble(q).empty());
+            int iters = 0;
+            double res = 0.0;
+            CHECK(sys.solve(q, 0.0, iters, &res));
+            CHECK(m.validateAssembly(q).empty());
+            const int ifol = m.bodyIndex("follower");
+            double worst = 0.0, lo = 1e9, hi = -1e9;
+            for (int k = 1; k <= 720; ++k) {          // two turns of the cam, 3 deg/step
+                const double t = k * (3.0 / m.drives[0].omegaRad * kPi / 180.0);
+                sys.solve(q, t, iters, &res);
+                worst = std::max(worst, res);
+                const double y = q[(size_t)m.bodies[ifol].qOffset + 2];
+                lo = std::min(lo, y);
+                hi = std::max(hi, y);
+            }
+            CHECK(worst < 1e-8);
+            if (std::string(f).find("eccentric") != std::string::npos) {
+                // R + rho -/+ e at the rail: sqrt(0.036^2 - 0.01^2 cos^2) + 0.01 sin
+                CHECK_APPROX(hi, eccentricY(kPi / 2.0, 0.006), 1e-6);
+                CHECK(lo < 0.0346 && lo > 0.0245);
+            } else {
+                // dwells: roller centre 36 mm up on the base circle, 46 mm on the lobe top
+                CHECK_APPROX(lo, 0.036, 2e-5);
+                CHECK_APPROX(hi, 0.046, 2e-5);
+            }
+        }
+    }
+}
+
+
+// ---- M6b: cam synthesis from displacement diagrams -----------------------------
+
+// A plate cam on a shaft, a roller follower on a rail through the axle. `camBody`
+// is spliced into the cam block; `touchTail` after the touch.
+std::string plateCamSrc(const std::string& camBody, const char* rate, const char* touchTail = "") {
+    std::string s =
+        "mechanism pc {\n"
+        "  ground frame { anchor axle at (0, 0)  anchor rail at (0, 0.09) dir (0, 1) }\n"
+        "  shaft cam at frame.axle\n"
+        "  cam lobe on cam.A { " + camBody + " }\n"
+        "  body follower { anchor tip at (0, 0) dir (1, 0) }\n"
+        "  slide follower.tip -> frame.rail\n"
+        "  touch follower.tip on lobe ";
+    s += touchTail;
+    s += "\n  drive cam at ";
+    s += rate;
+    s += " deg/s\n}\n";
+    return s;
+}
+
+const char* kCamBody =
+    "base 0.025 roller 0.006 rise 0.012 over 100 deg cycloidal dwell 60 deg "
+    "return over 140 deg modtrap dwell";
+
+void testCamLaws() {
+    std::printf("[cam M6b]\n");
+
+    const MotionLaw laws[] = {MotionLaw::Cycloidal, MotionLaw::Harmonic, MotionLaw::ModTrap};
+    const double peakA[] = {2.0 * kPi, 0.5 * kPi * kPi, 4.8881};   // textbook coefficients
+    for (int li = 0; li < 3; ++li) {
+        const MotionLaw L = laws[li];
+        // rest-to-rest, 0 -> 1
+        CHECK_APPROX(evalLaw(L, 0.0).s, 0.0, 1e-15);
+        CHECK_APPROX(evalLaw(L, 1.0).s, 1.0, 1e-12);
+        CHECK_APPROX(evalLaw(L, 0.0).v, 0.0, 1e-12);
+        CHECK_APPROX(evalLaw(L, 1.0).v, 0.0, 1e-12);
+        double worstV = 0.0, worstA = 0.0, peak = 0.0, minV = 1e9, symm = 0.0;
+        for (int k = 1; k < 1000; ++k) {
+            const double x = k / 1000.0, h = 1e-6;
+            const LawValue f = evalLaw(L, x), p = evalLaw(L, x + h), m = evalLaw(L, x - h);
+            worstV = std::max(worstV, std::fabs((p.s - m.s) / (2 * h) - f.v));
+            worstA = std::max(worstA, std::fabs((p.v - m.v) / (2 * h) - f.a));
+            peak = std::max(peak, std::fabs(f.a));
+            minV = std::min(minV, f.v);
+            symm = std::max(symm, std::fabs(f.s + evalLaw(L, 1.0 - x).s - 1.0));
+        }
+        CHECK(worstV < 1e-8);     // v is really ds/dx
+        CHECK(worstA < 1e-7);     // a is really dv/dx (continuous: no jumps hiding in the grid)
+        CHECK(minV >= -1e-12);    // monotone: the follower never backs up
+        CHECK(symm < 1e-12);      // s(x) + s(1-x) = 1
+        CHECK_APPROX(peak, peakA[li], 2e-4);
+    }
+    CHECK(std::string(lawName(MotionLaw::ModTrap)) == "modtrap");
+}
+
+void testCamDiagram() {
+    std::printf("[cam diagram M6b]\n");
+
+    auto seg = [](CamSegment::Kind k, double lift, double deg, bool rest = false) {
+        CamSegment c;
+        c.kind = k;
+        c.lift = lift;
+        c.angle = deg2rad(deg);
+        c.restOfTurn = rest;
+        return c;
+    };
+    using K = CamSegment::Kind;
+    auto build = [&](std::vector<CamSegment> segs, CamError& err) {
+        CamSpec sp;
+        sp.base = 0.03;
+        sp.segments = std::move(segs);
+        CamDiagram d;
+        const bool ok = d.build(sp, err);
+        return ok;
+    };
+    CamError err;
+
+    // a good diagram: values at known angles; dwells are exactly flat
+    {
+        CamSpec sp;
+        sp.base = 0.03;
+        sp.segments = {seg(K::Rise, 0.012, 100), seg(K::Dwell, 0, 60),
+                       seg(K::Return, 0, 140), seg(K::Dwell, 0, 0, true)};
+        CamDiagram d;
+        CHECK(d.build(sp, err));
+        CHECK_APPROX(d.maxLift(), 0.012, 1e-15);
+        double s, ds, dds;
+        d.eval(deg2rad(50.0), s, ds, dds);               // cycloidal midpoint
+        CHECK_APPROX(s, 0.006, 1e-12);
+        CHECK_APPROX(ds, 2.0 * 0.012 / deg2rad(100.0), 1e-9);   // peak velocity 2h/beta
+        CHECK_APPROX(dds, 0.0, 1e-9);
+        for (double deg : {101.0, 130.0, 159.9}) {        // dwell at the top
+            d.eval(deg2rad(deg), s, ds, dds);
+            CHECK(s == 0.012 && ds == 0.0 && dds == 0.0);
+        }
+        for (double deg : {301.0, 330.0, 359.9}) {        // closing dwell at the base
+            d.eval(deg2rad(deg), s, ds, dds);
+            CHECK(s == 0.0 && ds == 0.0 && dds == 0.0);
+        }
+        d.eval(deg2rad(10.0 + 360.0), s, ds, dds);        // periodic
+        double s2, a2, b2;
+        d.eval(deg2rad(10.0), s2, a2, b2);
+        CHECK_APPROX(s, s2, 1e-15);
+        d.eval(deg2rad(-350.0), s, ds, dds);
+        CHECK_APPROX(s, s2, 1e-12);
+    }
+
+    // errors name the problem
+    auto fails = [&](std::vector<CamSegment> segs, const char* needle, int segIdx = -2) {
+        CamError e;
+        CHECK(!build(std::move(segs), e));
+        CHECK(e.msg.find(needle) != std::string::npos);
+        if (segIdx != -2) CHECK(e.segment == segIdx);
+    };
+    fails({}, "no motion segments");
+    fails({seg(K::Rise, 0.01, 180), seg(K::Dwell, 0, 0, true)}, "does not close");
+    fails({seg(K::Rise, 0.01, 100), seg(K::Return, 0, 100)}, "200 of 360");   // not a full turn
+    fails({seg(K::Rise, 0.01, 200), seg(K::Return, 0, 200)}, "more than one turn");
+    fails({seg(K::Rise, 0.01, 100), seg(K::Fall, 0.02, 100), seg(K::Dwell, 0, 0, true)},
+          "below the base circle", 1);
+    fails({seg(K::Return, 0, 100), seg(K::Dwell, 0, 0, true)}, "nothing to return from", 0);
+    fails({seg(K::Rise, 0.0, 100), seg(K::Dwell, 0, 0, true)}, "positive lift", 0);
+    fails({seg(K::Dwell, 0, 0, true), seg(K::Rise, 0.01, 100)}, "must be the last", 0);
+    fails({seg(K::Rise, 0.01, 180), seg(K::Return, 0, 180), seg(K::Dwell, 0, 0, true)},
+          "no angle left", 2);
+    fails({seg(K::Rise, 0.01, -5), seg(K::Dwell, 0, 0, true)}, "positive angle", 0);
+}
+
+void testCamDesign() {
+    std::printf("[cam design M6b]\n");
+
+    using K = CamSegment::Kind;
+    auto seg = [](K k, double lift, double deg, bool rest = false) {
+        CamSegment c;
+        c.kind = k;
+        c.lift = lift;
+        c.angle = deg2rad(deg);
+        c.restOfTurn = rest;
+        return c;
+    };
+
+    // zero lift: the pitch curve is the prime circle, so its radius of
+    // curvature is exactly base + roller and the pressure angle is zero
+    {
+        CamSpec sp;
+        sp.base = 0.03;
+        sp.roller = 0.006;
+        sp.segments = {seg(K::Dwell, 0, 0, true)};
+        CamDiagram d;
+        CamError e;
+        CHECK(d.build(sp, e));
+        const CamDesign cd = designCam(sp, d);
+        CHECK_APPROX(cd.minConvexRadius, 0.036, 1e-9);
+        CHECK_APPROX(cd.maxPressure, 0.0, 1e-15);
+        CHECK(!cd.undercut);
+        // the surface is the base circle (offset in by the roller)
+        double worst = 0.0;
+        for (const Vec2& p : cd.surface) worst = std::max(worst, std::fabs(vlen(p) - 0.03));
+        CHECK(worst < 1e-12);
+    }
+
+    // pressure angle against a hand calculation: a lone cycloidal rise, then
+    // maximize atan((h/beta)(1 - cos 2 pi x) / (r0 + h(x - sin(2 pi x)/2pi))) over x
+    {
+        const double h = 0.012, beta = deg2rad(100.0), r0 = 0.031;
+        CamSpec sp;
+        sp.base = 0.025;
+        sp.roller = 0.006;
+        sp.segments = {seg(K::Rise, h, 100), seg(K::Dwell, 0, 60), seg(K::Return, 0, 100),
+                       seg(K::Dwell, 0, 0, true)};
+        sp.segments[2].law = MotionLaw::Cycloidal;
+        CamDiagram d;
+        CamError e;
+        CHECK(d.build(sp, e));
+        const CamDesign cd = designCam(sp, d);
+        double hand = 0.0, handX = 0.0;
+        for (int k = 0; k <= 2000000; ++k) {
+            const double x = k / 2000000.0;
+            const double a = std::atan((h / beta) * (1.0 - std::cos(2.0 * kPi * x)) /
+                                       (r0 + h * (x - std::sin(2.0 * kPi * x) / (2.0 * kPi))));
+            if (a > hand) { hand = a; handX = x; }
+        }
+        CHECK_APPROX(cd.maxPressure, hand, 1e-6);
+        // rise and return mirror each other, so the maximum occurs twice: on the
+        // rise's early half (smaller radius) and the return's late half; either
+        // may be reported. Return starts at 160 deg and is 100 deg long.
+        const double at = rad2deg(cd.maxPressureAt);
+        const double riseAt = rad2deg(handX * beta);
+        const double returnAt = 160.0 + 100.0 - riseAt;
+        CHECK(std::fabs(at - riseAt) < 0.06 || std::fabs(at - returnAt) < 0.06);   // 0.05 deg grid
+    }
+
+    // radius of curvature against the polar formula
+    //   kappa = (r^2 + 2 r'^2 - r r'') / (r^2 + r'^2)^(3/2),  r = r0 + s(theta)
+    // (an independent route from the vector formula used by the synthesizer)
+    {
+        CamSpec sp;
+        sp.base = 0.025;
+        sp.roller = 0.006;
+        sp.segments = {seg(K::Rise, 0.012, 100), seg(K::Dwell, 0, 60),
+                       seg(K::Return, 0, 140), seg(K::Dwell, 0, 0, true)};
+        sp.segments[2].law = MotionLaw::ModTrap;
+        CamDiagram d;
+        CamError e;
+        CHECK(d.build(sp, e));
+        const CamDesign cd = designCam(sp, d);
+        double minR = 1e9;
+        for (int k = 0; k < 7200; ++k) {
+            double s, ds, dds;
+            d.eval(2.0 * kPi * k / 7200.0, s, ds, dds);
+            const double r = 0.031 + s;
+            const double kappa = (r * r + 2.0 * ds * ds - r * dds) /
+                                 std::pow(r * r + ds * ds, 1.5);
+            if (kappa > 1e-12) minR = std::min(minR, 1.0 / kappa);
+        }
+        CHECK_APPROX(cd.minConvexRadius, minR, 1e-9);
+        CHECK(cd.minConvexRadius > 0.006 && !cd.undercut);
+    }
+
+    // a tight lobe under a big roller undercuts
+    {
+        CamSpec sp;
+        sp.base = 0.02;
+        sp.roller = 0.015;
+        sp.segments = {seg(K::Rise, 0.02, 40), seg(K::Return, 0, 40), seg(K::Dwell, 0, 0, true)};
+        CamDiagram d;
+        CamError e;
+        CHECK(d.build(sp, e));
+        CHECK(designCam(sp, d).undercut);
+    }
+}
+
+void testParserModelM6b() {
+    std::printf("[parser+model M6b]\n");
+
+    // parse: every item, host either side, 'cam' still a fine body name
+    {
+        const Program p = parseText(
+            "mechanism m { ground g { anchor a at (0,0) } shaft cam at g.a "
+            "cam lobe { base 0.03 roller 0.005 start 100 deg turn cw "
+            "rise 0.01 over 90 deg harmonic fall 0.004 over 45 deg dwell 10 deg "
+            "return over 100 deg modtrap dwell } on cam }");
+        const CamDecl& c = p.mechanisms[0].cams[0];
+        CHECK(c.name == "lobe" && c.host == "cam" && c.hostAnchor.empty());
+        CHECK(c.hasBase);
+        CHECK_APPROX(c.spec.base, 0.03, 1e-15);
+        CHECK_APPROX(c.spec.roller, 0.005, 1e-15);
+        CHECK_APPROX(c.spec.startRad, deg2rad(100.0), 1e-12);
+        CHECK(c.spec.turn == -1);
+        CHECK(c.spec.segments.size() == 5 && c.segLines.size() == 5);
+        CHECK(c.spec.segments[0].kind == CamSegment::Kind::Rise);
+        CHECK(c.spec.segments[0].law == MotionLaw::Harmonic);
+        CHECK(c.spec.segments[1].kind == CamSegment::Kind::Fall);
+        CHECK(c.spec.segments[1].law == MotionLaw::Cycloidal);       // the default
+        CHECK(!c.spec.segments[2].restOfTurn);
+        CHECK_APPROX(c.spec.segments[2].angle, deg2rad(10.0), 1e-12);
+        CHECK(c.spec.segments[3].kind == CamSegment::Kind::Return);
+        CHECK(c.spec.segments[3].law == MotionLaw::ModTrap);
+        CHECK(c.spec.segments[4].restOfTurn);
+    }
+
+    auto expectParseError = [&](const char* src, const char* needle) {
+        bool threw = false;
+        try {
+            parseText(src);
+        } catch (const ParseError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find(needle) != std::string::npos);
+            CHECK(e.line >= 1);
+        }
+        CHECK(threw);
+    };
+    expectParseError("mechanism m { cam c on s { rise 0.01 over 90 deg bouncy } }", "unknown motion law 'bouncy'");
+    expectParseError("mechanism m { cam c on s { rise 0.01 over 90 } }", "expected 'deg'");
+    expectParseError("mechanism m { cam c on s { rise 0.01 90 deg } }", "expected 'over'");
+    expectParseError("mechanism m { cam c on s { turn sideways } }", "'ccw' or 'cw'");
+    expectParseError("mechanism m { cam c on s { jump 3 } }", "expected cam item");
+    expectParseError("mechanism m { cam c { base 1 } }", "needs a host");
+    expectParseError("mechanism m { cam c on s { start 90 } }", "expected 'deg'");
+
+    // model
+    auto expectModelError = [&](const std::string& body, const char* needle, int line = -1) {
+        bool threw = false;
+        try {
+            buildFromText(plateCamSrc(body, "30").c_str());
+        } catch (const SemanticError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find(needle) != std::string::npos);
+            if (line >= 0) CHECK(e.line == line);
+        }
+        CHECK(threw);
+    };
+    expectModelError("rise 0.01 over 100 deg dwell", "needs a 'base'");
+    expectModelError("base 0 rise 0.01 over 100 deg return over 100 deg dwell", "'base' must be positive");
+    expectModelError("base 0.03 roller -1 rise 0.01 over 100 deg return over 100 deg dwell", "cannot be negative");
+    expectModelError("base 0.03 rise 0.01 over 100 deg", "100 of 360");
+    expectModelError("base 0.03 rise 0.01 over 100 deg dwell", "does not close");
+    expectModelError("base 0.02 roller 0.015 rise 0.02 over 40 deg return over 40 deg dwell", "undercut");
+
+    // the segment's own source line is reported (line 3 of the spliced source)
+    {
+        bool threw = false;
+        try {
+            buildFromText(
+                "mechanism m {\n  ground g { anchor a at (0,0) }\n  shaft cam at g.a\n"
+                "  cam lobe on cam.A {\n    base 0.03\n    return over 100 deg\n    dwell\n  }\n}");
+        } catch (const SemanticError& e) {
+            threw = true;
+            CHECK(e.line == 6);
+            CHECK(std::string(e.msg).find("cam 'lobe'") != std::string::npos);
+        }
+        CHECK(threw);
+    }
+
+    // shared namespace, host resolution
+    {
+        bool threw = false;
+        try {
+            buildFromText(
+                "mechanism m { ground g { anchor a at (0,0) } shaft cam at g.a "
+                "profile lobe on cam { circle: 0.03 } "
+                "cam lobe on cam { base 0.03 rise 0.01 over 90 deg return over 90 deg dwell } }");
+        } catch (const SemanticError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find("duplicate profile name") != std::string::npos);
+        }
+        CHECK(threw);
+        threw = false;
+        try {
+            buildFromText("mechanism m { ground g { anchor a at (0,0) } "
+                          "cam lobe on nope { base 0.03 rise 0.01 over 90 deg return over 90 deg dwell } }");
+        } catch (const SemanticError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find("cam 'lobe' refers to unknown host body") != std::string::npos);
+        }
+        CHECK(threw);
+    }
+
+    // what the model records; a touch follows the cam's roller by default
+    {
+        Model m = buildFromText(plateCamSrc(kCamBody, "30").c_str());
+        CHECK(m.cams.size() == 1 && m.profiles.size() == 1);
+        CHECK(m.profiles[0].fromCam);
+        CHECK_APPROX(m.profiles[0].designRoller, 0.006, 1e-15);
+        CHECK_APPROX(m.touches[0].roller, 0.006, 1e-15);
+        CHECK_APPROX(m.cams[0].maxLift, 0.012, 1e-15);
+        CHECK(m.cams[0].maxPressure > 0.0 && m.cams[0].minConvexRadius > 0.006);
+        CHECK(m.dofReport().residualDof == 0);
+        std::vector<double> q;
+        CHECK(m.assemble(q).empty());        // no roller-mismatch warning
+
+        // an explicit, different roller still works but is flagged at assembly
+        Model mm = buildFromText(plateCamSrc(kCamBody, "30", "roller 0.01").c_str());
+        CHECK_APPROX(mm.touches[0].roller, 0.01, 1e-15);
+        const std::vector<std::string> w = mm.assemble(q);
+        CHECK(w.size() == 1 && w[0].find("was cut for") != std::string::npos);
+        // an explicit matching roller is fine
+        Model m3 = buildFromText(plateCamSrc(kCamBody, "30", "roller 0.006").c_str());
+        CHECK(m3.assemble(q).empty());
+    }
+}
+
+// y of the follower centre over two turns vs r0 + s(delta), delta the diagram
+// angle the follower currently sits on. Returns the worst deviation; also the
+// worst pressure-angle error against atan(|s'|/r) read from the real contact.
+void camFollowsDiagram(const std::string& src, double rateDegPerSec, double* worstY,
+                       double* worstPressure, double* worstRes) {
+    Model m = buildFromText(src.c_str());
+    const CamSpec spec = m.cams[0].spec;
+    CamDiagram dia;
+    CamError ce;
+    dia.build(spec, ce);
+    ConstraintSystem sys(m);
+    std::vector<double> q;
+    m.assemble(q);
+    int iters = 0;
+    double res = 0.0;
+    sys.solve(q, 0.0, iters, &res);
+    const int ifol = m.bodyIndex("follower"), icam = m.bodyIndex("cam");
+    const double r0 = spec.base + spec.roller;
+    const double sg = (double)spec.turn;
+    *worstY = *worstPressure = *worstRes = 0.0;
+    const double dt = 5.0 / std::fabs(rateDegPerSec);
+    for (int k = 0; k <= 144; ++k) {
+        const double t = k * dt;
+        sys.solve(q, t, iters, &res);
+        *worstRes = std::max(*worstRes, res);
+        const double thCam = q[(size_t)m.bodies[icam].qOffset];
+        // the follower sits on rail angle 90 deg; in the cam frame that is 90 - thCam
+        const double delta = sg * (spec.startRad - (kPi / 2.0 - thCam));
+        double s, ds, dds;
+        dia.eval(delta, s, ds, dds);
+        *worstY = std::max(*worstY, std::fabs(q[(size_t)m.bodies[ifol].qOffset + 2] - (r0 + s)));
+        // pressure angle from the actual contact normal vs the rail (+y)
+        const ContactState cs = m.touchState(m.touches[0], q);
+        const double alphaGeom = std::fabs(std::atan2(cs.normal.x, cs.normal.y));
+        const double alphaDiag = std::atan2(std::fabs(ds), r0 + s);
+        *worstPressure = std::max(*worstPressure, std::fabs(alphaGeom - alphaDiag));
+    }
+}
+
+void testKinematicsM6b() {
+    std::printf("[kinematics M6b]\n");
+
+    // ---- the follower follows the diagram, for every law -------------------------
+    const char* laws[] = {"cycloidal", "harmonic", "modtrap"};
+    for (const char* law : laws) {
+        const std::string body = std::string(
+            "base 0.025 roller 0.006 rise 0.012 over 100 deg ") + law +
+            " dwell 60 deg return over 140 deg " + law + " dwell";
+        double wy, wp, wr;
+        camFollowsDiagram(plateCamSrc(body, "30"), 30.0, &wy, &wp, &wr);
+        CHECK(wy < 1e-8);       // the surface is a 720-point spline: error ~1e-11
+        // The contact normal agrees with tan(alpha) = s'/r. Harmonic motion has
+        // a jump in acceleration at each segment end, so the true surface has a
+        // curvature discontinuity there that a C2 spline cannot hold: the normal
+        // is off by ~0.045 deg at those two junctions (positions are not).
+        CHECK(wp < (std::string(law) == "harmonic" ? 2e-3 : 1e-6));
+        CHECK(wr < 1e-9);
+    }
+
+    // knife-edge follower (no roller): the surface IS the pitch curve
+    {
+        double wy, wp, wr;
+        camFollowsDiagram(plateCamSrc(
+            "base 0.03 rise 0.01 over 120 deg dwell 60 deg return over 120 deg dwell", "30"),
+            30.0, &wy, &wp, &wr);
+        CHECK(wy < 1e-8 && wp < 1e-6 && wr < 1e-9);
+    }
+
+    // a cam driven the other way ('turn cw', negative rate) and a rotated start
+    {
+        double wy, wp, wr;
+        camFollowsDiagram(plateCamSrc(
+            "base 0.025 roller 0.006 turn cw rise 0.012 over 100 deg dwell 60 deg "
+            "return over 140 deg dwell", "-30"), -30.0, &wy, &wp, &wr);
+        CHECK(wy < 1e-8 && wp < 1e-6 && wr < 1e-9);
+        camFollowsDiagram(plateCamSrc(
+            "base 0.025 roller 0.006 start 150 deg rise 0.012 over 100 deg dwell 60 deg "
+            "return over 140 deg dwell", "30"), 30.0, &wy, &wp, &wr);
+        CHECK(wy < 1e-8 && wp < 1e-6 && wr < 1e-9);
+    }
+
+    // the dwell is exactly flat: 60 degrees of cam rotation, the follower does not move
+    {
+        Model m = buildFromText(plateCamSrc(kCamBody, "30").c_str());
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        const int ifol = m.bodyIndex("follower");
+        double lo = 1e9, hi = -1e9;
+        for (int k = 0; k <= 50; ++k) {                         // 105 .. 155 degrees
+            sys.solve(q, (105.0 + k) / 30.0, iters, &res);
+            const double y = q[(size_t)m.bodies[ifol].qOffset + 2];
+            lo = std::min(lo, y);
+            hi = std::max(hi, y);
+        }
+        CHECK(hi - lo < 1e-9);
+        CHECK_APPROX(hi, 0.025 + 0.006 + 0.012, 1e-8);
+    }
+
+    // the shipped example
+    {
+        std::ifstream in("examples/platecam.mech");
+        if (!in) {
+            std::fprintf(stderr, "note: examples/platecam.mech not found (cwd?)\n");
+        } else {
+            std::stringstream ss;
+            ss << in.rdbuf();
+            Model m = buildModel(parse(lex(ss.str())).mechanisms[0]);
+            CHECK(m.cams.size() == 1);
+            CHECK(m.dofReport().residualDof == 0);
+            CHECK(m.cams[0].maxPressure < deg2rad(30.0));
+            ConstraintSystem sys(m);
+            std::vector<double> q;
+            CHECK(m.assemble(q).empty());
+            int iters = 0;
+            double res = 0.0;
+            CHECK(sys.solve(q, 0.0, iters, &res));
+            CHECK(m.validateAssembly(q).empty());
+            const int ifol = m.bodyIndex("follower");
+            double lo = 1e9, hi = -1e9, worst = 0.0;
+            for (int k = 1; k <= 480; ++k) {
+                sys.solve(q, k * 0.0125, iters, &res);
+                worst = std::max(worst, res);
+                const double y = q[(size_t)m.bodies[ifol].qOffset + 2];
+                lo = std::min(lo, y);
+                hi = std::max(hi, y);
+            }
+            CHECK(worst < 1e-8);
+            CHECK_APPROX(lo, 0.031, 1e-8);
+            CHECK_APPROX(hi, 0.043, 1e-8);
+        }
+    }
+}
+
+
+// ---- M6c: unilateral contact in the dynamics ------------------------------------
+
+// The second-order contact term, checked the hard way: from a state on the
+// constraint manifold with a consistent velocity, advance
+//   q(h) = q + h qd + h^2/2 qdd          (qdd from the dynamics)
+// and look at the constraint residual with its exact first-order part removed
+// (that part is J qd - nu, which the damped velocity projection only satisfies
+// to ~1e-5 in ill-conditioned poses; it is not what is under test). If every
+// row's bias is right the true trajectory stays on the manifold to second
+// order, so what remains is O(h^3), ~1e-10 here; a bias wrong by delta leaves
+// delta h^2 / 2 = 2e-6 delta at h = 2e-3 — thousands of times more.
+// Returns the worst remainder over all rows and trials.
+double biasDrift(const char* src, int* trials) {
+    Model m = buildFromText(src);
+    ConstraintSystem sys(m);
+    DynamicsSystem dyn(m, sys);
+    std::vector<double> q;
+    m.assemble(q);
+    for (const TouchJoint& tj : m.touches) tj.engaged = true;
+    int iters = 0;
+    double res = 0.0;
+    unsigned seed = 99;
+    auto rnd = [&]() {
+        seed = seed * 1664525u + 1013904223u;
+        return ((seed >> 8) & 0xFFFF) / 65535.0 - 0.5;
+    };
+    double worst = 0.0;
+    *trials = 0;
+    for (int k = 0; k < 14; ++k) {
+        const double t = 0.045 * k;
+        if (!sys.solve(q, t, iters, &res)) continue;
+        std::vector<double> qd((size_t)m.nq());
+        for (double& v : qd) v = 6.0 * rnd();
+        dyn.projectVelocities(q, qd);
+        std::vector<double> qdd;
+        dyn.accelerations(q, qd, qdd);
+        // exact first-order part of the residual along the velocity path
+        std::vector<double> c0, cp, cm, c1;
+        sys.residuals(q, t, c0);
+        {
+            const double e = 1e-6;
+            std::vector<double> qp(q.size()), qm(q.size());
+            for (size_t i = 0; i < q.size(); ++i) { qp[i] = q[i] + e * qd[i]; qm[i] = q[i] - e * qd[i]; }
+            sys.residuals(qp, t + e, cp);
+            sys.residuals(qm, t - e, cm);
+            c1.resize(cp.size());
+            for (size_t i = 0; i < cp.size(); ++i) c1[i] = (cp[i] - cm[i]) / (2.0 * e);
+        }
+        auto drift = [&](double h) {
+            std::vector<double> qh(q.size()), c;
+            for (size_t i = 0; i < q.size(); ++i) qh[i] = q[i] + h * qd[i] + 0.5 * h * h * qdd[i];
+            sys.residuals(qh, t + h, c);
+            double mx = 0.0;
+            for (size_t i = 0; i < c.size(); ++i)
+                mx = std::max(mx, std::fabs(c[i] - c0[i] - h * c1[i]));
+            return mx;
+        };
+        double speed = 0.0;
+        for (double v : qd) speed = std::max(speed, std::fabs(v));
+        if (speed < 0.5) continue;                       // a state at rest proves nothing
+        worst = std::max(worst, drift(2e-3));
+        ++*trials;
+    }
+    return worst;
+}
+
+void testContactDynamics() {
+    std::printf("[dynamics M6c]\n");
+
+    // ---- the bias term -----------------------------------------------------------
+    {
+        std::string oval =
+            "mechanism swing {\n"
+            "  world { gravity: 9.81 }\n"
+            "  ground frame { anchor axle at (0, 0)  anchor pivot at (0.12, 0.06) }\n"
+            "  body cam { anchor axle at (0, 0)  anchor c at (0.008, 0.004) }\n"
+            "  pin cam.axle -> frame.axle\n"
+            "  profile oval on cam.c { polar:";
+        for (int i = 0; i < 36; ++i) {
+            const double a = i * 10.0;
+            char b[80];
+            std::snprintf(b, sizeof b, " (%g deg, %.8f)", a,
+                          0.03 + 0.006 * std::cos(2.0 * deg2rad(a)) + 0.002 * std::sin(deg2rad(a)));
+            oval += b;
+        }
+        oval += " }\n"
+                "  rod arm on frame.pivot { length: 0.12 }\n"
+                "  touch arm.B on oval roller 0.005\n"
+                "  drive cam at 45 deg/s\n}\n";
+        int n = 0;
+        const double drift1 = biasDrift(oval.c_str(), &n);
+        CHECK(n >= 5);
+        CHECK(drift1 < 1e-8);
+
+        // the profile rides a swinging arm, touched by a driven crank tip: the
+        // foot slides while both bodies turn about different pivots
+        std::string flip =
+            "mechanism flip {\n"
+            "  world { gravity: 9.81 }\n"
+            "  ground frame { anchor p1 at (0, 0)  anchor p2 at (0.07, 0.02) }\n"
+            "  rod crank on frame.p1 { length: 0.05 }\n"
+            "  body arm { anchor piv at (0, 0)  anchor c at (0.02, 0.005) }\n"
+            "  pin arm.piv -> frame.p2\n"
+            "  profile blob on arm.c { points:";
+        for (int i = 0; i < 40; ++i) {
+            const double a = i * 2.0 * kPi / 40.0;
+            char b[80];
+            std::snprintf(b, sizeof b, " (%.8f, %.8f)", 0.035 * std::cos(a), 0.022 * std::sin(a));
+            flip += b;
+        }
+        flip += " }\n"
+                "  touch crank.B on blob roller 0.004\n"
+                "  drive crank at 60 deg/s\n}\n";
+        const double drift2 = biasDrift(flip.c_str(), &n);
+        CHECK(n >= 5);
+        CHECK(drift2 < 1e-8);
+    }
+
+    // ---- a ball dropped on a fixed circle: Newton restitution, in closed form --------
+    // The ball (1 kg) rides a vertical rail through the top of a ground circle and
+    // starts h0 = 0.1 m above it, at rest. It lands at v = sqrt(2 g h0) and leaves at
+    // e v: the k-th rebound peaks at e^(2k) h0, and each impact dissipates
+    // (1 - e^2) v^2 / 2.
+    auto dropSrc = [](double e) {
+        char b[600];
+        std::snprintf(b, sizeof b,
+            "mechanism drop {\n"
+            "  world { gravity: 9.81  step: 0.0005 }\n"
+            "  ground frame { anchor c at (0, 0)  anchor rail at (0, 0.30) dir (0, 1) }\n"
+            "  profile floor on frame.c { circle: 0.2 }\n"
+            "  body ball { anchor tip at (0, 0) dir (1, 0)  mass: 1 }\n"
+            "  slide ball.tip -> frame.rail\n"
+            "  touch ball.tip on floor restitution %g\n}\n", e);
+        return std::string(b);
+    };
+    struct DropResult {
+        double apex[8] = {0, 0, 0, 0, 0, 0, 0, 0};   // peak height above the floor between impacts
+        double lossAfterFirst = 0.0, ledger = 0.0, totalLoss = 0.0, finalForce = 0.0, finalY = 0.0;
+        double firstImpactT = 0.0;
+        bool engagedAtEnd = false;
+        bool startedInFlight = false;
+        long impacts = 0;
+    };
+    auto drop = [&](double e, double T) {
+        DropResult r;
+        Model m = buildFromText(dropSrc(e).c_str());
+        ConstraintSystem sys(m);
+        DynamicsSystem dyn(m, sys);
+        std::vector<double> q, qd((size_t)m.nq(), 0.0);
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        dyn.projectVelocities(q, qd);
+        r.startedInFlight = !m.touches[0].engaged;
+        const double E0 = dyn.kinetic(q, qd) + dyn.potential(q);
+        const int ib = m.bodyIndex("ball");
+        const double h = m.world.step;
+        r.apex[0] = q[(size_t)m.bodies[ib].qOffset + 2] - 0.2;   // where it starts
+        long seen = 0;
+        for (long k = 0; k < (long)std::llround(T / h); ++k) {
+            dyn.step(q, qd, k * h);
+            const long n = dyn.hybridStats().impacts;
+            if (n >= 1 && seen == 0) {
+                seen = 1;
+                r.lossAfterFirst = dyn.hybridStats().impactLoss;
+                r.firstImpactT = (k + 1) * h;
+            }
+            if (n < 8) {
+                const double y = q[(size_t)m.bodies[ib].qOffset + 2] - 0.2;
+                r.apex[n] = std::max(r.apex[n], y);
+            }
+        }
+        const HybridStats& hs = dyn.hybridStats();
+        const double dE = dyn.kinetic(q, qd) + dyn.potential(q) - E0;
+        r.ledger = dE - (hs.driveWork - hs.impactLoss);
+        r.totalLoss = hs.impactLoss;
+        r.impacts = hs.impacts;
+        r.engagedAtEnd = m.touches[0].engaged;
+        std::vector<double> qdd;
+        dyn.accelerations(q, qd, qdd);
+        r.finalForce = dyn.contactForces()[0];
+        r.finalY = q[(size_t)m.bodies[ib].qOffset + 2];
+        return r;
+    };
+    {
+        const double e = 0.5, h0 = 0.1;
+        const DropResult r = drop(e, 1.0);
+        CHECK(r.startedInFlight);                                  // placed 0.1 m above: starts in flight
+        CHECK_APPROX(r.firstImpactT, std::sqrt(2.0 * h0 / 9.81), 6e-4);
+        CHECK_APPROX(r.apex[0], h0, 1e-12);
+        CHECK_APPROX(r.apex[1], e * e * h0, 2e-5);                 // 0.025
+        CHECK_APPROX(r.apex[2], std::pow(e, 4) * h0, 2e-5);        // 0.00625
+        CHECK_APPROX(r.apex[3], std::pow(e, 6) * h0, 2e-5);        // 0.0015625
+        CHECK_APPROX(r.lossAfterFirst, 9.81 * h0 * (1.0 - e * e), 2e-3);   // (1 - e^2) m g h0
+        // it comes to rest on the circle, held by exactly its weight
+        CHECK(r.engagedAtEnd);
+        CHECK_APPROX(r.finalForce, 9.81, 1e-4);
+        CHECK_APPROX(r.finalY, 0.2, 1e-8);
+        // every joule it started with above the floor went into impacts
+        CHECK_APPROX(r.totalLoss, 9.81 * h0, 2e-3);
+        CHECK(std::fabs(r.ledger) < 2e-4);
+        CHECK(r.impacts >= 9 && r.impacts <= 13);                  // a finite Zeno sequence: 11
+    }
+    {
+        // perfectly elastic: it climbs back to where it started, nothing is lost
+        const DropResult r = drop(1.0, 0.62);      // long enough to see the second peak (t = 0.571)
+        CHECK_APPROX(r.apex[1], 0.1, 3e-4);
+        CHECK_APPROX(r.apex[2], 0.1, 6e-4);
+        CHECK(r.totalLoss < 2e-3);
+        CHECK(std::fabs(r.ledger) < 2e-3);
+        // perfectly plastic: no bounce at all, the whole drop is dissipated
+        const DropResult p = drop(0.0, 0.6);
+        CHECK(p.impacts == 1);
+        CHECK_APPROX(p.apex[1], 0.0, 2e-6);
+        CHECK(p.engagedAtEnd);
+        CHECK_APPROX(p.finalForce, 9.81, 1e-4);
+        CHECK_APPROX(p.totalLoss, 9.81 * 0.1, 2e-3);
+    }
+
+    // ---- a spring-loaded follower on a plate cam ---------------------------------------
+    // 100 g follower, spring k to the axle (rest 0.020 m), gravity, the platecam
+    // diagram. While the contact holds, the follower is exactly on the diagram
+    // y = r0 + s(theta), so Newton fixes the normal force in closed form:
+    //   N cos(alpha) = m (omega^2 s'' + g) + k (y - rest),   cos(alpha) = y / sqrt(y^2 + s'^2)
+    // and the cam lets go where that N reaches zero.
+    auto jumpSrc = [](double rpm, double railY) {
+        char b[1200];
+        std::snprintf(b, sizeof b,
+            "mechanism jump {\n"
+            "  world { gravity: 9.81  step: 0.0005 }\n"
+            "  ground frame { anchor axle at (0, 0)  anchor rail at (0, %g) dir (0, 1) }\n"
+            "  shaft cam at frame.axle\n"
+            "  cam lobe on cam.A { base 0.025 roller 0.006 rise 0.012 over 100 deg cycloidal\n"
+            "    dwell 60 deg return over 140 deg modtrap dwell }\n"
+            "  body follower { anchor tip at (0, 0) dir (1, 0)  mass: 0.1 }\n"
+            "  slide follower.tip -> frame.rail\n"
+            "  spring preload follower.tip -> frame.axle { k: 200  rest: 0.020 }\n"
+            "  touch follower.tip on lobe restitution 0.3\n"
+            "  drive cam at %g rpm\n}\n", railY, rpm);
+        return std::string(b);
+    };
+    // closed-form contact force on the diagram at cam angle theta (rad), speed omega
+    auto diagramForce = [](const CamDiagram& dia, double theta, double omega) {
+        double s, ds, dds;
+        dia.eval(theta, s, ds, dds);
+        const double y = 0.031 + s;
+        const double cosA = y / std::sqrt(y * y + ds * ds);
+        return (0.1 * (omega * omega * dds + 9.81) + 200.0 * (y - 0.020)) / cosA;
+    };
+
+    {   // slow: the contact never lets go, and its force is the closed form
+        Model m = buildFromText(jumpSrc(300.0, 0.031).c_str());
+        CHECK(m.touches[0].engaged);                       // placed on the base circle: engaged
+        CamDiagram dia;
+        CamError ce;
+        CHECK(dia.build(m.cams[0].spec, ce));
+        ConstraintSystem sys(m);
+        DynamicsSystem dyn(m, sys);
+        std::vector<double> q, qd((size_t)m.nq(), 0.0);
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        dyn.projectVelocities(q, qd);
+        const double omega = 300.0 * kPi / 30.0;
+        const int ifol = m.bodyIndex("follower"), icam = m.bodyIndex("cam");
+        const double h = m.world.step;
+        double worstY = 0.0, worstF = 0.0, minF = 1e9;
+        bool alwaysEngaged = true;
+        for (long k = 0; k < 800; ++k) {                   // 0.4 s = two turns
+            dyn.step(q, qd, k * h);
+            alwaysEngaged = alwaysEngaged && m.touches[0].engaged;
+            const double th = q[(size_t)m.bodies[icam].qOffset];
+            double s, ds, dds;
+            dia.eval(th, s, ds, dds);
+            worstY = std::max(worstY, std::fabs(q[(size_t)m.bodies[ifol].qOffset + 2] - (0.031 + s)));
+            if (k % 10 == 0) {
+                std::vector<double> qdd;
+                dyn.accelerations(q, qd, qdd);
+                worstF = std::max(worstF, std::fabs(dyn.contactForces()[0] - diagramForce(dia, th, omega)));
+                minF = std::min(minF, dyn.contactForces()[0]);
+            }
+        }
+        CHECK(alwaysEngaged);
+        CHECK(dyn.hybridStats().liftoffs == 0 && dyn.hybridStats().impacts == 0);
+        CHECK(worstY < 1e-8);                              // exactly on the diagram
+        CHECK(worstF < 2e-3);                              // Newton's law, to 2 mN of ~5 N
+        CHECK(minF > 0.0);
+    }
+
+    {   // fast: it lifts off where the closed form says, flies, lands, repeats
+        const double rpm = 600.0, omega = rpm * kPi / 30.0;
+        Model m = buildFromText(jumpSrc(rpm, 0.031).c_str());
+        CamDiagram dia;
+        CamError ce;
+        dia.build(m.cams[0].spec, ce);
+
+        // predicted lift-off: first angle in the rise where the engaged force reaches zero
+        double thStar = -1.0;
+        for (int k = 0; k <= 100000; ++k) {
+            const double th = deg2rad(100.0) * k / 100000.0;
+            if (diagramForce(dia, th, omega) < 0.0) { thStar = th; break; }
+        }
+        CHECK(thStar > deg2rad(50.0) && thStar < deg2rad(100.0));
+
+        ConstraintSystem sys(m);
+        DynamicsSystem dyn(m, sys);
+        std::vector<double> q, qd((size_t)m.nq(), 0.0);
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        dyn.projectVelocities(q, qd);
+        const double E0 = dyn.kinetic(q, qd) + dyn.potential(q);
+        const int ifol = m.bodyIndex("follower"), icam = m.bodyIndex("cam");
+        const double h = m.world.step;
+        double liftAngle = -1.0, worstEngaged = 0.0, deepest = 0.0, worstForce = 1e9, flyMax = 0.0;
+        long impactsAfterTurn1 = 0;
+        for (long k = 0; k < 400; ++k) {                   // 0.2 s = two turns
+            dyn.step(q, qd, k * h);
+            const TouchJoint& tj = m.touches[0];
+            const double th = q[(size_t)m.bodies[icam].qOffset];
+            const double gap = m.touchState(tj, q).gap - tj.roller;
+            if (tj.engaged) {
+                worstEngaged = std::max(worstEngaged, std::fabs(gap));
+                std::vector<double> qdd;
+                dyn.accelerations(q, qd, qdd);
+                worstForce = std::min(worstForce, dyn.contactForces()[0]);
+            } else {
+                deepest = std::min(deepest, gap);          // flight never digs into the cam
+                flyMax = std::max(flyMax, gap);
+                if (liftAngle < 0.0) liftAngle = th;
+            }
+            if (k == 199) impactsAfterTurn1 = dyn.hybridStats().impacts;
+        }
+        const HybridStats& hs = dyn.hybridStats();
+        // lifted off where Newton said (the step ends up to omega*h = 1.8 deg later)
+        CHECK(liftAngle >= thStar - deg2rad(0.05) && liftAngle <= thStar + omega * h + deg2rad(0.05));
+        CHECK(hs.liftoffs == 2);                           // once per turn
+        CHECK(hs.impacts >= 6);                            // each flight ends in a bounce sequence
+        CHECK(hs.impacts == 2 * impactsAfterTurn1);        // and turn 2 repeats turn 1 exactly
+        CHECK(worstEngaged < 1e-8);                        // on the curve while engaged
+        CHECK(deepest > -2e-6);                            // never through it while flying
+        CHECK(flyMax > 1e-3 && flyMax < 5e-3);             // a real flight: ~2 mm clear
+        CHECK(worstForce > -1e-6);                         // engaged means pushing, never pulling
+        // the ledger: the cam's work equals what the impacts discarded, and the
+        // state is back where it began after two whole turns
+        const double dE = dyn.kinetic(q, qd) + dyn.potential(q) - E0;
+        CHECK(std::fabs(dE - (hs.driveWork - hs.impactLoss)) < 5e-5);
+        CHECK(hs.driveWork > 0.02);
+        CHECK_APPROX(hs.impactLoss, hs.driveWork, 5e-5);
+        CHECK(std::fabs(dE) < 1e-4);
+        (void)ifol;
+    }
+
+    {   // determinism: two identical runs agree to the last bit
+        auto run = [&](std::vector<double>& qOut, HybridStats& stOut) {
+            Model m = buildFromText(jumpSrc(600.0, 0.031).c_str());
+            ConstraintSystem sys(m);
+            DynamicsSystem dyn(m, sys);
+            std::vector<double> q, qd((size_t)m.nq(), 0.0);
+            m.assemble(q);
+            int iters = 0;
+            double res = 0.0;
+            sys.solve(q, 0.0, iters, &res);
+            dyn.projectVelocities(q, qd);
+            for (long k = 0; k < 300; ++k) dyn.step(q, qd, k * m.world.step);
+            qOut = q;
+            stOut = dyn.hybridStats();
+        };
+        std::vector<double> qa, qb;
+        HybridStats sa, sb;
+        run(qa, sa);
+        run(qb, sb);
+        CHECK(qa == qb);
+        CHECK(sa.liftoffs == sb.liftoffs && sa.impacts == sb.impacts);
+        CHECK(sa.impactLoss == sb.impactLoss && sa.driveWork == sb.driveWork);
+    }
+
+    {   // initial state: on the curve -> engaged; placed in the air -> in flight; kinematic -> bilateral
+        Model on = buildFromText(jumpSrc(600.0, 0.031).c_str());
+        std::vector<double> q;
+        on.assemble(q);
+        CHECK(on.touches[0].engaged);
+        Model air = buildFromText(jumpSrc(600.0, 0.05).c_str());
+        air.assemble(q);
+        CHECK(!air.touches[0].engaged);
+        CHECK(air.validateAssembly(q).empty());            // starting in flight is not an error
+        Model kin = buildFromText(plateCamSrc(kCamBody, "30").c_str());
+        kin.assemble(q);
+        CHECK(kin.touches[0].engaged);
+    }
+}
+
 } // namespace (anonymous)
 
 namespace mech {
@@ -2984,6 +4374,16 @@ int runAllTests() {
     testParserM5();
     testModelM5();
     testDynamicsM5();
+    testProfileCurve();
+    testParserM6();
+    testModelM6();
+    testKinematicsM6();
+    testCamLaws();
+    testCamDiagram();
+    testCamDesign();
+    testParserModelM6b();
+    testKinematicsM6b();
+    testContactDynamics();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

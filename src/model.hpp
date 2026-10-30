@@ -26,6 +26,8 @@
 //   gear g { teeth: N } on b.c  ->  the same, centered at anchor b.c
 //   mesh g1 g2                  ->  roll row + tangency validation
 //   mesh g1 g2 tangent          ->  roll row + live tangency row
+//   profile p { ... } on b.c    ->  closed curve centered at anchor b.c (M6)
+//   touch f.tip on p [roller r] ->  one row: signed gap to the curve = r (M6)
 //
 // Dynamics (M3): when a `world` block, a spring or a torque drive is present
 // the mechanism is *dynamic* — masses matter (auto-derived from geometry when
@@ -34,7 +36,10 @@
 
 #pragma once
 #include "ast.hpp"
+#include "cam.hpp"
 #include "geom.hpp"
+#include "profile.hpp"
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -111,6 +116,59 @@ struct MeshJoint {
     mutable double psiTrack = 0.0;    // continuity-tracked center-line angle
     mutable bool psiInit = false;
     int line = 0;
+};
+
+// M6 — a closed curve riding a host body (see profile.hpp). The curve's
+// origin is the host anchor; its axes are the host body's.
+struct Profile {
+    std::string name;
+    int body = -1;
+    int hostAnchor = 0;
+    std::shared_ptr<const ProfileCurve> curve;
+    bool fromCam = false;        // M6b: synthesized by a `cam` statement
+    double designRoller = 0.0;   // M6b: the roller the cam was cut for
+    int line = 0;
+};
+
+// M6b — what the cam synthesizer decided, kept for reporting and tests.
+struct CamInfo {
+    std::string name;
+    int profile = -1;
+    CamSpec spec;
+    double maxLift = 0.0;
+    double maxPressure = 0.0, maxPressureAt = 0.0;     // rad
+    double minConvexRadius = 0.0, minConvexAt = 0.0;   // m, rad
+    int line = 0;
+};
+
+// M6 — a point of `body` (an anchor, optionally with a roller of the given
+// radius centered on it) rides `profile`. One row: signed gap - roller = 0.
+// M6a is bilateral (force closure assumed) and kinematic-only.
+//
+// M6c: in a dynamic mechanism the contact is unilateral. `engaged` is the
+// discrete state (the row is only present while the point is on the curve);
+// `restitution` is Newton's coefficient for the impact when it lands again.
+struct TouchJoint {
+    int body = -1, anchor = 0;
+    int profile = -1;
+    double roller = 0.0;
+    double restitution = 0.0;
+    mutable bool engaged = true;
+    int line = 0;
+};
+
+// Where a touch currently sits: the signed gap (positive outside the curve,
+// before the roller is subtracted), the foot of the perpendicular, and the
+// outward unit normal, in world coordinates.
+struct ContactState {
+    double gap = 0.0;
+    double s = 0.0;          // foot parameter on the curve
+    Vec2 footLocal;          // foot in the profile's own (anchor-centered) frame
+    Vec2 foot;               // world
+    Vec2 normal;             // world, unit, outward from the profile
+    Vec2 tangent;            // world, unit, counter-clockwise along the curve
+    Vec2 footArm;            // world vector from the host body's origin to the foot
+    double kappa = 0.0;      // curve curvature at the foot (> 0 convex)
 };
 
 struct Drive {
@@ -277,6 +335,8 @@ struct DofReport {
     int nWeights = 0;        // M5: weight drives (forces with a budget)
     int nModes = 0;          // M5: hybrid elements
     int nHolds = 0;          // M5: hold rows enabled in the initial states
+    int nProfiles = 0;       // M6: contact curves
+    int nTouches = 0;        // M6: point-on-curve contact rows
     int freeDof = 0;      // Grubler-Kutzbach mobility before drives
     int residualDof = 0;  // mobility left over after rate drives
 };
@@ -299,12 +359,16 @@ public:
     std::vector<ReduceInfo> reduceInfos;  // M4: synthesis bookkeeping
     std::vector<WeightDrive> weights; // M5: bounded energy sources
     std::vector<Mode> modes;          // M5: hybrid state machines
+    std::vector<Profile> profiles;    // M6: contact curves
+    std::vector<TouchJoint> touches;  // M6: point-on-curve contacts
+    std::vector<CamInfo> cams;        // M6b: synthesized plate cams
 
     int nq() const { return 3 * (int)(bodies.size() - 1); }
 
     int bodyIndex(const std::string& name) const;
     int anchorIndex(int bodyIdx, const std::string& anchorName) const;
     int gearIndex(const std::string& name) const;
+    int profileIndex(const std::string& name) const;
 
     // World position of an anchor given solver unknowns q.
     Vec2 worldAnchor(int bodyIdx, int anchorIdx, const std::vector<double>& q) const;
@@ -312,8 +376,11 @@ public:
     // World position of a gear's pitch-circle center.
     Vec2 gearCenter(int gearIdx, const std::vector<double>& q) const;
 
+    // M6: contact geometry of a touch at configuration q.
+    ContactState touchState(const TouchJoint& t, const std::vector<double>& q) const;
+
     // Static mobility analysis (planar Grubler-Kutzbach):
-    //   F = 3(n-1) - 2*(pins + slides) - meshes - tangentMeshes
+    //   F = 3(n-1) - 2*(pins + slides) - meshes - tangentMeshes - touches
     DofReport dofReport() const;
 
     // Greedy graph placement of an initial configuration; detects mesh types

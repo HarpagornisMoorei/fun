@@ -89,6 +89,14 @@ void printError(const ToolError& e) {
     }
 }
 
+// " roller 0.006" for a touch with a roller, "" for a knife-edge tip
+std::string rollerNote(double r) {
+    if (r <= 0.0) return "";
+    char buf[48];
+    std::snprintf(buf, sizeof buf, " roller %g", r);
+    return buf;
+}
+
 void printHelp() {
     std::printf(
         "mech — mechanism language, M5: hybrid modes & weight drives\n"
@@ -134,6 +142,7 @@ int cmdCheck(const std::string& path) {
         std::printf("bodies %d (ground 1)  ·  pins %d  ·  slides %d  ·  gears %d  ·  meshes %d",
                     d.nBodies, d.nPins, d.nSlides, d.nGears, d.nMeshes);
         if (d.nTangentMeshes > 0) std::printf(" (%d tangent)", d.nTangentMeshes);
+        if (d.nTouches > 0) std::printf("  ·  profiles %d  ·  touches %d", d.nProfiles, d.nTouches);
         std::printf("  ·  drives %d", d.nDrives);
         if (d.nHolds > 0) std::printf(" (incl. %d mode hold%s)", d.nHolds,
                                       d.nHolds == 1 ? "" : "s");
@@ -145,7 +154,7 @@ int cmdCheck(const std::string& path) {
 
         const int j = d.nPins + d.nSlides;
         std::printf("Grubler-Kutzbach (planar): F = 3(n-1) - 2j - k = 3*%d - 2*%d - %d = %d\n",
-                    d.nBodies - 1, j, d.nMeshes + d.nTangentMeshes, d.freeDof);
+                    d.nBodies - 1, j, d.nMeshes + d.nTangentMeshes + d.nTouches, d.freeDof);
         if (d.residualDof == 0) {
             std::printf("residual DOF after drives: 0  ->  fully determined [ok]\n");
         } else if (d.residualDof > 0) {
@@ -176,6 +185,70 @@ int cmdCheck(const std::string& path) {
                     std::printf("  %-8s on %-10s pitch radius %.4f\n",
                                 g.name.c_str(), where.c_str(), g.radius);
                 }
+            }
+        }
+
+        // M6: contact curves
+        if (!m.profiles.empty()) {
+            std::printf("profiles:\n");
+            for (const Profile& pr : m.profiles) {
+                const Body& host = m.bodies[(size_t)pr.body];
+                const std::string where = host.name + "." +
+                    host.anchors[(size_t)pr.hostAnchor].name;
+                const ProfileCurve& cv = *pr.curve;
+                if (cv.kind() == ProfileCurve::Kind::Circle) {
+                    std::printf("  %-8s on %-10s circle radius %.4f\n",
+                                pr.name.c_str(), where.c_str(), cv.circleRadius());
+                } else {
+                    std::printf("  %-8s on %-10s %s, %zu knots, radius %.4f .. %.4f\n",
+                                pr.name.c_str(), where.c_str(),
+                                cv.kind() == ProfileCurve::Kind::Polar ? "polar" : "points",
+                                cv.knots(), cv.minRadius(), cv.maxRadius());
+                }
+            }
+        }
+
+        // M6b: what the cam synthesizer decided, and whether it will work
+        for (const CamInfo& ci : m.cams) {
+            const Profile& pr = m.profiles[(size_t)ci.profile];
+            std::string segs;
+            for (const CamSegment& sg : ci.spec.segments) {
+                char b[96];
+                if (!segs.empty()) segs += " | ";
+                switch (sg.kind) {
+                case CamSegment::Kind::Rise:
+                    std::snprintf(b, sizeof b, "rise %g m over %g deg %s", sg.lift,
+                                  rad2deg(sg.angle), lawName(sg.law)); break;
+                case CamSegment::Kind::Fall:
+                    std::snprintf(b, sizeof b, "fall %g m over %g deg %s", sg.lift,
+                                  rad2deg(sg.angle), lawName(sg.law)); break;
+                case CamSegment::Kind::Return:
+                    std::snprintf(b, sizeof b, "return over %g deg %s", rad2deg(sg.angle),
+                                  lawName(sg.law)); break;
+                case CamSegment::Kind::Dwell:
+                    if (sg.restOfTurn) std::snprintf(b, sizeof b, "dwell (rest of turn)");
+                    else std::snprintf(b, sizeof b, "dwell %g deg", rad2deg(sg.angle));
+                    break;
+                }
+                segs += b;
+            }
+            std::printf("cam %s on %s.%s: base %.4f m, roller %.4f m, lift %.4f m, "
+                        "turns %s, rail at %g deg\n",
+                        ci.name.c_str(), m.bodies[(size_t)pr.body].name.c_str(),
+                        m.bodies[(size_t)pr.body].anchors[(size_t)pr.hostAnchor].name.c_str(),
+                        ci.spec.base, ci.spec.roller, ci.maxLift,
+                        ci.spec.turn > 0 ? "ccw" : "cw", rad2deg(ci.spec.startRad));
+            std::printf("  %s\n", segs.c_str());
+            const double pa = rad2deg(ci.maxPressure);
+            std::printf("  pressure angle: max %.2f deg at %.1f deg of rotation (rail through "
+                        "the axle)%s\n", pa, rad2deg(ci.maxPressureAt),
+                        pa > 30.0 ? "  [warn] above the usual 30 deg limit — the follower "
+                                    "may bind; enlarge the base circle or lengthen the rise"
+                                  : "  [ok]");
+            if (ci.minConvexRadius < 1e299) {
+                std::printf("  undercut: smallest convex pitch-curve radius %.4f m at %.1f deg "
+                            "vs roller %.4f m  [ok]\n", ci.minConvexRadius,
+                            rad2deg(ci.minConvexAt), ci.spec.roller);
             }
         }
 
@@ -232,6 +305,24 @@ int cmdCheck(const std::string& path) {
                         gb.teeth > 0 ? (double)gb.teeth : gb.radius,
                         ratio,
                         internal ? "same direction" : "direction reversed (external)");
+        }
+        for (const TouchJoint& tj : m.touches) {
+            const Body& tb = m.bodies[(size_t)tj.body];
+            const ContactState cs = m.touchState(tj, q);
+            std::printf("touch %s.%s on %s%s  ->  contact (%.4f, %.4f), normal (%.3f, %.3f)"
+                        "  [%s]\n",
+                        tb.name.c_str(), tb.anchors[(size_t)tj.anchor].name.c_str(),
+                        m.profiles[(size_t)tj.profile].name.c_str(),
+                        rollerNote(tj.roller).c_str(),
+                        cs.foot.x, cs.foot.y, cs.normal.x, cs.normal.y,
+                        m.world.dynamic
+                            ? (tj.engaged ? "unilateral: starts engaged, lifts off when the force would pull"
+                                          : "unilateral: starts in flight")
+                            : "bilateral: force closure assumed");
+            if (m.world.dynamic) {
+                std::printf("  restitution %g%s\n", tj.restitution,
+                            tj.restitution == 0.0 ? " (plastic landing)" : "");
+            }
         }
         for (const SpringJoint& sp : m.springs) {
             std::printf("spring %-8s k=%g rest=%.4f damp=%g\n",
@@ -340,6 +431,7 @@ int cmdCheck(const std::string& path) {
         std::vector<std::string> geomErrs = m.validateAssembly(q);
         if (geomErrs.empty()) {
             if (!m.meshes.empty()) std::printf("mesh tangency: all %d meshes ok\n", d.nMeshes);
+            if (!m.touches.empty()) std::printf("contacts: all %d touches closed\n", d.nTouches);
         } else {
             for (const std::string& e : geomErrs) {
                 std::printf("error: %s\n", e.c_str());
@@ -389,6 +481,7 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
             // fixed-step integration, fully deterministic
             DynamicsSystem dyn(m, sys);
             std::vector<double> qd(m.nq(), 0.0);
+            dyn.projectVelocities(q, qd);   // rate-driven bodies start at their prescribed speed
             const double h = m.world.step;
             const long steps = (long)std::llround(headlessSecs / h);
             std::printf("headless dynamic run of '%s' for %.2f s (h = %g s, %ld steps)\n",
@@ -397,6 +490,8 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
             if (!m.modes.empty()) std::printf("%-12s", "mode");
             for (const Body& b : m.bodies)
                 if (!b.isGround) std::printf("%-10s%-9s%-9s", b.name.c_str(), ".th", ".pos");
+            for (const TouchJoint& tj : m.touches)
+                std::printf("%-12s", (m.bodies[(size_t)tj.body].name + ".N").c_str());
             std::printf("\n");
             const double E0 = dyn.kinetic(q, qd) + dyn.potential(q);
             long reportEvery = std::max(1L, (long)std::llround(0.5 / h));
@@ -424,6 +519,13 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
                             std::printf("%6.2f    %6.3f,%-6.3f",
                                         rad2deg(q[b.qOffset]),
                                         q[b.qOffset + 1], q[b.qOffset + 2]);
+                    for (size_t ti = 0; ti < m.touches.size(); ++ti) {
+                        if (m.touches[ti].engaged)
+                            std::printf("%-12.3f", dyn.contactForces().size() > ti
+                                                       ? dyn.contactForces()[ti] : 0.0);
+                        else
+                            std::printf("%-12s", "off");
+                    }
                     std::printf("\n");
                 }
             }
@@ -434,15 +536,26 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
                             dyn.driveReactions()[di]);
             }
             // M5: the hybrid ledger — where the weight's energy went
-            if (!m.modes.empty() || !m.weights.empty()) {
+            if (!m.modes.empty() || !m.weights.empty() || !m.touches.empty()) {
                 const HybridStats& hs = dyn.hybridStats();
                 long fires = 0;
                 for (const Mode& mo : m.modes) fires += mo.fires;
-                std::printf("hybrid: %ld transition%s fired",
-                            fires, fires == 1 ? "" : "s");
-                for (const Mode& mo : m.modes)
-                    std::printf(" (mode %s: %ld)", mo.name.c_str(), mo.fires);
-                std::printf("\n");
+                if (!m.modes.empty()) {
+                    std::printf("hybrid: %ld transition%s fired",
+                                fires, fires == 1 ? "" : "s");
+                    for (const Mode& mo : m.modes)
+                        std::printf(" (mode %s: %ld)", mo.name.c_str(), mo.fires);
+                    std::printf("\n");
+                }
+                if (!m.touches.empty()) {
+                    std::printf("contact: %ld lift-off%s, %ld impact%s",
+                                hs.liftoffs, hs.liftoffs == 1 ? "" : "s",
+                                hs.impacts, hs.impacts == 1 ? "" : "s");
+                    for (const TouchJoint& tj : m.touches)
+                        std::printf("  (%s: %s)", m.bodies[(size_t)tj.body].name.c_str(),
+                                    tj.engaged ? "on the curve" : "in flight");
+                    std::printf("\n");
+                }
                 for (const WeightDrive& w : m.weights) {
                     std::printf("weight %-8s paid %8.4f",
                                 m.bodies[w.body].name.c_str(), w.paid);
@@ -453,11 +566,13 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
                     std::printf("\n");
                 }
                 const double dE = (dyn.kinetic(q, qd) + dyn.potential(q)) - E0;
-                const double ledger = dE - (hs.weightDrawn + hs.impulseEnergy - hs.impactLoss);
-                std::printf("energy: drawn %.4f J + impulse %.4f J - impact %.4f J "
-                            "= dE %.4f J (ledger residual %.2e J)\n",
-                            hs.weightDrawn, hs.impulseEnergy, hs.impactLoss, dE,
-                            ledger);
+                const double ledger = dE - (hs.weightDrawn + hs.impulseEnergy +
+                                            hs.driveWork - hs.impactLoss);
+                std::printf("energy: drawn %.4f J + impulse %.4f J", hs.weightDrawn,
+                            hs.impulseEnergy);
+                if (hs.driveWork != 0.0) std::printf(" + drive %.4f J", hs.driveWork);
+                std::printf(" - impact %.4f J = dE %.4f J (ledger residual %.2e J)\n",
+                            hs.impactLoss, dE, ledger);
             } else {
                 std::printf("done: worst residual %.2e, worst |E - E0| %.2e J\n",
                             worstRes, dEworst);
@@ -471,6 +586,9 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
         std::printf("%8s  %10s  ", "t", "maxRes");
         for (const Body& b : m.bodies)
             if (!b.isGround) std::printf("%-11s", b.name.c_str());
+        for (const TouchJoint& tj : m.touches)
+            std::printf("%-20s", (m.bodies[(size_t)tj.body].name + "." +
+                m.bodies[(size_t)tj.body].anchors[(size_t)tj.anchor].name + " x,y").c_str());
         std::printf("\n");
 
         int frame = 0;
@@ -483,6 +601,10 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
                 std::printf("%8.3f  %10.2e  ", t, r);
                 for (const Body& b : m.bodies)
                     if (!b.isGround) std::printf("%10.2f    ", rad2deg(q[b.qOffset]));
+                for (const TouchJoint& tj : m.touches) {
+                    const Vec2 p = m.worldAnchor(tj.body, tj.anchor, q);
+                    std::printf("%9.5f,%-9.5f  ", p.x, p.y);
+                }
                 std::printf("\n");
             }
         }

@@ -1,0 +1,48 @@
+// jumpcam — the plate cam from platecam.mech, but now with mass: a 100 g
+// follower held on the cam by a spring and gravity, and a contact that can let
+// go. This is what a cam does at speed. A kinematic cam assumes the follower
+// stays put; a real one only stays on while the spring can accelerate it
+// down as fast as the cam surface falls away, and when it cannot, it leaves.
+//
+//   mech run examples/jumpcam.mech --headless 1
+//
+// The cam turns 600 rpm. The hard moment is the end of the rise, where the
+// surface decelerates hardest (peak 6.28 h / beta^2 x omega^2, about 98 m/s^2)
+// and the follower must be pulled down as fast: 9.8 N for 100 g. At the top of
+// the lift the spring (200 N/m, stretched 23 mm) plus gravity give only ~5.6 N,
+// so the follower leaves the cam near the top of the lift, flies, and lands
+// again with an impact. Slow the cam to 300 rpm and the force needed drops 4x
+// (2.5 N): the contact never lets go.
+//
+// 'restitution' is Newton's coefficient for the landing: 0 sticks, 1 bounces
+// back with the speed it came in at. Every joule is bookkept: the energy
+// ledger at the end of the run counts the cam's work, and what each impact
+// discarded.
+mechanism jumpcam {
+  world { gravity: 9.81  step: 0.0005 }
+
+  ground frame {
+    anchor axle at (0, 0)
+    anchor rail at (0, 0.031) dir (0, 1)     // starts on the cam: base 25 + roller 6 mm
+  }
+
+  shaft cam at frame.axle
+  cam lobe on cam.A {
+    base   0.025
+    roller 0.006
+    rise 0.012 over 100 deg cycloidal
+    dwell 60 deg
+    return over 140 deg modtrap
+    dwell
+  }
+
+  body follower {
+    anchor tip at (0, 0) dir (1, 0)
+    mass: 0.1
+  }
+  slide follower.tip -> frame.rail
+  spring preload follower.tip -> frame.axle { k: 200  rest: 0.020 }
+  touch follower.tip on lobe restitution 0.3
+
+  drive cam at 600 rpm
+}

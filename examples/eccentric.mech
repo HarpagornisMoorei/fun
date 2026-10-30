@@ -1,0 +1,35 @@
+// eccentric — the simplest cam: a disc mounted off-centre, and a roller
+// follower riding its rim along a straight rail. M6a's acceptance mechanism,
+// because the answer is known in closed form. With the disc centre e from the
+// axle and a roller of radius rho on a disc of radius R, the follower height is
+//
+//   y(theta) = e sin(theta) + sqrt((R + rho)^2 - e^2 cos(theta)^2)
+//
+// (the rail passes through the axle). The mechanism is not causal: the
+// cam is driven here, but the contact row relates the two bodies symmetrically.
+//
+//   mech run examples/eccentric.mech --headless 2
+//   mech run examples/eccentric.mech --trace follower.tip
+mechanism eccentric {
+  ground frame {
+    anchor axle at (0, 0)
+    anchor rail at (0, 0.09) dir (0, 1)     // follower line of travel, above the cam
+  }
+
+  // the disc: axle at the origin, rim centre 10 mm off it
+  body cam {
+    anchor axle at (0, 0)
+    anchor rim  at (0.010, 0)
+  }
+  pin cam.axle -> frame.axle
+  profile disc on cam.rim { circle: 0.030 }
+
+  // the follower rides the rail; its tip carries a 6 mm roller
+  body follower {
+    anchor tip at (0, 0) dir (1, 0)
+  }
+  slide follower.tip -> frame.rail
+  touch follower.tip on disc roller 0.006
+
+  drive cam at 60 rpm
+}

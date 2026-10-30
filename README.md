@@ -49,9 +49,16 @@ make test       # unit tests
 | bodies | `ground`, `rod`, `shaft`, `body` |
 | joints | `pin` (revolute), `slide` (prismatic) |
 | gears | `gear`, `mesh` (external, internal, epicyclic) |
+| contact | `profile` (circle, polar table, point list), `touch` — cams with translating or swinging followers, optional roller |
+| cams | `cam` — state the motion (`rise`, `dwell`, `return`; cycloidal, harmonic, modified-trapezoid) and the compiler cuts the surface; `check` reports pressure angle and rejects undercut |
 | forces | gravity, `spring`, torque and weight `drive`s |
 | hybrid | `mode` state machines (the escapement) |
 | intent | `reduce`, `beat`, `hand`, `dial` — solved into the kernel |
+
+Contact is bilateral in a kinematic file (force closure assumed) and unilateral
+in a dynamic one: a spring-loaded cam follower holds the cam at low speed, and
+at high speed lifts off, flies and lands with a Newton impact, with every joule
+accounted for (`examples/jumpcam.mech`).
 
 Kinematic files are solved with an analytic-Jacobian Levenberg–Marquardt
 assembly; files with masses and forces are integrated as constrained
@@ -63,6 +70,8 @@ dynamics, with an energy ledger that has to close.
 |---|---|
 | `fourbar`, `crankslider` | closed loops, prismatic joints |
 | `geartrain`, `train`, `planetary` | meshes, synthesized reductions, epicyclics |
+| `eccentric`, `lobecam`, `platecam` | cams: a closed-form eccentric disc, a plate cam from a polar table, and one synthesized from a displacement diagram |
+| `jumpcam` | the plate cam with mass, a spring and a contact that can let go — cam jump, impacts, energy ledger |
 | `pendulum`, `doublepend`, `flywheel`, `oscillator`, `orbit` | dynamics |
 | `clock`, `clockface` | the flagship: a complete weight-driven clock |
 
@@ -71,6 +80,7 @@ dynamics, with an energy ledger that has to close.
 [`docs/LANG.md`](docs/LANG.md) is the language specification — grammar,
 semantics, solver formulation — and the contract `mech test` checks the
 implementation against. [`docs/design/contact.md`](docs/design/contact.md)
-is the proposal for the next milestone (cams, Geneva drives, ratchets,
-non-circular gears). `scripts/` holds offscreen-rendering harnesses for
+is the design for contact (cams, Geneva drives, ratchets, non-circular
+gears); M6a through M6c (profiles, cam synthesis, unilateral contact) are
+implemented. `scripts/` holds offscreen-rendering harnesses for
 screenshots without a display.

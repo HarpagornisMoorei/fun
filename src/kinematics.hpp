@@ -23,6 +23,10 @@ public:
     // Row-major [rows x nq] analytic Jacobian.
     void jacobian(const std::vector<double>& q, std::vector<double>& J) const;
 
+    // M6: the Jacobian row of one touch (d gap / d q), added into `row`
+    // (nq entries, caller zeroes). Used by jacobian() and by impact handling.
+    void touchRow(const TouchJoint& tj, const std::vector<double>& q, double* row) const;
+
     // Levenberg-Marquardt with deterministic multi-start. Warm-start
     // friendly: pass the previous solution. Returns true when max|c| < 1e-10
     // (or < 1e-8 after exhaustion).

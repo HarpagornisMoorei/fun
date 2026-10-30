@@ -277,6 +277,7 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
                      "warning: initial assembly did not fully converge (max residual %.3e)\n",
                      res0);
     }
+    if (dynamic) dyn.projectVelocities(q, qd);   // rate-driven bodies start at speed
 
     int traceBody = -1, traceAnchor = -1;
     if (!traceRef.empty()) {
@@ -314,6 +315,12 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
             grow(c + Vec2{0.0, g.radius});
             grow(c - Vec2{0.0, g.radius});
         }
+        for (const Profile& pr : m.profiles) {          // M6: the whole outline, any pose
+            const Vec2 c = m.worldAnchor(pr.body, pr.hostAnchor, q);
+            const double r = pr.curve->maxRadius();
+            grow(c + Vec2{r, r});
+            grow(c - Vec2{r, r});
+        }
         for (const Dial& d : m.dials) {
             if (d.radius <= 0.0) continue;
             grow(d.center + Vec2{d.radius, 0.0});
@@ -330,7 +337,10 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
         }
         cam.cx = 0.5 * (minx + maxx);
         cam.cy = 0.5 * (miny + maxy);
-        cam.halfH = std::max(0.5 * (maxy - miny), 0.5 * (maxx - minx)) * 1.35 + 0.35;
+        // padding is 0.35 m for meter-scale mechanisms, but shrinks with the
+        // extent so a centimeter-scale cam does not drown in margin
+        const double halfExtent = std::max(0.5 * (maxy - miny), 0.5 * (maxx - minx));
+        cam.halfH = halfExtent * 1.35 + std::min(0.35, 2.0 * halfExtent);
     };
     fitCamera();
 
@@ -390,6 +400,7 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
             m.assemble(q);
             sys.solve(q, 0.0, iters);
             qd.assign(m.nq(), 0.0);
+            if (dynamic) dyn.projectVelocities(q, qd);
             dyn.resetHybrid();   // M5: rewind the discrete state and its ledger
             simT = 0.0; accum = 0.0; trail.clear();
             std::printf("reset\n");
@@ -489,8 +500,9 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
         // directional ground anchors render as rails
         for (const Anchor& a : m.bodies[0].anchors) {
             if (!a.hasDir) continue;
-            const Vec2 d = a.dirLocal * 0.45;
-            drawHatched(a.local - d, a.local + d, pxWorld, 0.45);
+            const double half = std::min(0.45, 0.9 * cam.halfH);   // rail fits small views
+            const Vec2 d = a.dirLocal * half;
+            drawHatched(a.local - d, a.local + d, pxWorld, half);
         }
 
         // gears: pitch circles + teeth ticks (under the rods). Internal gears
@@ -544,6 +556,38 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
             glEnd();
         }
 
+        // M6: contact profiles (under the rods): a faint fill for star-shaped
+        // kinds, the outline in the host's colour. The curve rides its host.
+        for (const Profile& pr : m.profiles) {
+            const Body& hb = m.bodies[(size_t)pr.body];
+            const double th = hb.qOffset >= 0 ? q[hb.qOffset + 0] : 0.0;
+            const Vec2 tr = hb.qOffset >= 0 ? Vec2{q[hb.qOffset + 1], q[hb.qOffset + 2]}
+                                            : Vec2{0.0, 0.0};
+            const Vec2 origin = hb.anchors[(size_t)pr.hostAnchor].local;
+            const float* col = kPalette[(size_t)(pr.body > 0 ? pr.body - 1 : 0) % 5];
+            const std::vector<Vec2> pts = pr.curve->outline(240);
+            auto toWorld = [&](Vec2 p) { return rotate(origin + p, th) + tr; };
+            if (pr.curve->kind() != ProfileCurve::Kind::Points) {   // star-shaped: fan from the origin
+                glColor4f(col[0], col[1], col[2], 0.16f);
+                glBegin(GL_TRIANGLE_FAN);
+                const Vec2 c = toWorld(Vec2{0.0, 0.0});
+                glVertex2d(c.x, c.y);
+                for (size_t i = 0; i <= pts.size(); ++i) {
+                    const Vec2 w = toWorld(pts[i % pts.size()]);
+                    glVertex2d(w.x, w.y);
+                }
+                glEnd();
+            }
+            glColor4f(col[0], col[1], col[2], 0.95f);
+            glLineWidth(2.5f);
+            glBegin(GL_LINE_LOOP);
+            for (const Vec2& p : pts) {
+                const Vec2 w = toWorld(p);
+                glVertex2d(w.x, w.y);
+            }
+            glEnd();
+        }
+
         // moving bodies: rods as capsules, shafts as hubs with index line
         for (size_t bi = 1; bi < m.bodies.size(); ++bi) {
             const Body& b = m.bodies[bi];
@@ -575,6 +619,24 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
             Vec2 pa = m.worldAnchor(sp.bodyA, sp.anchA, q);
             Vec2 pb = m.worldAnchor(sp.bodyB, sp.anchB, q);
             drawSpring(pa, pb, pxWorld);
+        }
+
+        // M6: touches — the roller (if any) and the contact point on the curve
+        for (const TouchJoint& tj : m.touches) {
+            const Vec2 tip = m.worldAnchor(tj.body, tj.anchor, q);
+            const ContactState cs = m.touchState(tj, q);
+            if (tj.roller > 0.0) {
+                setColor(kWhite);
+                glLineWidth(2.0f);
+                glBegin(GL_LINE_LOOP);
+                for (int i = 0; i < 40; ++i) {
+                    const double a = 2.0 * kPi * (double)i / 40.0;
+                    glVertex2d(tip.x + tj.roller * std::cos(a), tip.y + tj.roller * std::sin(a));
+                }
+                glEnd();
+            }
+            setColor(kSpring);
+            drawCircle(cs.foot, 3.2 * pxWorld);
         }
 
         // pin joints: white hub with dark bore

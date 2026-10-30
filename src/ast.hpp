@@ -1,5 +1,6 @@
-// mech — ast.hpp: parse tree for the .mech language (M4)
+// mech — ast.hpp: parse tree for the .mech language (M6)
 #pragma once
+#include "cam.hpp"
 #include "geom.hpp"
 #include <map>
 #include <string>
@@ -148,6 +149,61 @@ struct DialDecl {
     int line = 0;
 };
 
+// M6 — contact. A profile is a closed curve attached to a host body, like a
+// gear is a pitch circle: its origin is the host anchor, its axes the body's.
+//   profile lobe on cam.A { circle: 0.03 }
+//   profile lobe on cam.A { polar: (0 deg, 0.030) (90 deg, 0.034) ... }
+//   profile lobe on cam.A { points: (x, y) (x, y) ... }
+struct ProfileDecl {
+    enum class Kind { None, Circle, Polar, Points };
+    Kind kind = Kind::None;
+    std::string name;
+    double radius = 0.0;                          // circle
+    std::vector<std::pair<double, double>> polar; // (angle rad, radius)
+    std::vector<Vec2> points;
+    std::string host;
+    std::string hostAnchor;               // "" -> default anchor "A"
+    int line = 0;
+};
+
+// M6b — a plate cam stated as motion, not as a curve. The compiler cuts the
+// surface (see cam.hpp); it lands in the model as an ordinary closed profile.
+//   cam lobe on cam.A {
+//     base 0.030  roller 0.006
+//     rise 0.010 over 120 deg cycloidal
+//     dwell 60 deg
+//     return over 120 deg
+//     dwell                          // the rest of the turn
+//   }
+// Segments run in the order the follower meets them as the cam turns; angles
+// are cam rotation. `start` (default 90 deg) is where the follower's rail
+// lies in the cam's own frame at theta = 0; `turn cw` for a cam driven
+// the other way.
+struct CamDecl {
+    std::string name;
+    std::string host;
+    std::string hostAnchor;               // "" -> default anchor "A"
+    bool hasBase = false;
+    CamSpec spec;
+    std::vector<int> segLines;            // source line of each segment
+    int line = 0;
+};
+
+// touch follower.tip on lobe [roller 0.008] — a point of one body rides a
+// profile of another: one row, the signed gap to the curve (less the roller
+// radius, if any) is zero. In a kinematic mechanism the contact is bilateral;
+// in a dynamic one (M6c) it is unilateral — the point can lift off the curve
+// and land again, with Newton restitution `restitution e` (default 0).
+struct TouchDecl {
+    std::string body, anchor;
+    std::string profile;
+    bool hasRoller = false;
+    double roller = 0.0;
+    bool hasRestitution = false;
+    double restitution = 0.0;
+    int line = 0;
+};
+
 // M5 — a hybrid element: a state machine over the mechanism's constraint
 // sets, the kernel's only non-smooth element (the escapement is the flagship).
 //   mode esc {
@@ -204,6 +260,9 @@ struct MechanismDecl {
     std::vector<HandDecl> hands;
     std::vector<DialDecl> dials;
     std::vector<ModeDecl> modes;       // M5 hybrid elements
+    std::vector<ProfileDecl> profiles; // M6 contact curves
+    std::vector<TouchDecl> touches;    // M6 point-on-curve contacts
+    std::vector<CamDecl> cams;         // M6b plate-cam synthesis
     int line = 0;
 };
 

@@ -1,0 +1,38 @@
+// lobecam — a plate cam given as a polar table, and a roller follower on a
+// vertical rail through the axle. The profile is the cam's *surface*: radius
+// against angle, measured in the cam's own frame. This one is a 10 mm
+// cycloidal lobe on a 30 mm base circle: rise over 0-120 deg, dwell to 180,
+// return over 180-300, dwell to 360 — sampled every 15 deg and joined by a
+// periodic cubic spline (smooth, closed, C2).
+//
+// The follower's roller (radius 6 mm) is offset from the true surface, so the
+// follower centre travels between 36 mm and ~46 mm above the axle and dwells
+// flat at both ends.
+//
+//   mech run examples/lobecam.mech --headless 2
+//   mech run examples/lobecam.mech --trace follower.tip
+mechanism lobecam {
+  ground frame {
+    anchor axle at (0, 0)
+    anchor rail at (0, 0.09) dir (0, 1)
+  }
+
+  shaft cam at frame.axle
+  profile lobe on cam.A {
+    polar:
+      (0 deg, 0.03000) (15 deg, 0.03012) (30 deg, 0.03091) (45 deg, 0.03262)
+      (60 deg, 0.03500) (75 deg, 0.03738) (90 deg, 0.03909) (105 deg, 0.03988)
+      (120 deg, 0.04000) (135 deg, 0.04000) (150 deg, 0.04000) (165 deg, 0.04000)
+      (180 deg, 0.04000) (195 deg, 0.03988) (210 deg, 0.03909) (225 deg, 0.03738)
+      (240 deg, 0.03500) (255 deg, 0.03262) (270 deg, 0.03091) (285 deg, 0.03012)
+      (300 deg, 0.03000) (315 deg, 0.03000) (330 deg, 0.03000) (345 deg, 0.03000)
+  }
+
+  body follower {
+    anchor tip at (0, 0) dir (1, 0)
+  }
+  slide follower.tip -> frame.rail
+  touch follower.tip on lobe roller 0.006
+
+  drive cam at 30 rpm
+}

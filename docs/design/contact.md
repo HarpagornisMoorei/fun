@@ -1,8 +1,11 @@
 # Design note: contact and higher pairs (M6)
 
-Status: proposal, nothing implemented. This note fixes the representation
-before any code is written, because contact is where the design is hardest
-to change afterwards.
+Status: **6a, 6b and 6c implemented** (profiles `circle`/`polar`/`points`,
+bilateral kinematic `touch`, `cam` displacement-diagram synthesis with
+pressure-angle and undercut reports; the eccentric, lobe-cam and plate-cam
+examples; unilateral contact in the dynamics with `jumpcam`). 6d remains a
+proposal. This note fixed the representation before code was written,
+because contact is where the design is hardest to change afterwards.
 
 ## Why
 
@@ -70,11 +73,14 @@ The foot parameter `s` is the closest point: `tau_w(s) · d = 0`, with
 `tau_w = R(theta_A) c'(s)`. The row is the signed gap
 `g = n_w · d`, `n_w = perp(tau_w) / |tau_w|`.
 
-**`s` is not a generalized coordinate.** It is tracked like the mesh's
-`psi`: warm-started from the previous evaluation, refined by a scalar Newton
-iteration, and found by a coarse global scan only on first use or after a
-re-make. This keeps `q` at three entries per body and the mass matrix
-untouched.
+**`s` is not a generalized coordinate.** This keeps `q` at three entries per
+body and the mass matrix untouched. *As implemented in 6a* the foot is not
+tracked like the mesh's `psi`: it is searched afresh at every evaluation
+(coarse scan over a precomputed outline, then bracketed Newton), so the row
+is a pure function of `q` with no hidden state to go stale between LM trial
+steps. The cost is a few hundred distance tests per evaluation. Tracking
+remains an option if dynamics (6c) makes that cost matter, but a re-make
+after separation would then need the global scan anyway.
 
 **First-order Jacobian needs no `ds` term** (envelope theorem; at the foot
 `d` is parallel to `n_w`, so `d · dn_w = 0`, and `n_w · tau_w = 0`):
@@ -89,7 +95,9 @@ contact normal. I checked it against central finite differences on an
 ellipse (non-circular, rotated, both bodies displaced): agreement to
 ~1e-10.
 
-**Not yet derived: the second-order bias term** `J̇ q̇` that dynamics needs.
+**The second-order bias term (derived in 6c; see docs/LANG.md 6.5 for the
+formula and its verification).** What follows is the original statement of the
+problem, kept for the record: the second-order bias term `J̇ q̇` that dynamics needs.
 It differs from the pin case because the contact point slides:
 `g̈` picks up a curvature term (`kappa`, and `1 − kappa g` in the foot
 rate). The existing finite-difference constraint-acceleration test is the
@@ -122,6 +130,49 @@ rows are, before the code.
 | **6b** | `cam` displacement-diagram sugar (rise / dwell / return; cycloidal, harmonic, modified-trapezoid laws); `mech check` reports pressure angle and **undercut** (min radius of curvature vs roller radius) | dwell is exactly flat; pressure angle matches hand calculation |
 | **6c** | unilateral `touch` in dynamics, `gap`/`force` guards, restitution, ledger | follower with spring preload jumps at high speed; ledger closes |
 | **6d** | `roll` contact (arc-length matching of two profiles) generalizing `mesh` | elliptical gear pair; a circle–circle `roll` reproduces `mesh` exactly |
+
+**6b as implemented, and where it departed from the table.**
+
+* Segments are *sequential* (`rise 0.012 over 100 deg`, `dwell 60 deg`), not
+  absolute angle ranges (`over 0..120 deg`): they cannot overlap or leave gaps,
+  and a bare final `dwell` fills the rest of the turn.
+* **Undercut is an error, not a report.** A cam whose inward offset folds over
+  itself cannot be cut, so there is nothing sensible to simulate.
+* The pressure angle is the diagram formula `tan(a) = s'/r`, exact for a rail
+  through the axle, which is what `cam` synthesizes. A pressure-angle sweep
+  for *arbitrary* profiles and followers (offset rails, swing arms) needs the
+  follower's allowed direction of motion at each pose and is left for later.
+* A `touch` on a cam defaults to the roller the cam was cut for; an explicit
+  different roller draws an assembly warning.
+* `modtrap` has the lowest peak *acceleration* of the laws that ease in and
+  out (4.888 vs 6.283), but the same peak velocity as `cycloidal` (2.0);
+  `harmonic` has the lowest peak velocity (1.571) but an acceleration jump
+  at each end, which a C2 spline surface cannot represent (normal off by
+  ~0.045 degrees at those two junctions).
+
+**6c as implemented, and where it departed from the table.**
+
+* The guards are *the contact force going negative* (lift-off) and *the gap
+  closing* (touch-down), reused on the existing bisection loop, which now
+  also runs for files with contacts but no `mode`. Events are processed
+  earliest-first rather than in declaration order, so one cannot mask another.
+* The energy ledger needed a new term, **drive work**. A cam on a rate drive
+  does work on the system continuously and, because it is "infinitely heavy",
+  during every impact on it; without that term the ledger cannot close for
+  any driven mechanism. The impact's own dissipation is `impulse work - dT`.
+* Dynamic runs now start from velocities consistent with the rate drives. The
+  old zero-velocity start spun a driven shaft up impulsively in the first step
+  — harmless, but it made the ledger open by the shaft's kinetic energy.
+* **Plastic cutoff.** A first implementation bounced a resting follower
+  forever. The cause was numerical, not physical: a bounce restarts inside the
+  contact tolerance band, and the free acceleration turns that sliver into a
+  landing speed floor of `sqrt(2 a delta)`, above the cutoff I had picked.
+  Landings under 2 mm/s are now plastic, which clears that floor with margin.
+* A guard that was "already true" at the start of a sub-step because the body
+  sat 1e-13 *inside* the surface after a bounce silently lost the next
+  landing. Touch-down is now armed within the contact band.
+* Friction is still deferred; the sliding speed `u` it needs falls out of the
+  bias term.
 
 Acceptance examples to add under `examples/`: `eccentric`, `platecam`,
 `geneva`, `ratchet`, `ellipgears`.
