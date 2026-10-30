@@ -1,0 +1,9 @@
+# build output
+/mech
+/mech-shot
+*.o
+
+# scratch
+coupler.*
+*.ppm
+*.png
