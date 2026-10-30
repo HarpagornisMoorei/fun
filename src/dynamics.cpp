@@ -269,6 +269,18 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
         }
     }
 
+    // M6d: non-circular mesh rows. R = thB - thB0 - F(psi - thA), F' = rho, so
+    //   R'  = wB + rho wA
+    //   R'' = aB + rho aA - rho'(phi_A) wA^2          (phi_A' = -wA)
+    // and J qdd + bias = 0 with J = (rho, 1) and bias = -rho' wA^2.
+    for (const PolarMesh& pm : m.polarMeshes) {
+        const Profile& pa = m.profiles[(size_t)pm.profA];
+        const double wA = bodyW(pa.body);
+        double rho, drho;
+        pm.phase(*pa.curve, pm.psi - q[(size_t)m.bodies[(size_t)pa.body].qOffset], rho, drho);
+        bias[r++] = -drho * wA * wA;
+    }
+
     // M6c: touch rows. The row is the signed gap g(q) of a point against a
     // curve, so with w the point's velocity relative to the curve's material
     // point at the foot, t the unit tangent, kappa the curve's curvature and

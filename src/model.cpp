@@ -8,6 +8,37 @@
 
 namespace mech {
 
+namespace {
+void rhoOf(const ProfileCurve& A, double d, double phi, double& rho, double& drho);
+void buildPhaseTable(PolarMesh& pm, const ProfileCurve& A);
+bool conjugateRoot(const ProfileCurve& known, double phiKnown, const ProfileCurve& other,
+                   double d, double& phiOther, double& defect);
+}
+
+double PolarMesh::phase(const ProfileCurve& A, double phi, double& rho, double& drho) const {
+    const double full = 2.0 * kPi;
+    const double turns = std::floor(phi / full);
+    const double u = phi - full * turns;                 // in [0, 2 pi)
+    const int N = (int)Fnodes.size() - 1;
+    const double h = full / (double)N;
+    int i = (int)(u / h);
+    if (i > N - 1) i = N - 1;
+    const double t = (u - (double)i * h) / h;
+    const double t2 = t * t, t3 = t2 * t, t4 = t3 * t, t5 = t4 * t;
+    // quintic Hermite basis: values, first and second derivatives at both ends
+    const double H0 = 1.0 - 10.0 * t3 + 15.0 * t4 - 6.0 * t5;
+    const double H1 = t - 6.0 * t3 + 8.0 * t4 - 3.0 * t5;
+    const double H2 = 0.5 * t2 - 1.5 * t3 + 1.5 * t4 - 0.5 * t5;
+    const double H3 = 10.0 * t3 - 15.0 * t4 + 6.0 * t5;
+    const double H4 = -4.0 * t3 + 7.0 * t4 - 3.0 * t5;
+    const double H5 = 0.5 * t3 - t4 + 0.5 * t5;
+    const size_t k = (size_t)i;
+    const double F = Fnodes[k] * H0 + h * rhoNodes[k] * H1 + h * h * drhoNodes[k] * H2 +
+                     Fnodes[k + 1] * H3 + h * rhoNodes[k + 1] * H4 + h * h * drhoNodes[k + 1] * H5;
+    rhoOf(A, d, phi, rho, drho);
+    return F + turns * Ftot;
+}
+
 int Model::bodyIndex(const std::string& name) const {
     for (size_t i = 0; i < bodies.size(); ++i)
         if (bodies[i].name == name) return (int)i;
@@ -84,6 +115,7 @@ DofReport Model::dofReport() const {
     r.nGears = (int)gears.size();
     r.nProfiles = (int)profiles.size();
     r.nTouches = (int)touches.size();
+    r.nPolarMeshes = (int)polarMeshes.size();
     r.nDrives = 0;
     for (const Drive& d : drives) if (d.enabled) ++r.nDrives;
     r.nTorques = (int)torques.size();
@@ -102,7 +134,8 @@ DofReport Model::dofReport() const {
     // constraints. A mode's active holds are rate-0 drive rows: they remove
     // one DOF each while engaged (the report shows the initial states).
     const int j = r.nPins + r.nSlides;
-    r.freeDof = 3 * (r.nBodies - 1) - 2 * j - r.nMeshes - r.nTangentMeshes - r.nTouches;
+    r.freeDof = 3 * (r.nBodies - 1) - 2 * j - r.nMeshes - r.nTangentMeshes - r.nTouches -
+                 r.nPolarMeshes;
     r.residualDof = r.freeDof - r.nDrives;
     return r;
 }
@@ -182,6 +215,33 @@ std::vector<std::string> Model::assemble(std::vector<double>& q) const {
                 slideConsumed[k] = 1;
             }
         }
+    }
+
+    // M6d: a non-circular pair has two mirrored solutions of its row for a given
+    // angle of the first shaft, only one of which is tangent contact. Seed the
+    // second shaft on the tangent branch (the one whose log-derivatives agree),
+    // unless the author drove it.
+    for (const PolarMesh& pm : polarMeshes) {
+        const Profile& pa = profiles[(size_t)pm.profA];
+        const Profile& pb = profiles[(size_t)pm.profB];
+        const bool drivenA = bodyDriven(pa.body), drivenB = bodyDriven(pb.body);
+        if (drivenA && drivenB) continue;
+        const bool seedB = !drivenB;      // else the driven B fixes A
+        const Profile& kn = seedB ? pa : pb;
+        const Profile& ot = seedB ? pb : pa;
+        const double thKnown = q[(size_t)bodies[(size_t)kn.body].qOffset];
+        // polar angle of the contact point on the known side: A sees the other
+        // shaft in direction psi, B sees A in direction psi + pi
+        const double phiKnown = seedB ? pm.psi - thKnown : pm.psi + kPi - thKnown;
+        double phiOther, defect;
+        if (conjugateRoot(*kn.curve, phiKnown, *ot.curve, pm.d, phiOther, defect)) {
+            const double thOther = seedB ? pm.psi + kPi - phiOther : pm.psi - phiOther;
+            placeBody(q, ot.body, ot.hostAnchor, seedB ? pm.cB : pm.cA, thOther);
+        }
+        // the phase constant: wherever assembly landed is the touching pose
+        double rho, drho;
+        pm.thB0 = q[(size_t)bodies[(size_t)pb.body].qOffset] -
+                  pm.phase(*pa.curve, pm.psi - q[(size_t)bodies[(size_t)pa.body].qOffset], rho, drho);
     }
 
     // Bodies floating free of ground are an error in kinematic mode (their
@@ -338,6 +398,25 @@ std::vector<std::string> Model::validateAssembly(const std::vector<double>& q) c
             errs.push_back(buf);
         }
     }
+    for (const PolarMesh& pm : polarMeshes) {
+        const Profile& pa = profiles[(size_t)pm.profA];
+        const Profile& pb = profiles[(size_t)pm.profB];
+        double rA, rAp, rA2, rB, rBp, rB2;
+        pa.curve->polarEval(pm.psi - q[(size_t)bodies[(size_t)pa.body].qOffset], rA, rAp, rA2);
+        pb.curve->polarEval(pm.psi + kPi - q[(size_t)bodies[(size_t)pb.body].qOffset], rB, rBp, rB2);
+        const double touch = rA + rB - pm.d;
+        const double defect = std::fabs(rAp * rB - rA * rBp) / (rA * rB);
+        if (std::fabs(touch) > 1e-6 || defect > 1e-3) {
+            char buf[420];
+            std::snprintf(buf, sizeof buf,
+                "profiles '%s' and '%s' are not in rolling contact at the initial pose "
+                "(contact off the line of centers by %.3g m, tangency defect %.3g) — the "
+                "shafts' starting angles are inconsistent; leave one shaft undriven (and "
+                "without 'from') so assembly can place it, or give both the matching angles",
+                pa.name.c_str(), pb.name.c_str(), touch, defect);
+            errs.push_back(buf);
+        }
+    }
     for (const TouchJoint& tj : touches) {
         if (!tj.engaged) continue;      // a follower starting in flight is not an error
         const Profile& pr = profiles[(size_t)tj.profile];
@@ -378,6 +457,114 @@ struct MassContribution {
     Vec2 com;      // in body frame
     double I;      // about this contribution's own com
 };
+
+
+// ---------------------------------------------------------------- M6d conjugacy
+
+// Given one profile's polar angle, find where the other profile can meet it on
+// the line of centers: r_other(phiOther) = d - r_known(phiKnown). Of the (up to
+// two mirrored) roots, return the one whose log-derivative agrees best with the
+// known side — the branch on which the curves are actually tangent. Returns
+// false when no root exists (the pair cannot touch there); `defect` is then 1e9.
+bool conjugateRoot(const ProfileCurve& known, double phiKnown, const ProfileCurve& other,
+                   double d, double& phiOther, double& defect) {
+    double rK, rKp, rK2;
+    known.polarEval(phiKnown, rK, rKp, rK2);
+    const double target = d - rK;
+    defect = 1e9;
+    if (!(target > 0.0)) return false;
+
+    const int M = 1024;
+    auto f = [&](double phi) {
+        double r, rp, r2;
+        other.polarEval(phi, r, rp, r2);
+        return r - target;
+    };
+    auto consider = [&](double phi) {
+        double r, rp, r2;
+        other.polarEval(phi, r, rp, r2);
+        const double dft = std::fabs(rKp * r - rK * rp) / (rK * r);
+        if (dft < defect) { defect = dft; phiOther = phi; }
+    };
+    double prevPhi = 0.0, prevF = f(0.0);
+    if (std::fabs(prevF) < 1e-12) consider(0.0);
+    for (int j = 1; j <= M; ++j) {
+        const double phi = 2.0 * kPi * (double)j / (double)M;
+        const double fv = f(phi);
+        if (std::fabs(fv) < 1e-12) {
+            consider(phi);
+        } else if ((prevF < 0.0) != (fv < 0.0) && std::fabs(prevF) >= 1e-12) {
+            double lo = prevPhi, hi = phi, flo = prevF;
+            for (int it = 0; it < 60; ++it) {
+                const double mid = 0.5 * (lo + hi), fm = f(mid);
+                if ((fm < 0.0) == (flo < 0.0)) { lo = mid; flo = fm; } else hi = mid;
+            }
+            consider(0.5 * (lo + hi));
+        }
+        prevPhi = phi;
+        prevF = fv;
+    }
+    return defect < 1e8;
+}
+
+
+// rho = r/(d - r) and its derivative in phi, from profile A's polar form
+void rhoOf(const ProfileCurve& A, double d, double phi, double& rho, double& drho) {
+    double r, rp, r2;
+    A.polarEval(phi, r, rp, r2);
+    const double den = d - r;
+    rho = r / den;
+    drho = d * rp / (den * den);
+}
+
+void buildPhaseTable(PolarMesh& pm, const ProfileCurve& A) {
+    const int N = 2048;
+    const double h = 2.0 * kPi / (double)N;
+    pm.Fnodes.assign((size_t)N + 1, 0.0);
+    pm.rhoNodes.assign((size_t)N + 1, 0.0);
+    pm.drhoNodes.assign((size_t)N + 1, 0.0);
+    for (int i = 0; i <= N; ++i)
+        rhoOf(A, pm.d, (double)i * h, pm.rhoNodes[(size_t)i], pm.drhoNodes[(size_t)i]);
+    // node values of F = integral of rho: 3-point Gauss-Legendre on each interval
+    // (error ~ h^7), so the table is not the weak link
+    const double g = std::sqrt(0.6);
+    for (int i = 0; i < N; ++i) {
+        const double mid = ((double)i + 0.5) * h;
+        double f0, f1, f2, dd;
+        rhoOf(A, pm.d, mid - 0.5 * h * g, f0, dd);
+        rhoOf(A, pm.d, mid, f1, dd);
+        rhoOf(A, pm.d, mid + 0.5 * h * g, f2, dd);
+        pm.Fnodes[(size_t)i + 1] = pm.Fnodes[(size_t)i] +
+                                   0.5 * h * (5.0 / 9.0 * f0 + 8.0 / 9.0 * f1 + 5.0 / 9.0 * f2);
+    }
+    pm.Ftot = pm.Fnodes[(size_t)N];
+}
+
+struct ConjReport {
+    double maxDefect = 0.0, atPhiA = 0.0;
+    double minRatio = 1e300, maxRatio = 0.0;
+};
+
+// Sweep the whole turn: the pair is conjugate iff, at every polar angle of A,
+// the other profile meets it tangentially on the line of centers.
+ConjReport conjugacySweep(const ProfileCurve& A, const ProfileCurve& B, double d) {
+    ConjReport rep;
+    const int N = 360;
+    for (int k = 0; k < N; ++k) {
+        const double phiA = 2.0 * kPi * (double)k / (double)N;
+        double phiB, defect;
+        conjugateRoot(A, phiA, B, d, phiB, defect);
+        if (defect > rep.maxDefect) { rep.maxDefect = defect; rep.atPhiA = phiA; }
+        double rA, rAp, rA2;
+        A.polarEval(phiA, rA, rAp, rA2);
+        if (d - rA > 0.0) {
+            const double ratio = rA / (d - rA);
+            rep.minRatio = std::min(rep.minRatio, ratio);
+            rep.maxRatio = std::max(rep.maxRatio, ratio);
+        }
+    }
+    return rep;
+}
 
 // ------------------------------------------------------------ M4 synthesis
 //
@@ -831,6 +1018,18 @@ Model buildModel(const MechanismDecl& decl) {
                     "': circle needs a positive radius"};
             }
             pr.curve = std::make_shared<const ProfileCurve>(ProfileCurve::circle(pd.radius));
+        } else if (pd.kind == ProfileDecl::Kind::Ellipse) {
+            if (!(pd.ellipseA > 0.0) || !(pd.ellipseB > 0.0)) {
+                throw SemanticError{pd.line, "profile '" + pd.name +
+                    "': ellipse needs two positive semi-axes"};
+            }
+            if (pd.ellipseFocus && pd.ellipseA < pd.ellipseB) {
+                throw SemanticError{pd.line, "profile '" + pd.name +
+                    "': an ellipse pivoted at its focus needs the major semi-axis first "
+                    "(a >= b) — the focus lies on the x axis"};
+            }
+            pr.curve = std::make_shared<const ProfileCurve>(
+                ProfileCurve::ellipse(pd.ellipseA, pd.ellipseB, pd.ellipseFocus));
         } else if (pd.kind == ProfileDecl::Kind::Polar) {
             if (pd.polar.size() < 3) {
                 throw SemanticError{pd.line, "profile '" + pd.name +
@@ -947,6 +1146,105 @@ Model buildModel(const MechanismDecl& decl) {
 
     // --- meshes ---------------------------------------------------------------
     for (const MeshDecl& md : decl.meshes) {
+        // M6d: two profiles instead of two gears -> a non-circular gear pair
+        const int pa = m.profileIndex(md.gearA), pb = m.profileIndex(md.gearB);
+        const bool bothGears = m.gearIndex(md.gearA) >= 0 && m.gearIndex(md.gearB) >= 0;
+        if (!bothGears && (pa >= 0 || pb >= 0)) {
+            if (pa < 0 || pb < 0) {
+                const std::string& bad = pa < 0 ? md.gearA : md.gearB;
+                throw SemanticError{md.line, "mesh joins a profile and '" + bad +
+                    "', which is not a profile — mesh two gears or two profiles"};
+            }
+            if (pa == pb) {
+                throw SemanticError{md.line, "profile '" + md.gearA + "' cannot mesh with itself"};
+            }
+            if (md.tangent) {
+                throw SemanticError{md.line, "'tangent' applies to gear meshes; a profile mesh "
+                    "already keeps the contact on the line of centers"};
+            }
+            const Profile& PA = m.profiles[(size_t)pa];
+            const Profile& PB = m.profiles[(size_t)pb];
+            for (const Profile* P : {&PA, &PB}) {
+                if (!P->curve->starShaped()) {
+                    throw SemanticError{md.line, "profile '" + P->name + "' is a point list; a "
+                        "mesh needs star-shaped profiles (circle, polar or ellipse) so each "
+                        "ray from the shaft meets the curve once"};
+                }
+                if (m.bodies[(size_t)P->body].isGround) {
+                    throw SemanticError{md.line, "profile '" + P->name + "' is on ground; a "
+                        "mesh needs both profiles on rotating shafts"};
+                }
+            }
+            if (PA.body == PB.body) {
+                throw SemanticError{md.line, "profiles '" + PA.name + "' and '" + PB.name +
+                    "' sit on the same body — coaxial profiles cannot mesh"};
+            }
+            // fixed centers: each host must be pinned to ground at the profile's anchor
+            auto groundCenter = [&](const Profile& P, Vec2& out) {
+                for (const PinJoint& pj : m.pins) {
+                    if (pj.bodyA == P.body && pj.anchA == P.hostAnchor &&
+                        m.bodies[(size_t)pj.bodyB].isGround) {
+                        out = m.bodies[(size_t)pj.bodyB].anchors[(size_t)pj.anchB].local;
+                        return true;
+                    }
+                    if (pj.bodyB == P.body && pj.anchB == P.hostAnchor &&
+                        m.bodies[(size_t)pj.bodyA].isGround) {
+                        out = m.bodies[(size_t)pj.bodyA].anchors[(size_t)pj.anchA].local;
+                        return true;
+                    }
+                }
+                return false;
+            };
+            PolarMesh pm;
+            pm.line = md.line;
+            pm.profA = pa;
+            pm.profB = pb;
+            for (int side = 0; side < 2; ++side) {
+                const Profile& P = side == 0 ? PA : PB;
+                if (!groundCenter(P, side == 0 ? pm.cA : pm.cB)) {
+                    throw SemanticError{md.line, "profile '" + P.name + "' is meshed but its "
+                        "shaft is not pinned to ground at the profile's anchor; a non-circular "
+                        "mesh needs fixed centers (pin the host's anchor to a ground anchor)"};
+                }
+            }
+            pm.d = vlen(pm.cB - pm.cA);
+            if (!(pm.d > 1e-9)) {
+                throw SemanticError{md.line, "profiles '" + PA.name + "' and '" + PB.name +
+                    "' have coincident centers"};
+            }
+            pm.psi = std::atan2(pm.cB.y - pm.cA.y, pm.cB.x - pm.cA.x);
+
+            // a row that merely *describes* rolling is only rolling for a conjugate pair
+            const ConjReport cr = conjugacySweep(*PA.curve, *PB.curve, pm.d);
+            if (cr.maxDefect > 1e-3) {
+                char buf[420];
+                if (cr.maxDefect > 1e8) {
+                    std::snprintf(buf, sizeof buf,
+                        "profiles '%s' and '%s' cannot roll on each other at center distance "
+                        "%.4f m: at a polar angle of %.1f deg on '%s' the other profile never "
+                        "reaches the line of centers at the needed radius — check the center "
+                        "distance against the two radii",
+                        PA.name.c_str(), PB.name.c_str(), pm.d, rad2deg(cr.atPhiA),
+                        PA.name.c_str());
+                } else {
+                    std::snprintf(buf, sizeof buf,
+                        "profiles '%s' and '%s' are not a conjugate pair at center distance "
+                        "%.4f m: they meet on the line of centers but not tangentially (the "
+                        "log-slope of r differs by %.3g at %.1f deg), so they would cross, not "
+                        "roll — an elliptical pair needs identical ellipses pivoted at their "
+                        "foci, a distance 2a apart",
+                        PA.name.c_str(), PB.name.c_str(), pm.d, cr.maxDefect, rad2deg(cr.atPhiA));
+                }
+                throw SemanticError{md.line, buf};
+            }
+            pm.conjDefect = cr.maxDefect;
+            pm.minRatio = cr.minRatio;
+            pm.maxRatio = cr.maxRatio;
+            buildPhaseTable(pm, *PA.curve);
+            m.polarMeshes.push_back(pm);
+            continue;
+        }
+
         MeshJoint mm;
         mm.line = md.line;
         mm.tangent = md.tangent;

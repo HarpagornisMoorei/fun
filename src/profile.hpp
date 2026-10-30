@@ -4,6 +4,8 @@
 // expressed in a frame centered on its host anchor (axes parallel to the host
 // body's). Three kinds:
 //   circle   exact: c(s) = R (cos s, sin s)
+//   ellipse  exact: c(s) = (cx + a cos s, b sin s), centered on the anchor or
+//            with the anchor at the focus (cx = sqrt(a^2 - b^2))
 //   polar    periodic cubic spline r(phi) through (angle, radius) knots,
 //            c(phi) = r(phi) (cos phi, sin phi)      (star-shaped about the anchor)
 //   points   periodic cubic splines x(s), y(s) through the given points,
@@ -21,11 +23,14 @@ namespace mech {
 
 class ProfileCurve {
 public:
-    enum class Kind { Circle, Polar, Points };
+    enum class Kind { Circle, Polar, Points, Ellipse };
 
     // Preconditions are checked by the model builder (positive radii,
     // strictly increasing angles in [0, 2*pi), >= 3 distinct points).
     static ProfileCurve circle(double radius);
+    // Semi-axes a (along x) and b; `focus` puts the anchor at the right-hand
+    // focus (needs a >= b), i.e. the ellipse is a gear pivoted at a focus.
+    static ProfileCurve ellipse(double a, double b, bool focus);
     static ProfileCurve polar(const std::vector<double>& angles,
                               const std::vector<double>& radii);
     // Orientation is normalized to counter-clockwise (reversed if needed).
@@ -49,6 +54,13 @@ public:
     // Newton refinement; deterministic and free of hidden state.
     Foot nearest(Vec2 u) const;
 
+    // M6d: star-shaped about the anchor (every ray meets the curve once), so
+    // the curve is a polar function r(phi). Circle, polar and ellipse are;
+    // a point list in general is not.
+    bool starShaped() const { return kind_ != Kind::Points; }
+    // r, dr/dphi and d2r/dphi2 at polar angle phi (radians, any branch).
+    void polarEval(double phi, double& r, double& dr, double& d2r) const;
+
     // Sampled outline (n points, counter-clockwise) for drawing.
     std::vector<Vec2> outline(int n) const;
     // Largest distance from the anchor to the curve (camera fit).
@@ -58,6 +70,10 @@ public:
     size_t knots() const { return a_.t.size(); }
     // Circle radius (0 for the other kinds).
     double circleRadius() const { return radius_; }
+    // Ellipse parameters (0 for the other kinds).
+    double ellipseA() const { return ea_; }
+    double ellipseB() const { return eb_; }
+    bool ellipseFocus() const { return efocus_; }
 
 private:
     // Periodic cubic spline of one scalar over shared knots.
@@ -73,6 +89,8 @@ private:
 
     Kind kind_ = Kind::Circle;
     double radius_ = 0.0;
+    double ea_ = 0.0, eb_ = 0.0, ecx_ = 0.0;   // ellipse: semi-axes, centre offset
+    bool efocus_ = false;
     double period_ = 0.0;
     Spline a_, b_;   // polar: a_ = r(phi); points: a_ = x(s), b_ = y(s)
     std::vector<double> sampleS_;

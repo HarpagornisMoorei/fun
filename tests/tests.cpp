@@ -3197,7 +3197,7 @@ void testParserM6() {
     expectParseError("mechanism m { profile p { } on s }", "no shape");
     expectParseError("mechanism m { profile p { circle: 1 } }", "needs a host");
     expectParseError("mechanism m { profile p on s { circle: 1 circle: 2 } }", "already has a shape");
-    expectParseError("mechanism m { profile p on s { square: 1 } }", "'circle', 'polar' or 'points'");
+    expectParseError("mechanism m { profile p on s { square: 1 } }", "'points' or 'ellipse'");
     expectParseError("mechanism m { profile p on s { polar: } }", "needs (angle, radius)");
     expectParseError("mechanism m { touch f.tip p }", "expected 'on'");
 }
@@ -4023,6 +4023,63 @@ double biasDrift(const char* src, int* trials) {
     return worst;
 }
 
+// The same trajectory test as biasDrift, for a mechanism whose third derivatives are
+// large (the polar mesh's ratio swings 9:1): there the O(h^3) truncation term is far
+// above the solver's noise floor, so an absolute bound is the wrong instrument. What
+// tells a correct bias from a wrong one is how the drift scales: a correct bias leaves
+// only the h^3 term (halving h cuts the drift 8x), a wrong one leaves an h^2 term (4x).
+// Returns the smallest 2h/h drift ratio over the trials (expect ~8; < ~5 means a bias error).
+double biasScalingRatio(const char* src, int* trials) {
+    Model m = buildFromText(src);
+    ConstraintSystem sys(m);
+    DynamicsSystem dyn(m, sys);
+    std::vector<double> q;
+    m.assemble(q);
+    int iters = 0;
+    double res = 0.0;
+    unsigned seed = 99;
+    auto rnd = [&]() {
+        seed = seed * 1664525u + 1013904223u;
+        return ((seed >> 8) & 0xFFFF) / 65535.0 - 0.5;
+    };
+    double minRatio = 1e9;
+    *trials = 0;
+    for (int k = 0; k < 14; ++k) {
+        const double t = 0.045 * k;
+        if (!sys.solve(q, t, iters, &res)) continue;
+        std::vector<double> qd((size_t)m.nq());
+        for (double& v : qd) v = 6.0 * rnd();
+        dyn.projectVelocities(q, qd);
+        std::vector<double> qdd;
+        dyn.accelerations(q, qd, qdd);
+        std::vector<double> c0, cp, cm, c1;
+        sys.residuals(q, t, c0);
+        {
+            const double e = 1e-6;
+            std::vector<double> qp(q.size()), qm(q.size());
+            for (size_t i = 0; i < q.size(); ++i) { qp[i] = q[i] + e * qd[i]; qm[i] = q[i] - e * qd[i]; }
+            sys.residuals(qp, t + e, cp);
+            sys.residuals(qm, t - e, cm);
+            c1.resize(cp.size());
+            for (size_t i = 0; i < cp.size(); ++i) c1[i] = (cp[i] - cm[i]) / (2.0 * e);
+        }
+        auto drift = [&](double h) {
+            std::vector<double> qh(q.size()), c;
+            for (size_t i = 0; i < q.size(); ++i) qh[i] = q[i] + h * qd[i] + 0.5 * h * h * qdd[i];
+            sys.residuals(qh, t + h, c);
+            double mx = 0.0;
+            for (size_t i = 0; i < c.size(); ++i)
+                mx = std::max(mx, std::fabs(c[i] - c0[i] - h * c1[i]));
+            return mx;
+        };
+        const double big = drift(2e-3), small = drift(1e-3);
+        if (big < 1e-8) continue;                    // too near the noise floor to read a scaling
+        minRatio = std::min(minRatio, big / small);
+        ++*trials;
+    }
+    return minRatio;
+}
+
 void testContactDynamics() {
     std::printf("[dynamics M6c]\n");
 
@@ -4352,6 +4409,425 @@ void testContactDynamics() {
     }
 }
 
+
+// ---- M6d: non-circular gear pairs ---------------------------------------------------
+
+// Two identical ellipses (a = 50 mm, e = 0.5) pivoted at their foci, shafts 2a apart.
+const char* kEllipB = "0.04330127018922193";     // a sqrt(1 - e^2)
+std::string ellipSrc(const char* driveLine, const char* extra = "") {
+    std::string s =
+        "mechanism ep {\n"
+        "  ground frame { anchor pa at (0, 0)  anchor pb at (0.1, 0) }\n"
+        "  shaft a at frame.pa\n"
+        "  shaft b at frame.pb\n";
+    s += std::string("  profile ga on a.A { ellipse: 0.05 ") + kEllipB + " focus }\n";
+    s += std::string("  profile gb on b.A { ellipse: 0.05 ") + kEllipB + " focus }\n";
+    s += "  mesh ga gb\n  ";
+    s += driveLine;
+    s += "\n  ";
+    s += extra;
+    s += "\n}\n";
+    return s;
+}
+
+// Where profile `pi` crosses the line from its own centre toward `toward`,
+// found by brute force on the curve itself (nothing from the mesh row is used).
+struct EdgeHit { double s; Vec2 P, tangent; };
+EdgeHit hitOnLine(const Model& m, int pi, double th, Vec2 center, Vec2 toward) {
+    const ProfileCurve& cv = *m.profiles[(size_t)pi].curve;
+    const Vec2 u = normalize(toward - center);
+    auto f = [&](double s, Vec2& P, Vec2& T) {
+        Vec2 p, d1, d2;
+        cv.eval(s, p, d1, d2);
+        const Vec2 w = rotate(p, th);
+        P = center + w;
+        T = rotate(d1, th);
+        return std::make_pair(crossz(u, w), dot(u, w));
+    };
+    // The scan starts off s = 0: at some poses the crossing lies exactly on s = 0,
+    // where "sign change" never fires (f is exactly zero there).
+    const int N = 20000;
+    const double s0 = 0.1234567;
+    double prevS = s0, prevF;
+    Vec2 P, T;
+    prevF = f(s0, P, T).first;
+    for (int k = 1; k <= N; ++k) {
+        const double sk = s0 + 2.0 * kPi * k / N;
+        const auto fv = f(sk, P, T);
+        if ((prevF < 0.0) != (fv.first < 0.0) && fv.second > 0.0) {
+            double lo = prevS, hi = sk, flo = prevF;
+            for (int it = 0; it < 60; ++it) {
+                const double mid = 0.5 * (lo + hi);
+                const double fm = f(mid, P, T).first;
+                if ((fm < 0.0) == (flo < 0.0)) { lo = mid; flo = fm; } else hi = mid;
+            }
+            EdgeHit h;
+            h.s = 0.5 * (lo + hi);
+            f(h.s, h.P, h.tangent);
+            return h;
+        }
+        prevS = sk;
+        prevF = fv.first;
+    }
+    return EdgeHit{0.0, Vec2{}, Vec2{}};
+}
+
+// signed arc length of a profile between two curve parameters (the short way round)
+double arcBetween(const Model& m, int pi, double s0, double s1) {
+    double ds = s1 - s0;
+    while (ds > kPi) ds -= 2.0 * kPi;
+    while (ds < -kPi) ds += 2.0 * kPi;
+    const ProfileCurve& cv = *m.profiles[(size_t)pi].curve;
+    const int n = 2000;
+    double sum = 0.0;
+    for (int k = 0; k <= n; ++k) {
+        Vec2 p, d1, d2;
+        cv.eval(s0 + ds * k / n, p, d1, d2);
+        const double w = (k == 0 || k == n) ? 1.0 : (k % 2 ? 4.0 : 2.0);
+        sum += w * vlen(d1);
+    }
+    return sum * (ds / n) / 3.0;
+}
+
+void testNonCircularMesh() {
+    std::printf("[mesh M6d]\n");
+
+    // ---- the analytic polar form of the ellipse: exact on its own equation ---------
+    for (int focus = 0; focus < 2; ++focus) {
+        const ProfileCurve e = ProfileCurve::ellipse(0.05, 0.03, focus != 0);
+        const double cx = focus ? 0.04 : 0.0;          // sqrt(0.05^2 - 0.03^2)
+        double worst = 0.0;
+        for (int k = 0; k < 720; ++k) {
+            const double phi = 2.0 * kPi * k / 720.0 + 0.0031;
+            double r, dr, d2r;
+            e.polarEval(phi, r, dr, d2r);
+            const double x = r * std::cos(phi) - cx, y = r * std::sin(phi);
+            worst = std::max(worst, std::fabs(x * x / (0.05 * 0.05) + y * y / (0.03 * 0.03) - 1.0));
+        }
+        CHECK(worst < 1e-12);                          // the point (r cos, r sin) lies ON the ellipse
+    }
+    {
+        // derivatives by central differences
+        for (int focus = 0; focus < 2; ++focus) {
+            const ProfileCurve e = ProfileCurve::ellipse(0.05, 0.03, focus != 0);
+            double w1 = 0.0, w2 = 0.0;
+            for (int k = 0; k < 360; ++k) {
+                const double phi = 2.0 * kPi * k / 360.0 + 0.0071, h = 1e-5;
+                double r, dr, d2r, rp, drp, x, rm, drm;
+                e.polarEval(phi, r, dr, d2r);
+                e.polarEval(phi + h, rp, drp, x);
+                e.polarEval(phi - h, rm, drm, x);
+                w1 = std::max(w1, std::fabs((rp - rm) / (2 * h) - dr));
+                w2 = std::max(w2, std::fabs((drp - drm) / (2 * h) - d2r));
+            }
+            CHECK(w1 < 1e-8 && w2 < 1e-7);
+        }
+    }
+
+    // ---- grammar and diagnostics -----------------------------------------------------
+    {
+        const Program p = parseText("mechanism m { ground g { anchor a at (0,0) } shaft s at g.a "
+                                    "profile p on s { ellipse: 0.05 0.03 focus } "
+                                    "profile q on s { ellipse: 0.05 0.03 } }");
+        CHECK(p.mechanisms[0].profiles[0].kind == ProfileDecl::Kind::Ellipse);
+        CHECK(p.mechanisms[0].profiles[0].ellipseFocus && !p.mechanisms[0].profiles[1].ellipseFocus);
+        CHECK_APPROX(p.mechanisms[0].profiles[0].ellipseA, 0.05, 1e-15);
+        CHECK_APPROX(p.mechanisms[0].profiles[0].ellipseB, 0.03, 1e-15);
+    }
+    auto expectModelError = [&](const std::string& src, const char* needle) {
+        bool threw = false;
+        try {
+            buildFromText(src.c_str());
+        } catch (const SemanticError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find(needle) != std::string::npos);
+            CHECK(e.line >= 1);
+        }
+        CHECK(threw);
+    };
+    const std::string two =
+        "mechanism m { ground g { anchor pa at (0,0) anchor pb at (0.1,0) } "
+        "shaft a at g.pa shaft b at g.pb ";
+    expectModelError(two + "profile p on a { ellipse: 0 0.03 } }", "two positive semi-axes");
+    expectModelError(two + "profile p on a { ellipse: 0.03 0.05 focus } }", "major semi-axis first");
+    {
+        // a centered ellipse may have either axis longer
+        buildFromText((two + "profile p on a { ellipse: 0.03 0.05 } }").c_str());
+    }
+
+    const std::string pair = std::string("mechanism m { ground g { anchor pa at (0,0) anchor pb at (0.1,0) } "
+        "shaft a at g.pa shaft b at g.pb ")
+        + "profile ga on a.A { ellipse: 0.05 " + kEllipB + " focus } ";
+    expectModelError(pair + "profile gb on b.A { ellipse: 0.05 " + kEllipB + " focus } "
+                     "mesh ga gb tangent }", "applies to gear meshes");
+    expectModelError(pair + "gear x { radius: 0.05 } on b mesh ga x }", "not a profile");
+    expectModelError(pair + "profile gb on b.A { points: (0.05,0) (0,0.05) (-0.05,0) (0,-0.05) } "
+                     "mesh ga gb }", "point list");
+    expectModelError(pair + "mesh ga ga }", "cannot mesh with itself");
+    expectModelError(std::string("mechanism m { ground g { anchor pa at (0,0) anchor pb at (0.1,0) } "
+                     "shaft a at g.pa shaft b at g.pb "
+                     "profile ga on a { circle: 0.05 } profile gb on a { circle: 0.05 } mesh ga gb }"),
+                     "same body");
+    expectModelError(std::string("mechanism m { ground g { anchor pa at (0,0) anchor pb at (0.1,0) } "
+                     "shaft a at g.pa  body b { anchor c at (0,0) } "
+                     "profile ga on a { circle: 0.05 } profile gb on b.c { circle: 0.05 } mesh ga gb }"),
+                     "not pinned to ground");
+    expectModelError(std::string("mechanism m { ground g { anchor pa at (0,0) anchor pb at (0.1,0) } "
+                     "shaft a at g.pa profile ga on a { circle: 0.05 } "
+                     "profile gb on g.pb { circle: 0.05 } mesh ga gb }"), "is on ground");
+    // not a conjugate pair: the right centre distance for the wrong curves
+    expectModelError(pair + "profile gb on b.A { ellipse: 0.05 0.04 focus } mesh ga gb }",
+                     "not a conjugate pair");
+    // the right curves at the wrong distance (ellipses need 2a): the profiles cannot reach each other
+    expectModelError(std::string("mechanism m { ground g { anchor pa at (0,0) anchor pb at (0.2,0) } "
+                     "shaft a at g.pa shaft b at g.pb profile ga on a.A { ellipse: 0.05 ") + kEllipB +
+                     " focus } profile gb on b.A { ellipse: 0.05 " + kEllipB + " focus } mesh ga gb }",
+                     "cannot roll on each other");
+    // an ellipse against a circle is not a pair either
+    expectModelError(pair + "profile gb on b.A { circle: 0.05 } mesh ga gb }", "cannot roll on each other");
+
+    // ---- circles reproduce `mesh` exactly -------------------------------------------------
+    {
+        const char* gearsSrc =
+            "mechanism g { ground frame { anchor pa at (0,0) anchor pb at (0.1,0) }\n"
+            "  shaft a at frame.pa  shaft b at frame.pb\n"
+            "  gear ga { radius: 0.04 } on a  gear gb { radius: 0.06 } on b\n"
+            "  mesh ga gb  drive a at 36 deg/s }";
+        const char* circSrc =
+            "mechanism g { ground frame { anchor pa at (0,0) anchor pb at (0.1,0) }\n"
+            "  shaft a at frame.pa  shaft b at frame.pb\n"
+            "  profile ga on a { circle: 0.04 } profile gb on b { circle: 0.06 }\n"
+            "  mesh ga gb  drive a at 36 deg/s }";
+        Model mg = buildFromText(gearsSrc), mc = buildFromText(circSrc);
+        CHECK(mc.dofReport().freeDof == mg.dofReport().freeDof);
+        CHECK_APPROX(mc.polarMeshes[0].minRatio, 0.04 / 0.06, 1e-12);       // |wB/wA| = rA/rB, constant
+        CHECK_APPROX(mc.polarMeshes[0].maxRatio, 0.04 / 0.06, 1e-12);
+        ConstraintSystem sg(mg), sc(mc);
+        std::vector<double> qg, qc;
+        mg.assemble(qg);
+        mc.assemble(qc);
+        int iters = 0;
+        double res = 0.0;
+        sg.solve(qg, 0.0, iters, &res);
+        sc.solve(qc, 0.0, iters, &res);
+        CHECK(mc.validateAssembly(qc).empty());
+        const int bg = mg.bodyIndex("b"), bc = mc.bodyIndex("b");
+        const double b0g = qg[(size_t)mg.bodies[bg].qOffset], b0c = qc[(size_t)mc.bodies[bc].qOffset];
+        double worst = 0.0, worstExact = 0.0;
+        for (int k = 1; k <= 144; ++k) {                 // two turns of A
+            const double t = k / 6.0;
+            sg.solve(qg, t, iters, &res);
+            sc.solve(qc, t, iters, &res);
+            const double dg = qg[(size_t)mg.bodies[bg].qOffset] - b0g;
+            const double dc = qc[(size_t)mc.bodies[bc].qOffset] - b0c;
+            worst = std::max(worst, std::fabs(dg - dc));
+            worstExact = std::max(worstExact, std::fabs(dc - (-(0.04 / 0.06) * deg2rad(36.0) * t)));
+        }
+        CHECK(worst < 1e-9);          // same motion as the gear mesh
+        CHECK(worstExact < 1e-9);     // and it is the exact ratio -rA/rB
+    }
+
+    // ---- an elliptical pair ------------------------------------------------------------------
+    {
+        Model m = buildFromText(ellipSrc("drive a at 30 deg/s").c_str());
+        const PolarMesh& pm = m.polarMeshes[0];
+        CHECK_APPROX(pm.minRatio, 1.0 / 3.0, 1e-9);       // (1 - e)/(1 + e)
+        CHECK_APPROX(pm.maxRatio, 3.0, 1e-9);             // (1 + e)/(1 - e)
+        CHECK(pm.conjDefect < 1e-9);
+        CHECK(m.dofReport().freeDof == 1 && m.dofReport().residualDof == 0);
+        CHECK_APPROX(pm.Ftot, 2.0 * kPi, 1e-9);           // B turns once per turn of A
+
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        CHECK(m.assemble(q).empty());
+        int iters = 0;
+        double res = 0.0;
+        CHECK(sys.solve(q, 0.0, iters, &res));
+        CHECK(m.validateAssembly(q).empty());
+        const int ia = m.bodyIndex("a"), ib = m.bodyIndex("b");
+        const int pa = m.profileIndex("ga"), pb = m.profileIndex("gb");
+        const Vec2 cA = pm.cA, cB = pm.cB;
+        const double a0 = q[(size_t)m.bodies[ia].qOffset], b0 = q[(size_t)m.bodies[ib].qOffset];
+        double worstRes = 0.0, worstTouch = 0.0, worstTangent = 0.0, worstArc = 0.0;
+        EdgeHit prevA{}, prevB{};
+        double bAtTurn = 0.0;
+        for (int k = 0; k <= 144; ++k) {                  // two turns, 5 deg of A per step
+            const double t = k / 6.0;
+            sys.solve(q, t, iters, &res);
+            worstRes = std::max(worstRes, res);
+            if (k == 72) bAtTurn = q[(size_t)m.bodies[ib].qOffset];
+            if (k % 3 != 0) continue;
+            // rolling, judged on the curves alone: the contact point on A and on B
+            // coincide, the tangents there are parallel, and the arcs rolled agree
+            const double thA = q[(size_t)m.bodies[ia].qOffset], thB = q[(size_t)m.bodies[ib].qOffset];
+            const EdgeHit ha = hitOnLine(m, pa, thA, cA, cB), hb = hitOnLine(m, pb, thB, cB, cA);
+            worstTouch = std::max(worstTouch, vlen(ha.P - hb.P));
+            worstTangent = std::max(worstTangent, std::fabs(crossz(normalize(ha.tangent), normalize(hb.tangent))));
+            if (k > 0) {
+                const double dLA = arcBetween(m, pa, prevA.s, ha.s);
+                const double dLB = arcBetween(m, pb, prevB.s, hb.s);
+                worstArc = std::max(worstArc, std::fabs(dLA + dLB));    // external: opposite senses
+                CHECK(std::fabs(dLA) > 1e-3);                            // a real distance was rolled
+            }
+            prevA = ha;
+            prevB = hb;
+        }
+        CHECK(worstRes < 1e-9);
+        CHECK_APPROX(worstTouch, 0.0, 1e-8);       // the two curves meet at the contact point
+        CHECK_APPROX(worstTangent, 0.0, 1e-6);     // ... tangentially
+        CHECK_APPROX(worstArc, 0.0, 1e-6);         // ... and have rolled equal lengths: no slip
+        CHECK_APPROX(bAtTurn - b0, -2.0 * kPi, 1e-9);     // one turn of A is exactly one (reversed) turn of B
+
+        // the speed surges between 3x and 1/3x: read off the solved motion
+        auto ratioAt = [&](double t) {
+            std::vector<double> qa = q, qb = q;
+            const double e = 1e-4;
+            sys.solve(qa, t + e, iters, &res);
+            sys.solve(qb, t - e, iters, &res);
+            return (qa[(size_t)m.bodies[ib].qOffset] - qb[(size_t)m.bodies[ib].qOffset]) /
+                   (qa[(size_t)m.bodies[ia].qOffset] - qb[(size_t)m.bodies[ia].qOffset]);
+        };
+        std::vector<double> q0;
+        m.assemble(q0);
+        sys.solve(q0, 0.0, iters, &res);
+        q = q0;
+        CHECK_APPROX(ratioAt(0.0), -3.0, 1e-5);             // far vertex of A meets near vertex of B
+        q = q0;
+        sys.solve(q, 6.0, iters, &res);                     // half a turn later
+        CHECK_APPROX(ratioAt(6.0), -1.0 / 3.0, 1e-5);
+        (void)a0;
+    }
+
+    // ---- non-causal: drive the OTHER shaft, and the pair still rolls ---------------------------------
+    {
+        Model m = buildFromText(ellipSrc("drive b at -30 deg/s").c_str());
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        CHECK(sys.solve(q, 0.0, iters, &res));
+        CHECK(m.validateAssembly(q).empty());
+        const int ia = m.bodyIndex("a");
+        const double a0 = q[(size_t)m.bodies[ia].qOffset];
+        double worstRes = 0.0, worstTouch = 0.0, aAtTurn = 0.0;
+        for (int k = 1; k <= 72; ++k) {                   // one turn of B
+            sys.solve(q, k / 6.0, iters, &res);
+            worstRes = std::max(worstRes, res);
+            if (k == 72) aAtTurn = q[(size_t)m.bodies[ia].qOffset];
+            if (k % 6 == 0) {
+                const PolarMesh& pm = m.polarMeshes[0];
+                const double thA = q[(size_t)m.bodies[ia].qOffset];
+                const double thB = q[(size_t)m.bodies[m.bodyIndex("b")].qOffset];
+                double rA, rAp, rA2, rB, rBp, rB2;
+                m.profiles[0].curve->polarEval(pm.psi - thA, rA, rAp, rA2);
+                m.profiles[1].curve->polarEval(pm.psi + kPi - thB, rB, rBp, rB2);
+                worstTouch = std::max(worstTouch, std::fabs(rA + rB - pm.d));   // contact on the line of centers
+            }
+        }
+        CHECK(worstRes < 1e-9);
+        CHECK(worstTouch < 1e-8);
+        CHECK_APPROX(aAtTurn - a0, 2.0 * kPi, 1e-9);
+    }
+
+    // ---- assembly picks the tangent branch whatever the starting angle ------------------------------------
+    {
+        for (const char* from : {"from 70 deg", "from 130 deg", "from -40 deg"}) {
+            const std::string line = std::string("drive a at 30 deg/s ") + from;
+            Model m = buildFromText(ellipSrc(line.c_str()).c_str());
+            ConstraintSystem sys(m);
+            std::vector<double> q;
+            m.assemble(q);
+            int iters = 0;
+            double res = 0.0;
+            CHECK(sys.solve(q, 0.0, iters, &res));
+            CHECK(m.validateAssembly(q).empty());
+        }
+        // two drives that disagree about the pose cannot be assembled into rolling contact
+        Model bad = buildFromText(ellipSrc("drive a at 30 deg/s", "drive b at -30 deg/s from 20 deg").c_str());
+        std::vector<double> q;
+        bad.assemble(q);
+        const std::vector<std::string> errs = bad.validateAssembly(q);
+        CHECK(!errs.empty());
+        CHECK(!errs.empty() && errs[0].find("not in rolling contact") != std::string::npos);
+    }
+
+    // ---- dynamics -----------------------------------------------------------------------------------------
+    {
+        // J qdd + bias = 0 along the true motion: a rate-driven pair, both shafts moving
+        const std::string dyn = ellipSrc("drive a at 400 deg/s", "world { gravity: 9.81 }");
+        int n = 0;
+        const double ratio = biasScalingRatio(dyn.c_str(), &n);
+        CHECK(n >= 8);
+        CHECK(ratio > 6.0);        // ~8: only the h^3 term remains; a wrong bias leaves h^2 (~4)
+    }
+    {
+        // work-energy: a constant torque on A from rest delivers tau * dtheta_A, all of it as
+        // kinetic energy of the two shafts, however the ratio surges
+        Model m = buildFromText(ellipSrc("drive a torque 0.002", "world { gravity: 0 }").c_str());
+        ConstraintSystem sys(m);
+        DynamicsSystem dyn(m, sys);
+        std::vector<double> q, qd((size_t)m.nq(), 0.0);
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        dyn.projectVelocities(q, qd);
+        const int ia = m.bodyIndex("a"), ib = m.bodyIndex("b");
+        const double thA0 = q[(size_t)m.bodies[ia].qOffset];
+        double worstWork = 0.0, worstRatio = 0.0, maxRatio = 0.0, minRatio = 1e9;
+        const PolarMesh& pm = m.polarMeshes[0];
+        for (long k = 0; k < 600; ++k) {                   // 1.2 s
+            dyn.step(q, qd, k * m.world.step);
+            const double thA = q[(size_t)m.bodies[ia].qOffset];
+            const double wA = qd[(size_t)m.bodies[ia].qOffset], wB = qd[(size_t)m.bodies[ib].qOffset];
+            const double ke = dyn.kinetic(q, qd);
+            worstWork = std::max(worstWork, std::fabs(ke - 0.002 * (thA - thA0)));
+            double rho, drho;
+            pm.phase(*m.profiles[0].curve, pm.psi - thA, rho, drho);
+            if (std::fabs(wA) > 1e-3) {
+                worstRatio = std::max(worstRatio, std::fabs(wB / wA + rho));
+                maxRatio = std::max(maxRatio, std::fabs(wB / wA));
+                minRatio = std::min(minRatio, std::fabs(wB / wA));
+            }
+        }
+        CHECK(worstWork < 1e-6);                           // KE = tau dtheta to a micro-joule (of ~0.03 J)
+        CHECK(worstRatio < 1e-6);                          // wB / wA = -rho(phi_A) all along
+        CHECK(maxRatio > 2.5 && minRatio < 0.4);           // and it did surge, through most of the range
+        CHECK(q[(size_t)m.bodies[ia].qOffset] - thA0 > 1.0);      // it really spun up
+        CHECK(sys.maxResidual(q, 1.2) < 1e-8);
+    }
+
+    // ---- the shipped example --------------------------------------------------------------------------------
+    {
+        std::ifstream in("examples/ellipgears.mech");
+        if (!in) {
+            std::fprintf(stderr, "note: examples/ellipgears.mech not found (cwd?)\n");
+        } else {
+            std::stringstream ss;
+            ss << in.rdbuf();
+            Model m = buildModel(parse(lex(ss.str())).mechanisms[0]);
+            CHECK(m.polarMeshes.size() == 1);
+            CHECK(m.dofReport().residualDof == 0);
+            CHECK_APPROX(m.polarMeshes[0].maxRatio, 3.0, 1e-6);
+            CHECK_APPROX(m.polarMeshes[0].minRatio, 1.0 / 3.0, 1e-6);
+            ConstraintSystem sys(m);
+            std::vector<double> q;
+            CHECK(m.assemble(q).empty());
+            int iters = 0;
+            double res = 0.0;
+            CHECK(sys.solve(q, 0.0, iters, &res));
+            CHECK(m.validateAssembly(q).empty());
+            double worst = 0.0;
+            for (int k = 1; k <= 240; ++k) {               // 4 s = two turns at 30 rpm
+                sys.solve(q, k / 60.0, iters, &res);
+                worst = std::max(worst, res);
+            }
+            CHECK(worst < 1e-9);
+        }
+    }
+}
+
 } // namespace (anonymous)
 
 namespace mech {
@@ -4384,6 +4860,7 @@ int runAllTests() {
     testParserModelM6b();
     testKinematicsM6b();
     testContactDynamics();
+    testNonCircularMesh();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

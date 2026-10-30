@@ -66,6 +66,7 @@
 //   shape       := 'circle' ':' num
 //                | 'polar' ':' ( '(' num ['deg'] ',' num ')' )+
 //                | 'points' ':' ( '(' num ',' num ')' )+
+//                | 'ellipse' ':' num num [ 'focus' ]          (M6d)
 //   touchDecl   := 'touch' ref 'on' IDENT { 'roller' num | 'restitution' num }
 //
 // M6b ('cam' is contextual at statement start so `cam` stays usable as a
@@ -420,8 +421,9 @@ private:
         while (!acceptSym("}")) {
             if (atEnd()) fail("unterminated '{' in profile '" + p.name + "'");
             if (cur().type != Tok::Ident ||
-                (cur().text != "circle" && cur().text != "polar" && cur().text != "points")) {
-                fail("expected profile shape ('circle', 'polar' or 'points'), got '"
+                (cur().text != "circle" && cur().text != "polar" && cur().text != "points" &&
+                 cur().text != "ellipse")) {
+                fail("expected profile shape ('circle', 'polar', 'points' or 'ellipse'), got '"
                      + cur().text + "'");
             }
             if (p.kind != ProfileDecl::Kind::None) {
@@ -433,6 +435,14 @@ private:
             if (shape == "circle") {
                 p.kind = ProfileDecl::Kind::Circle;
                 p.radius = parseNum();
+            } else if (shape == "ellipse") {
+                p.kind = ProfileDecl::Kind::Ellipse;
+                p.ellipseA = parseNum();
+                p.ellipseB = parseNum();
+                if (cur().type == Tok::Ident && cur().text == "focus") {
+                    next();
+                    p.ellipseFocus = true;
+                }
             } else if (shape == "polar") {
                 p.kind = ProfileDecl::Kind::Polar;
                 while (acceptSym("(")) {
@@ -461,7 +471,7 @@ private:
         }
         if (p.kind == ProfileDecl::Kind::None) {
             throw ParseError{name.line, name.col, "profile '" + p.name +
-                "' has no shape — give it 'circle', 'polar' or 'points'"};
+                "' has no shape — give it 'circle', 'polar', 'points' or 'ellipse'"};
         }
         if (!hasHost && acceptKw("on")) host();
         if (!hasHost) {

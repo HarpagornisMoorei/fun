@@ -143,6 +143,8 @@ int cmdCheck(const std::string& path) {
                     d.nBodies, d.nPins, d.nSlides, d.nGears, d.nMeshes);
         if (d.nTangentMeshes > 0) std::printf(" (%d tangent)", d.nTangentMeshes);
         if (d.nTouches > 0) std::printf("  ·  profiles %d  ·  touches %d", d.nProfiles, d.nTouches);
+        else if (d.nPolarMeshes > 0) std::printf("  ·  profiles %d  ·  non-circular meshes %d",
+                                                  d.nProfiles, d.nPolarMeshes);
         std::printf("  ·  drives %d", d.nDrives);
         if (d.nHolds > 0) std::printf(" (incl. %d mode hold%s)", d.nHolds,
                                       d.nHolds == 1 ? "" : "s");
@@ -154,7 +156,8 @@ int cmdCheck(const std::string& path) {
 
         const int j = d.nPins + d.nSlides;
         std::printf("Grubler-Kutzbach (planar): F = 3(n-1) - 2j - k = 3*%d - 2*%d - %d = %d\n",
-                    d.nBodies - 1, j, d.nMeshes + d.nTangentMeshes + d.nTouches, d.freeDof);
+                    d.nBodies - 1, j,
+                    d.nMeshes + d.nTangentMeshes + d.nTouches + d.nPolarMeshes, d.freeDof);
         if (d.residualDof == 0) {
             std::printf("residual DOF after drives: 0  ->  fully determined [ok]\n");
         } else if (d.residualDof > 0) {
@@ -199,6 +202,10 @@ int cmdCheck(const std::string& path) {
                 if (cv.kind() == ProfileCurve::Kind::Circle) {
                     std::printf("  %-8s on %-10s circle radius %.4f\n",
                                 pr.name.c_str(), where.c_str(), cv.circleRadius());
+                } else if (cv.kind() == ProfileCurve::Kind::Ellipse) {
+                    std::printf("  %-8s on %-10s ellipse %.4f x %.4f%s\n",
+                                pr.name.c_str(), where.c_str(), cv.ellipseA(), cv.ellipseB(),
+                                cv.ellipseFocus() ? " (pivoted at a focus)" : " (centered)");
                 } else {
                     std::printf("  %-8s on %-10s %s, %zu knots, radius %.4f .. %.4f\n",
                                 pr.name.c_str(), where.c_str(),
@@ -324,6 +331,14 @@ int cmdCheck(const std::string& path) {
                             tj.restitution == 0.0 ? " (plastic landing)" : "");
             }
         }
+        for (const PolarMesh& pm : m.polarMeshes) {
+            std::printf("mesh %-8s <-> %-8s non-circular, centers %.4f m apart  ->  "
+                        "output speed x%.4g .. x%.4g, direction reversed (external)\n"
+                        "  conjugate: log-slopes of r agree to %.1e over a full turn [ok]\n",
+                        m.profiles[(size_t)pm.profA].name.c_str(),
+                        m.profiles[(size_t)pm.profB].name.c_str(), pm.d,
+                        pm.minRatio, pm.maxRatio, pm.conjDefect);
+        }
         for (const SpringJoint& sp : m.springs) {
             std::printf("spring %-8s k=%g rest=%.4f damp=%g\n",
                         sp.name.c_str(), sp.k, sp.rest, sp.damp);
@@ -431,6 +446,8 @@ int cmdCheck(const std::string& path) {
         std::vector<std::string> geomErrs = m.validateAssembly(q);
         if (geomErrs.empty()) {
             if (!m.meshes.empty()) std::printf("mesh tangency: all %d meshes ok\n", d.nMeshes);
+            if (!m.polarMeshes.empty())
+                std::printf("non-circular meshes: all %d in rolling contact\n", d.nPolarMeshes);
             if (!m.touches.empty()) std::printf("contacts: all %d touches closed\n", d.nTouches);
         } else {
             for (const std::string& e : geomErrs) {

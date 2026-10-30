@@ -104,6 +104,18 @@ ProfileCurve ProfileCurve::circle(double radius) {
     return c;
 }
 
+ProfileCurve ProfileCurve::ellipse(double a, double b, bool focus) {
+    ProfileCurve c;
+    c.kind_ = Kind::Ellipse;
+    c.ea_ = a;
+    c.eb_ = b;
+    c.efocus_ = focus;
+    c.ecx_ = focus ? std::sqrt(std::max(0.0, a * a - b * b)) : 0.0;
+    c.period_ = 2.0 * kPi;
+    c.finish();
+    return c;
+}
+
 ProfileCurve ProfileCurve::polar(const std::vector<double>& angles,
                                  const std::vector<double>& radii) {
     ProfileCurve c;
@@ -182,6 +194,49 @@ void ProfileCurve::eval(double s, Vec2& p, Vec2& d1, Vec2& d2) const {
         b_.eval(s, p.y, d1.y, d2.y);
         return;
     }
+    case Kind::Ellipse: {
+        const double cs = std::cos(s), sn = std::sin(s);
+        p = {ecx_ + ea_ * cs, eb_ * sn};
+        d1 = {-ea_ * sn, eb_ * cs};
+        d2 = {-ea_ * cs, -eb_ * sn};
+        return;
+    }
+    }
+}
+
+void ProfileCurve::polarEval(double phi, double& r, double& dr, double& d2r) const {
+    switch (kind_) {
+    case Kind::Circle:
+        r = radius_;
+        dr = d2r = 0.0;
+        return;
+    case Kind::Polar:
+        a_.eval(phi, r, dr, d2r);
+        return;
+    case Kind::Ellipse: {
+        const double cs = std::cos(phi), sn = std::sin(phi);
+        if (efocus_) {
+            // r = p / (1 - e cos phi), p = b^2 / a, e = sqrt(a^2 - b^2) / a
+            const double e = ecx_ / ea_, p = eb_ * eb_ / ea_;
+            const double D = 1.0 - e * cs;
+            r = p / D;
+            dr = -p * e * sn / (D * D);
+            d2r = -p * e * cs / (D * D) + 2.0 * p * e * e * sn * sn / (D * D * D);
+        } else {
+            // r = ab / sqrt(N), N = b^2 cos^2 + a^2 sin^2
+            const double N = eb_ * eb_ * cs * cs + ea_ * ea_ * sn * sn;
+            const double Np = (ea_ * ea_ - eb_ * eb_) * std::sin(2.0 * phi);
+            const double Npp = 2.0 * (ea_ * ea_ - eb_ * eb_) * std::cos(2.0 * phi);
+            const double ab = ea_ * eb_;
+            r = ab * std::pow(N, -0.5);
+            dr = -0.5 * ab * std::pow(N, -1.5) * Np;
+            d2r = 0.75 * ab * std::pow(N, -2.5) * Np * Np - 0.5 * ab * std::pow(N, -1.5) * Npp;
+        }
+        return;
+    }
+    case Kind::Points:
+        r = dr = d2r = 0.0;   // not star-shaped; callers check starShaped()
+        return;
     }
 }
 
