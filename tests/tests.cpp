@@ -7,7 +7,9 @@
 #include "../src/lexer.hpp"
 #include "../src/model.hpp"
 #include "../src/parser.hpp"
+#include "../src/profile.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -2962,6 +2964,485 @@ void testDynamicsM5() {
     }
 }
 
+
+// ---- M6a: profiles and bilateral contact -------------------------------------
+
+// eccentric disc (R = 0.03, rim centre e = 0.01 off the axle) under a roller
+// follower on a rail through the axle; the profile line is spliced in.
+std::string eccentricSrc(const std::string& profileLine, const char* roller) {
+    std::string s =
+        "mechanism ecc {\n"
+        "  ground frame { anchor axle at (0, 0)  anchor rail at (0, 0.09) dir (0, 1) }\n"
+        "  body cam { anchor axle at (0, 0)  anchor rim at (0.010, 0) }\n"
+        "  pin cam.axle -> frame.axle\n";
+    s += "  " + profileLine + "\n";
+    s += "  body follower { anchor tip at (0, 0) dir (1, 0) }\n"
+         "  slide follower.tip -> frame.rail\n"
+         "  touch follower.tip on disc ";
+    s += roller;
+    s += "\n  drive cam at 30 deg/s\n}\n";
+    return s;
+}
+
+// y(theta) for the eccentric: e sin(theta) + sqrt((R+rho)^2 - e^2 cos^2(theta))
+double eccentricY(double th, double rho) {
+    const double e = 0.010, R = 0.030 + rho;
+    return e * std::sin(th) + std::sqrt(R * R - e * e * std::cos(th) * std::cos(th));
+}
+
+// Run the eccentric over two turns (5 deg steps, warm-started) and return the
+// worst deviation of the follower height from the closed form.
+double eccentricWorstError(const std::string& src, double rho, double* worstRes) {
+    Model m = buildFromText(src.c_str());
+    ConstraintSystem sys(m);
+    std::vector<double> q;
+    m.assemble(q);
+    int iters = 0;
+    double res = 0.0;
+    sys.solve(q, 0.0, iters, &res);
+    const int ifol = m.bodyIndex("follower");
+    double worst = 0.0;
+    *worstRes = 0.0;
+    for (int k = 0; k <= 144; ++k) {
+        const double t = k * (5.0 / 30.0);
+        sys.solve(q, t, iters, &res);
+        *worstRes = std::max(*worstRes, res);
+        worst = std::max(worst, std::fabs(q[(size_t)m.bodies[ifol].qOffset + 2] -
+                                          eccentricY(deg2rad(30.0) * t, rho)));
+    }
+    return worst;
+}
+
+void testProfileCurve() {
+    std::printf("[profile M6a]\n");
+
+    // a polar table of constant radius is exactly a circle (spline reproduces
+    // constants), values and both derivatives
+    {
+        std::vector<double> ang, rad;
+        for (int i = 0; i < 7; ++i) { ang.push_back(0.1 + i * 2.0 * kPi / 7.0); rad.push_back(0.03); }
+        const ProfileCurve pc = ProfileCurve::polar(ang, rad);
+        const ProfileCurve cc = ProfileCurve::circle(0.03);
+        double worst = 0.0;
+        for (int k = 0; k < 200; ++k) {
+            const double s = k * 0.0317;
+            Vec2 p, d1, d2, q, e1, e2;
+            pc.eval(s, p, d1, d2);
+            cc.eval(s, q, e1, e2);
+            worst = std::max({worst, vlen(p - q), vlen(d1 - e1), vlen(d2 - e2)});
+        }
+        CHECK(worst < 1e-12);
+    }
+
+    // spline accuracy on a smooth oval, and periodicity / C2 at the seam
+    {
+        std::vector<double> ang, rad;
+        for (int i = 0; i < 36; ++i) {
+            const double a = i * 2.0 * kPi / 36.0;
+            ang.push_back(a);
+            rad.push_back(0.03 + 0.005 * std::cos(2.0 * a));
+        }
+        const ProfileCurve oval = ProfileCurve::polar(ang, rad);
+        double worstPos = 0.0;
+        for (int k = 0; k < 500; ++k) {
+            const double s = 0.0123 + k * 2.0 * kPi / 500.0;
+            Vec2 p, d1, d2;
+            oval.eval(s, p, d1, d2);
+            const double r = 0.03 + 0.005 * std::cos(2.0 * s);
+            worstPos = std::max(worstPos, vlen(p - Vec2{r * std::cos(s), r * std::sin(s)}));
+        }
+        CHECK(worstPos < 1e-6);
+        Vec2 p0, a0, b0, p1, a1, b1;
+        oval.eval(0.7, p0, a0, b0);
+        oval.eval(0.7 + 2.0 * kPi, p1, a1, b1);
+        CHECK(vlen(p0 - p1) < 1e-12 && vlen(a0 - a1) < 1e-12 && vlen(b0 - b1) < 1e-12);
+        // C2 across a knot: second derivative continuous
+        const double knot = ang[5];
+        Vec2 pl, al, bl, pr, ar, br;
+        oval.eval(knot - 1e-9, pl, al, bl);
+        oval.eval(knot + 1e-9, pr, ar, br);
+        CHECK(vlen(bl - br) < 1e-5);
+        // first derivative really is the derivative of the position
+        Vec2 pa, aa, ba, pb, ab, bb;
+        oval.eval(1.234 - 1e-6, pa, aa, ba);
+        oval.eval(1.234 + 1e-6, pb, ab, bb);
+        Vec2 pm, am, bm;
+        oval.eval(1.234, pm, am, bm);
+        CHECK(vlen((pb - pa) * (0.5e6) - am) < 1e-6);
+    }
+
+    // nearest(): matches brute force on a non-circular curve, signs are right,
+    // and a clockwise point list is normalised (outside stays positive)
+    {
+        std::vector<Vec2> ccw, cw;
+        for (int i = 0; i < 40; ++i) {
+            const double a = i * 2.0 * kPi / 40.0;
+            ccw.push_back({0.05 * std::cos(a), 0.03 * std::sin(a)});
+            cw.push_back({0.05 * std::cos(-a), 0.03 * std::sin(-a)});
+        }
+        const ProfileCurve a = ProfileCurve::points(ccw);
+        const ProfileCurve b = ProfileCurve::points(cw);
+        unsigned seed = 12345;
+        auto rnd = [&]() {
+            seed = seed * 1664525u + 1013904223u;
+            return ((seed >> 8) & 0xFFFF) / 65535.0 * 0.18 - 0.09;
+        };
+        double worstDist = 0.0;
+        bool signsOk = true, orientOk = true;
+        for (int t = 0; t < 300; ++t) {
+            const Vec2 u{rnd(), rnd()};
+            const ProfileCurve::Foot f = a.nearest(u);
+            // reference: dense scan, then ternary-search the best bracket
+            double best = 1e9, sBest = 0.0;
+            const int N = 20000;
+            auto dist = [&](double s) {
+                Vec2 p, d1, d2;
+                a.eval(s, p, d1, d2);
+                return vlen(u - p);
+            };
+            for (int k = 0; k < N; ++k) {
+                const double d = dist(a.period() * k / N);
+                if (d < best) { best = d; sBest = a.period() * k / N; }
+            }
+            double lo = sBest - a.period() / N, hi = sBest + a.period() / N;
+            for (int it = 0; it < 80; ++it) {
+                const double m1 = lo + (hi - lo) / 3.0, m2 = hi - (hi - lo) / 3.0;
+                if (dist(m1) < dist(m2)) hi = m2; else lo = m1;
+            }
+            best = std::min(best, dist(0.5 * (lo + hi)));
+            worstDist = std::max(worstDist, std::fabs(std::fabs(f.signedDist) - best));
+            const bool outside = (u.x / 0.05) * (u.x / 0.05) + (u.y / 0.03) * (u.y / 0.03) > 1.0;
+            if ((f.signedDist > 0.0) != outside) signsOk = false;
+            if (std::fabs(a.nearest(u).signedDist - b.nearest(u).signedDist) > 1e-9)
+                orientOk = false;
+        }
+        CHECK(worstDist < 1e-9);
+        CHECK(signsOk);
+        CHECK(orientOk);
+        const ProfileCurve::Foot f = a.nearest({0.08, 0.0});
+        CHECK_APPROX(f.normal.x, 1.0, 1e-9);
+        CHECK_APPROX(f.signedDist, 0.03, 1e-9);
+    }
+
+    // circle fast path agrees with the generic search on a fine polygonal circle
+    {
+        std::vector<Vec2> pts;
+        for (int i = 0; i < 96; ++i) {
+            const double a = i * 2.0 * kPi / 96.0;
+            pts.push_back({0.03 * std::cos(a), 0.03 * std::sin(a)});
+        }
+        const ProfileCurve gen = ProfileCurve::points(pts);
+        const ProfileCurve cir = ProfileCurve::circle(0.03);
+        CHECK_APPROX(gen.nearest({0.05, 0.02}).signedDist, cir.nearest({0.05, 0.02}).signedDist, 1e-7);
+        CHECK_APPROX(gen.nearest({-0.01, 0.015}).signedDist, cir.nearest({-0.01, 0.015}).signedDist, 1e-7);
+    }
+}
+
+void testParserM6() {
+    std::printf("[parser M6]\n");
+
+    // keywords
+    std::vector<Token> k = lex("profile touch");
+    CHECK(k[0].type == Tok::Kw && k[1].type == Tok::Kw);
+
+    {
+        const Program p = parseText(eccentricSrc("profile disc on cam.rim { circle: 0.03 }",
+                                                 "roller 0.006").c_str());
+        const MechanismDecl& m = p.mechanisms[0];
+        CHECK(m.profiles.size() == 1 && m.touches.size() == 1);
+        CHECK(m.profiles[0].name == "disc");
+        CHECK(m.profiles[0].kind == ProfileDecl::Kind::Circle);
+        CHECK_APPROX(m.profiles[0].radius, 0.03, 1e-12);
+        CHECK(m.profiles[0].host == "cam" && m.profiles[0].hostAnchor == "rim");
+        CHECK(m.touches[0].body == "follower" && m.touches[0].anchor == "tip");
+        CHECK(m.touches[0].profile == "disc");
+        CHECK(m.touches[0].hasRoller);
+        CHECK_APPROX(m.touches[0].roller, 0.006, 1e-12);
+    }
+
+    // host after the block, polar with and without degree units, separators
+    {
+        const Program p = parseText(
+            "mechanism m { ground g { anchor a at (0,0) } shaft s at g.a "
+            "profile p { polar: (0 deg, 0.03), (90 deg, 0.04) (3.5, 0.03) } on s }");
+        const ProfileDecl& pd = p.mechanisms[0].profiles[0];
+        CHECK(pd.kind == ProfileDecl::Kind::Polar);
+        CHECK(pd.polar.size() == 3);
+        CHECK_APPROX(pd.polar[1].first, kPi / 2.0, 1e-12);
+        CHECK_APPROX(pd.polar[2].first, 3.5, 1e-12);   // bare number = radians
+        CHECK(pd.host == "s" && pd.hostAnchor.empty());
+    }
+    {
+        const Program p = parseText(
+            "mechanism m { ground g { anchor a at (0,0) } shaft s at g.a "
+            "profile p on s { points: (0.03, 0) (0, 0.03) (-0.03, 0) (0, -0.03) } "
+            "touch g.a on p }");
+        CHECK(p.mechanisms[0].profiles[0].points.size() == 4);
+        CHECK(!p.mechanisms[0].touches[0].hasRoller);
+    }
+
+    // errors carry a line number and a useful hint
+    auto expectParseError = [&](const char* src, const char* needle) {
+        bool threw = false;
+        try {
+            parseText(src);
+        } catch (const ParseError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find(needle) != std::string::npos);
+            CHECK(e.line >= 1);
+        }
+        CHECK(threw);
+    };
+    expectParseError("mechanism m { profile p { } on s }", "no shape");
+    expectParseError("mechanism m { profile p { circle: 1 } }", "needs a host");
+    expectParseError("mechanism m { profile p on s { circle: 1 circle: 2 } }", "already has a shape");
+    expectParseError("mechanism m { profile p on s { square: 1 } }", "'circle', 'polar' or 'points'");
+    expectParseError("mechanism m { profile p on s { polar: } }", "needs (angle, radius)");
+    expectParseError("mechanism m { touch f.tip p }", "expected 'on'");
+}
+
+void testModelM6() {
+    std::printf("[model M6]\n");
+
+    auto expectModelError = [&](const std::string& src, const char* needle) {
+        bool threw = false;
+        try {
+            buildFromText(src.c_str());
+        } catch (const SemanticError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find(needle) != std::string::npos);
+            CHECK(e.line >= 1);
+        }
+        CHECK(threw);
+    };
+    const std::string head =
+        "mechanism m { ground g { anchor a at (0,0) anchor r at (0,1) dir (0,1) } "
+        "shaft s at g.a  body f { anchor tip at (0,0) dir (1,0) } slide f.tip -> g.r ";
+
+    // good model + DOF bookkeeping: touch removes one DOF
+    {
+        Model m = buildFromText(eccentricSrc("profile disc on cam.rim { circle: 0.03 }",
+                                             "roller 0.006").c_str());
+        CHECK(m.profiles.size() == 1 && m.touches.size() == 1);
+        CHECK(m.profileIndex("disc") == 0);
+        const DofReport d = m.dofReport();
+        CHECK(d.nProfiles == 1 && d.nTouches == 1);
+        CHECK(d.freeDof == 1);
+        CHECK(d.residualDof == 0);
+    }
+
+    expectModelError(head + "profile p on s { circle: 0.03 } profile p on s { circle: 0.02 } }",
+                     "duplicate profile");
+    expectModelError(head + "profile p on nope { circle: 0.03 } }", "unknown host body");
+    expectModelError(head + "profile p on s.zzz { circle: 0.03 } }", "no anchor 'zzz'");
+    expectModelError(head + "profile p on g { circle: 0.03 } }", "explicit anchor");
+    expectModelError(head + "profile p on s { circle: 0 } }", "positive radius");
+    expectModelError(head + "profile p on s { polar: (0 deg, 1) (90 deg, 1) } }", "at least 3");
+    expectModelError(head + "profile p on s { polar: (0 deg, 1) (90 deg, 1) (80 deg, 1) } }",
+                     "strictly increasing");
+    expectModelError(head + "profile p on s { polar: (0 deg, 1) (90 deg, 1) (400 deg, 1) } }",
+                     "[0, 360)");
+    expectModelError(head + "profile p on s { polar: (0 deg, 1) (90 deg, -1) (180 deg, 1) } }",
+                     "positive");
+    expectModelError(head + "profile p on s { points: (0,0) (1,0) } }", "at least 3");
+    expectModelError(head + "profile p on s { points: (0,0) (1,0) (2,0) } }", "enclose no area");
+    expectModelError(head + "profile p on s { points: (0,0) (0,0) (1,1) } }", "coincident");
+
+    const std::string withP = head + "profile p on s { circle: 0.03 } ";
+    expectModelError(withP + "touch nope.tip on p }", "unknown body");
+    expectModelError(withP + "touch f.zzz on p }", "no anchor 'zzz'");
+    expectModelError(withP + "touch f.tip on nope }", "unknown profile");
+    expectModelError(withP + "touch s.A on p }", "its own profile");
+    // a ground point may ride a moving profile; ground cannot touch its own
+    buildFromText((withP + "touch g.a on p }").c_str());
+    expectModelError(head + "profile p on g.a { circle: 0.03 } touch g.r on p }", "its own profile");
+    expectModelError(withP + "touch f.tip on p roller 0 }", "positive radius");
+    // kinematic only for now
+    expectModelError(withP + "touch f.tip on p world { gravity: 9.81 } }", "dynamic");
+}
+
+void testKinematicsM6() {
+    std::printf("[kinematics M6]\n");
+
+    // ---- acceptance: the eccentric disc matches its closed form -----------------
+    {
+        double res = 0.0;
+        const double e0 = eccentricWorstError(
+            eccentricSrc("profile disc on cam.rim { circle: 0.03 }", ""), 0.0, &res);
+        CHECK(e0 < 1e-9);
+        CHECK(res < 1e-9);
+        const double e1 = eccentricWorstError(
+            eccentricSrc("profile disc on cam.rim { circle: 0.03 }", "roller 0.006"), 0.006, &res);
+        CHECK(e1 < 1e-9);
+        CHECK(res < 1e-9);
+    }
+
+    // a constant-radius polar table goes through the generic spline path and
+    // must land on the same closed form; so must a 64-point spline circle and
+    // the same points listed clockwise
+    {
+        double res = 0.0;
+        std::string polar = "profile disc on cam.rim { polar:";
+        for (int i = 0; i < 9; ++i) {
+            char b[64];
+            std::snprintf(b, sizeof b, " (%d deg, 0.03)", i * 40);
+            polar += b;
+        }
+        polar += " }";
+        CHECK(eccentricWorstError(eccentricSrc(polar, "roller 0.006"), 0.006, &res) < 1e-9);
+
+        for (int cw = 0; cw < 2; ++cw) {
+            std::string pts = "profile disc on cam.rim { points:";
+            for (int i = 0; i < 64; ++i) {
+                const double a = (cw ? -1.0 : 1.0) * i * 2.0 * kPi / 64.0;
+                char b[96];
+                std::snprintf(b, sizeof b, " (%.12f, %.12f)", 0.03 * std::cos(a), 0.03 * std::sin(a));
+                pts += b;
+            }
+            pts += " }";
+            CHECK(eccentricWorstError(eccentricSrc(pts, "roller 0.006"), 0.006, &res) < 2e-6);
+            CHECK(res < 1e-9);
+        }
+    }
+
+    // ---- analytic Jacobian vs central differences ---------------------------------
+    // moving cam with a non-circular spline profile, swing-arm roller follower:
+    // both sides of the touch row move, and the foot sweeps the curve
+    {
+        std::string src =
+            "mechanism swing {\n"
+            "  ground frame { anchor axle at (0, 0)  anchor pivot at (0.12, 0.06) }\n"
+            "  body cam { anchor axle at (0, 0)  anchor c at (0.008, 0.004) }\n"
+            "  pin cam.axle -> frame.axle\n"
+            "  profile oval on cam.c { polar:";
+        for (int i = 0; i < 36; ++i) {
+            const double a = i * 10.0;
+            char b[80];
+            std::snprintf(b, sizeof b, " (%g deg, %.8f)", a,
+                          0.03 + 0.006 * std::cos(2.0 * deg2rad(a)) + 0.002 * std::sin(deg2rad(a)));
+            src += b;
+        }
+        src += " }\n"
+               "  rod arm on frame.pivot { length: 0.12 }\n"
+               "  touch arm.B on oval roller 0.005\n"
+               "  drive cam at 45 deg/s\n}\n";
+        Model m = buildFromText(src.c_str());
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        CHECK(sys.solve(q, 0.0, iters, &res));
+        CHECK(res < 1e-9);
+
+        unsigned seed = 7;
+        auto rnd = [&]() {
+            seed = seed * 1664525u + 1013904223u;
+            return ((seed >> 8) & 0xFFFF) / 65535.0 - 0.5;
+        };
+        double worst = 0.0;
+        for (int trial = 0; trial < 12; ++trial) {
+            std::vector<double> qq = q;
+            for (double& v : qq) v += 0.004 * rnd();     // off the manifold on purpose
+            std::vector<double> J;
+            sys.jacobian(qq, J);
+            const int rows = sys.rowCount();
+            for (int j = 0; j < sys.nq; ++j) {
+                std::vector<double> qp = qq, qm = qq, cp, cm;
+                const double h = 1e-6;
+                qp[(size_t)j] += h;
+                qm[(size_t)j] -= h;
+                sys.residuals(qp, 0.0, cp);
+                sys.residuals(qm, 0.0, cm);
+                for (int i = 0; i < rows; ++i) {
+                    const double fd = (cp[(size_t)i] - cm[(size_t)i]) / (2.0 * h);
+                    worst = std::max(worst, std::fabs(fd - J[(size_t)i * sys.nq + j]));
+                }
+            }
+        }
+        CHECK(worst < 1e-6);
+    }
+
+    // ---- a profile on ground: a rod tip held on a fixed circle ---------------------
+    {
+        Model m = buildFromText(
+            "mechanism gp { ground frame { anchor pivot at (0, 0)  anchor c at (0.1, 0) }\n"
+            "  profile ring on frame.c { circle: 0.04 }\n"
+            "  rod arm on frame.pivot { length: 0.12 }\n"
+            "  touch arm.B on ring }");
+        CHECK(m.dofReport().freeDof == 0);
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        CHECK(sys.solve(q, 0.0, iters, &res));
+        CHECK(res < 1e-9);
+        const Vec2 tip = m.worldAnchor(m.bodyIndex("arm"), 1, q);
+        CHECK_APPROX(vlen(tip), 0.12, 1e-9);
+        CHECK_APPROX(vlen(tip - Vec2{0.1, 0.0}), 0.04, 1e-9);
+        CHECK(m.validateAssembly(q).empty());
+    }
+
+    // ---- an open contact is reported, not hidden -------------------------------------
+    {
+        // rod too short to ever reach the circle: assembly cannot close the gap
+        Model m = buildFromText(
+            "mechanism far { ground frame { anchor pivot at (0, 0)  anchor c at (1.0, 0) }\n"
+            "  profile ring on frame.c { circle: 0.04 }\n"
+            "  rod arm on frame.pivot { length: 0.1 }\n"
+            "  touch arm.B on ring }");
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        CHECK(!sys.solve(q, 0.0, iters, &res));
+        CHECK(res > 0.1);     // the 0.86 m shortfall is shared between pin and contact
+        CHECK(!m.validateAssembly(q).empty());
+    }
+
+    // ---- the shipped examples ----------------------------------------------------------
+    {
+        const char* files[] = { "examples/eccentric.mech", "examples/lobecam.mech" };
+        for (const char* f : files) {
+            std::ifstream in(f);
+            if (!in) { std::fprintf(stderr, "note: %s not found (cwd?)\n", f); continue; }
+            std::stringstream ss;
+            ss << in.rdbuf();
+            Model m = buildModel(parse(lex(ss.str())).mechanisms[0]);
+            CHECK(m.dofReport().residualDof == 0);
+            ConstraintSystem sys(m);
+            std::vector<double> q;
+            CHECK(m.assemble(q).empty());
+            int iters = 0;
+            double res = 0.0;
+            CHECK(sys.solve(q, 0.0, iters, &res));
+            CHECK(m.validateAssembly(q).empty());
+            const int ifol = m.bodyIndex("follower");
+            double worst = 0.0, lo = 1e9, hi = -1e9;
+            for (int k = 1; k <= 720; ++k) {          // two turns of the cam, 3 deg/step
+                const double t = k * (3.0 / m.drives[0].omegaRad * kPi / 180.0);
+                sys.solve(q, t, iters, &res);
+                worst = std::max(worst, res);
+                const double y = q[(size_t)m.bodies[ifol].qOffset + 2];
+                lo = std::min(lo, y);
+                hi = std::max(hi, y);
+            }
+            CHECK(worst < 1e-8);
+            if (std::string(f).find("eccentric") != std::string::npos) {
+                // R + rho -/+ e at the rail: sqrt(0.036^2 - 0.01^2 cos^2) + 0.01 sin
+                CHECK_APPROX(hi, eccentricY(kPi / 2.0, 0.006), 1e-6);
+                CHECK(lo < 0.0346 && lo > 0.0245);
+            } else {
+                // dwells: roller centre 36 mm up on the base circle, 46 mm on the lobe top
+                CHECK_APPROX(lo, 0.036, 2e-5);
+                CHECK_APPROX(hi, 0.046, 2e-5);
+            }
+        }
+    }
+}
+
 } // namespace (anonymous)
 
 namespace mech {
@@ -2984,6 +3465,10 @@ int runAllTests() {
     testParserM5();
     testModelM5();
     testDynamicsM5();
+    testProfileCurve();
+    testParserM6();
+    testModelM6();
+    testKinematicsM6();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

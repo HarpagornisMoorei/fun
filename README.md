@@ -49,9 +49,13 @@ make test       # unit tests
 | bodies | `ground`, `rod`, `shaft`, `body` |
 | joints | `pin` (revolute), `slide` (prismatic) |
 | gears | `gear`, `mesh` (external, internal, epicyclic) |
+| contact | `profile` (circle, polar table, point list), `touch` — cams with translating or swinging followers, optional roller |
 | forces | gravity, `spring`, torque and weight `drive`s |
 | hybrid | `mode` state machines (the escapement) |
 | intent | `reduce`, `beat`, `hand`, `dial` — solved into the kernel |
+
+Contact is kinematic and bilateral for now (force closure assumed); unilateral
+contact with separation and impact comes next.
 
 Kinematic files are solved with an analytic-Jacobian Levenberg–Marquardt
 assembly; files with masses and forces are integrated as constrained
@@ -63,6 +67,7 @@ dynamics, with an energy ledger that has to close.
 |---|---|
 | `fourbar`, `crankslider` | closed loops, prismatic joints |
 | `geartrain`, `train`, `planetary` | meshes, synthesized reductions, epicyclics |
+| `eccentric`, `lobecam` | cams: a closed-form eccentric disc, and a plate cam from a polar table |
 | `pendulum`, `doublepend`, `flywheel`, `oscillator`, `orbit` | dynamics |
 | `clock`, `clockface` | the flagship: a complete weight-driven clock |
 
@@ -71,6 +76,6 @@ dynamics, with an energy ledger that has to close.
 [`docs/LANG.md`](docs/LANG.md) is the language specification — grammar,
 semantics, solver formulation — and the contract `mech test` checks the
 implementation against. [`docs/design/contact.md`](docs/design/contact.md)
-is the proposal for the next milestone (cams, Geneva drives, ratchets,
-non-circular gears). `scripts/` holds offscreen-rendering harnesses for
+is the design for contact (cams, Geneva drives, ratchets, non-circular
+gears); the first slice, M6a, is implemented. `scripts/` holds offscreen-rendering harnesses for
 screenshots without a display.

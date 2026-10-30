@@ -8,6 +8,7 @@
 //   mesh rows (1 each):   rA*thA + s*rB*thB - (rA + s*rB)*psi - rollConst = 0
 //   tangent rows (1 per tangent mesh):
 //                         |cB - cA|^2 - (rA + s*rB)^2          = 0
+//   touch rows (1 each):  signedGap(point, profile) - roller   = 0   (M6a)
 //
 // Derivations (see docs/LANG.md):
 //   world(b,a)  = R(theta_b) * local_a + t_b
@@ -33,6 +34,17 @@
 //   drow/d(xA,yA) = (-K*dy, +K*dx)       drow/d(xB,yB) = (+K*dy, -K*dx)
 // The tangent row is |d|^2 - (rA + s*rB)^2 with Jacobian 2*d on the center
 // columns and 2*dot(d, w) on the angle columns.
+//
+// Touch row (M6a). g is the signed distance from the touching point p (body B)
+// to the profile curve c(s) (body A), s the foot of the perpendicular. Because
+// g is the distance to the *closest* point, it is stationary in s at the foot
+// (d is parallel to the normal n, and n . c'(s) = 0), so the Jacobian needs no
+// ds term: it is the pin-row pattern projected on the world normal n,
+//   dg/d(xB,yB) = +n        dg/dthB = +n . perp(R(thB) pLocal)
+//   dg/d(xA,yA) = -n        dg/dthA = -n . perp(R(thA) (originA + c(s)))
+// where originA is the host anchor (the profile's origin). The foot is found
+// from scratch at every evaluation (ProfileCurve::nearest), so the row is a
+// pure function of q — no tracked state to go stale between LM trial steps.
 
 #include "kinematics.hpp"
 #include "linalg.hpp"
@@ -65,6 +77,7 @@ int ConstraintSystem::rowCount() const {
     for (const MeshJoint& mm : m.meshes) {
         rows += mm.tangent ? 2 : 1;
     }
+    rows += (int)m.touches.size();
     return rows;
 }
 
@@ -122,6 +135,9 @@ void ConstraintSystem::residuals(const std::vector<double>& q, double t,
             const double want = ga.radius + s * gb.radius;
             c[r++] = dot(d, d) - want * want;
         }
+    }
+    for (const TouchJoint& tj : m.touches) {
+        c[r++] = m.touchState(tj, q).gap - tj.roller;
     }
 }
 
@@ -211,6 +227,27 @@ void ConstraintSystem::jacobian(const std::vector<double>& q,
             }
             ++r;
         }
+    }
+    for (const TouchJoint& tj : m.touches) {
+        const ContactState cs = m.touchState(tj, q);
+        const Profile& pr = m.profiles[(size_t)tj.profile];
+        const Body& bp = m.bodies[(size_t)tj.body];
+        const Body& bh = m.bodies[(size_t)pr.body];
+        const Vec2 n = cs.normal;
+        if (bp.qOffset >= 0) {
+            const Vec2 rl = rotate(bp.anchors[(size_t)tj.anchor].local, q[bp.qOffset + 0]);
+            addJ(J, cols, r, bp.qOffset + 0, dot(n, perp(rl)));
+            addJ(J, cols, r, bp.qOffset + 1, n.x);
+            addJ(J, cols, r, bp.qOffset + 2, n.y);
+        }
+        if (bh.qOffset >= 0) {
+            const Vec2 origin = bh.anchors[(size_t)pr.hostAnchor].local;
+            const Vec2 rl = rotate(origin + cs.footLocal, q[bh.qOffset + 0]);
+            addJ(J, cols, r, bh.qOffset + 0, -dot(n, perp(rl)));
+            addJ(J, cols, r, bh.qOffset + 1, -n.x);
+            addJ(J, cols, r, bh.qOffset + 2, -n.y);
+        }
+        ++r;
     }
 }
 

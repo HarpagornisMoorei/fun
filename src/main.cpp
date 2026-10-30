@@ -89,6 +89,14 @@ void printError(const ToolError& e) {
     }
 }
 
+// " roller 0.006" for a touch with a roller, "" for a knife-edge tip
+std::string rollerNote(double r) {
+    if (r <= 0.0) return "";
+    char buf[48];
+    std::snprintf(buf, sizeof buf, " roller %g", r);
+    return buf;
+}
+
 void printHelp() {
     std::printf(
         "mech — mechanism language, M5: hybrid modes & weight drives\n"
@@ -134,6 +142,7 @@ int cmdCheck(const std::string& path) {
         std::printf("bodies %d (ground 1)  ·  pins %d  ·  slides %d  ·  gears %d  ·  meshes %d",
                     d.nBodies, d.nPins, d.nSlides, d.nGears, d.nMeshes);
         if (d.nTangentMeshes > 0) std::printf(" (%d tangent)", d.nTangentMeshes);
+        if (d.nTouches > 0) std::printf("  ·  profiles %d  ·  touches %d", d.nProfiles, d.nTouches);
         std::printf("  ·  drives %d", d.nDrives);
         if (d.nHolds > 0) std::printf(" (incl. %d mode hold%s)", d.nHolds,
                                       d.nHolds == 1 ? "" : "s");
@@ -145,7 +154,7 @@ int cmdCheck(const std::string& path) {
 
         const int j = d.nPins + d.nSlides;
         std::printf("Grubler-Kutzbach (planar): F = 3(n-1) - 2j - k = 3*%d - 2*%d - %d = %d\n",
-                    d.nBodies - 1, j, d.nMeshes + d.nTangentMeshes, d.freeDof);
+                    d.nBodies - 1, j, d.nMeshes + d.nTangentMeshes + d.nTouches, d.freeDof);
         if (d.residualDof == 0) {
             std::printf("residual DOF after drives: 0  ->  fully determined [ok]\n");
         } else if (d.residualDof > 0) {
@@ -175,6 +184,26 @@ int cmdCheck(const std::string& path) {
                 } else {
                     std::printf("  %-8s on %-10s pitch radius %.4f\n",
                                 g.name.c_str(), where.c_str(), g.radius);
+                }
+            }
+        }
+
+        // M6: contact curves
+        if (!m.profiles.empty()) {
+            std::printf("profiles:\n");
+            for (const Profile& pr : m.profiles) {
+                const Body& host = m.bodies[(size_t)pr.body];
+                const std::string where = host.name + "." +
+                    host.anchors[(size_t)pr.hostAnchor].name;
+                const ProfileCurve& cv = *pr.curve;
+                if (cv.kind() == ProfileCurve::Kind::Circle) {
+                    std::printf("  %-8s on %-10s circle radius %.4f\n",
+                                pr.name.c_str(), where.c_str(), cv.circleRadius());
+                } else {
+                    std::printf("  %-8s on %-10s %s, %zu knots, radius %.4f .. %.4f\n",
+                                pr.name.c_str(), where.c_str(),
+                                cv.kind() == ProfileCurve::Kind::Polar ? "polar" : "points",
+                                cv.knots(), cv.minRadius(), cv.maxRadius());
                 }
             }
         }
@@ -232,6 +261,16 @@ int cmdCheck(const std::string& path) {
                         gb.teeth > 0 ? (double)gb.teeth : gb.radius,
                         ratio,
                         internal ? "same direction" : "direction reversed (external)");
+        }
+        for (const TouchJoint& tj : m.touches) {
+            const Body& tb = m.bodies[(size_t)tj.body];
+            const ContactState cs = m.touchState(tj, q);
+            std::printf("touch %s.%s on %s%s  ->  contact (%.4f, %.4f), normal (%.3f, %.3f)"
+                        "  [bilateral: force closure assumed]\n",
+                        tb.name.c_str(), tb.anchors[(size_t)tj.anchor].name.c_str(),
+                        m.profiles[(size_t)tj.profile].name.c_str(),
+                        rollerNote(tj.roller).c_str(),
+                        cs.foot.x, cs.foot.y, cs.normal.x, cs.normal.y);
         }
         for (const SpringJoint& sp : m.springs) {
             std::printf("spring %-8s k=%g rest=%.4f damp=%g\n",
@@ -340,6 +379,7 @@ int cmdCheck(const std::string& path) {
         std::vector<std::string> geomErrs = m.validateAssembly(q);
         if (geomErrs.empty()) {
             if (!m.meshes.empty()) std::printf("mesh tangency: all %d meshes ok\n", d.nMeshes);
+            if (!m.touches.empty()) std::printf("contacts: all %d touches closed\n", d.nTouches);
         } else {
             for (const std::string& e : geomErrs) {
                 std::printf("error: %s\n", e.c_str());
@@ -471,6 +511,9 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
         std::printf("%8s  %10s  ", "t", "maxRes");
         for (const Body& b : m.bodies)
             if (!b.isGround) std::printf("%-11s", b.name.c_str());
+        for (const TouchJoint& tj : m.touches)
+            std::printf("%-20s", (m.bodies[(size_t)tj.body].name + "." +
+                m.bodies[(size_t)tj.body].anchors[(size_t)tj.anchor].name + " x,y").c_str());
         std::printf("\n");
 
         int frame = 0;
@@ -483,6 +526,10 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
                 std::printf("%8.3f  %10.2e  ", t, r);
                 for (const Body& b : m.bodies)
                     if (!b.isGround) std::printf("%10.2f    ", rad2deg(q[b.qOffset]));
+                for (const TouchJoint& tj : m.touches) {
+                    const Vec2 p = m.worldAnchor(tj.body, tj.anchor, q);
+                    std::printf("%9.5f,%-9.5f  ", p.x, p.y);
+                }
                 std::printf("\n");
             }
         }

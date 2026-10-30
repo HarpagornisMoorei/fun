@@ -1,9 +1,11 @@
-# The mech language — M5 specification
+# The mech language — M6a specification
 
-This document pins down the M5 kernel: lexical structure, grammar, static
+This document pins down the M6a kernel: lexical structure, grammar, static
 semantics, the kinematic solver's mathematical formulation, the
-constrained-dynamics integrator, the intent layer's synthesis rules, and the
-hybrid elements (`mode` blocks with weight drives — the escapement's kernel).
+constrained-dynamics integrator, the intent layer's synthesis rules, the
+hybrid elements (`mode` blocks with weight drives — the escapement's kernel),
+and kinematic contact (`profile` curves and point-on-curve `touch` joints —
+the first higher pair).
 It is the contract the implementation is tested against (`mech test`).
 
 ---
@@ -16,8 +18,8 @@ A mechanism is a graph:
 |---------|------|------------|
 | **body** | noun — a rigid frame with named anchors (ports) | `ground`, `rod`, `shaft`, `body` |
 | **joint** | verb — couples two anchors | `pin` (revolute), `slide` (prismatic) |
-| **feature** | noun — geometry attached to a body | `gear` (pitch circle, on any anchor) |
-| **constraint** | grammar — equations the configuration must satisfy | pins, slides, drives, meshes, tangencies |
+| **feature** | noun — geometry attached to a body | `gear` (pitch circle, on any anchor), `profile` (closed contact curve, M6) |
+| **constraint** | grammar — equations the configuration must satisfy | pins, slides, drives, meshes, tangencies, touches (M6) |
 | **force** | energy — generalized forces, never coordinates | `spring`, `drive ... torque`, `drive ... weight`, gravity |
 | **hybrid** | event — a state machine over constraint sets | `mode { state, -> when }` (M5) |
 | **world** | stage — global physical parameters | `world { gravity, step }` |
@@ -51,13 +53,14 @@ Four principles govern the design:
   concern: `-60` lexes as `-` then `60`.
 * Units are reserved words: `deg/s`, `rpm`, `deg`.
 * Keywords: `mechanism ground rod anchor at pin drive length from body shaft
-  gear mesh slide on world spring torque reduce hand dial mode`.
+  gear mesh slide on world spring torque reduce hand dial mode profile touch`.
 * `dir`, `tangent`, `gravity`, `step`, `mass`, `k`, `rest`, `damp`, `ratio`,
   `via`, `same`, `opposite`, `spread`, `beat`, `sec`, `major`, `minor`,
   `radius`, and the whole M5 hybrid vocabulary (`state`, `when`, `hold`,
   `impulse`, `maintain`, `theta`, `omega`, `advance`, `weight`, `barrel`,
-  `drop`, `kg`, `m`, `mJ`) are *contextual* identifiers (not keywords),
-  usable as names.
+  `drop`, `kg`, `m`, `mJ`) and the M6 contact vocabulary (`circle`, `polar`,
+  `points`, `roller`) are *contextual* identifiers (not keywords), usable as
+  names.
 * Punctuation: `{ } ( ) , : ; . - -> < >`
 * Comments: `// line` and `# line`.
 * Whitespace (including newlines) is insignificant; statements may be
@@ -74,7 +77,8 @@ stmt        = groundDecl | bodyDecl | rodDecl | shaftDecl | worldDecl
             | gearDecl | meshDecl | springDecl | pinDecl | slideDecl
             | driveDecl
             | reduceDecl | handDecl | dialDecl
-            | modeDecl | weightDriveDecl ;               (* M5 *)
+            | modeDecl | weightDriveDecl                 (* M5 *)
+            | profileDecl | touchDecl ;                    (* M6 *)
 
 groundDecl  = "ground" IDENT "{" { anchorDecl } "}" ;
 bodyDecl    = "body" IDENT "{" { anchorDecl | "mass" ":" num } "}" ;
@@ -131,6 +135,15 @@ weightDriveDecl = "drive" IDENT "weight" num [ "kg" ]
                   [ "barrel" num [ "m" ] ] [ "drop" num [ "m" ] ]
                   [ "cw" | "ccw" ] ;
 
+(* M6: contact. The host may precede or follow the block, like a rod's
+   attach; an omitted anchor means "A". *)
+profileDecl = "profile" IDENT [ "on" IDENT [ "." IDENT ] ] "{" shape "}"
+              [ "on" IDENT [ "." IDENT ] ] ;
+shape       = "circle" ":" num
+            | "polar" ":" { "(" num [ "deg" ] "," num ")" }      (* angle, radius *)
+            | "points" ":" { "(" num "," num ")" } ;
+touchDecl   = "touch" ref "on" IDENT [ "roller" num ] ;
+
 ref         = IDENT "." IDENT ;
 num         = [ "-" ] NUMBER ;
 ```
@@ -186,6 +199,24 @@ Checks run at model build time, each error pointing at a source line:
   One hold row exists per held body across the whole mechanism: two modes
   cannot hold the same body.
 
+**M6a contact checks:**
+
+* Profile names are unique; the host body and anchor must exist (a ground
+  host needs an explicit anchor, as for gears). The profile's origin is the
+  host anchor and its axes are the host body's.
+* `circle` needs a positive radius. `polar` needs at least 3 `(angle,
+  radius)` pairs, angles strictly increasing within `[0, 360)` degrees (a
+  bare number is radians), radii positive. `points` needs at least 3 points,
+  no coincident neighbours, and a non-degenerate enclosed area; clockwise
+  lists are reversed so the curve is always counter-clockwise. At most 1024
+  pairs or points. The curve must be simple (self-intersection is not checked).
+* A `touch` names a point (`body.anchor`) and a profile; they may not share a
+  body (so ground cannot touch its own profile). `roller` must be positive;
+  without it the point is a knife-edge tip.
+* **M6a is kinematic only:** a `touch` in a dynamic mechanism (world block,
+  spring, torque or weight drive, or any `mode`) is an error. Unilateral
+  contact with separation and impact is planned for M6c.
+
 **M4 intent checks** (all with line-accurate diagnostics):
 
 * `beat` requires a dynamic mechanism (add a `world` block) and excludes
@@ -211,11 +242,12 @@ run exactly as in M2.
 Planar Gruebler-Kutzbach, with drives as single-coordinate constraints:
 
 ```text
-F_free     = 3(n - 1) - 2*j - k - kt     n  = bodies (ground included)
+F_free     = 3(n - 1) - 2*j - k - kt - c n  = bodies (ground included)
                                           j  = pins + slides (2 DOF each)
                                           k  = meshes (roll row, 1 DOF)
                                           kt = tangent meshes (contact row,
                                                1 further DOF)
+                                          c  = touches (gap row, 1 DOF)
 F_residual = F_free - d                  d  = rate drives
 ```
 
@@ -337,6 +369,7 @@ drive rows (1 per drive):   theta_body - (theta0 + omega*t)        = 0
 mesh rows (1 per mesh):     rA*thA + s*rB*thB - (rA + s*rB)*psi - c0 = 0
 tangent rows (1 per tangent mesh):
                             |cB - cA|^2 - (rA + s*rB)^2            = 0
+touch rows (1 per touch):   gap(p, profile) - roller               = 0
 ```
 
 `crossz(u, v)` is the 2-D cross product. The slide rows say: the guide point
@@ -365,6 +398,40 @@ The analytic Jacobian follows from `d/dtheta [R(theta) v] = perp(R(theta) v)`
 and `d psi / d(delta) = crossz(delta, .) / |delta|^2`. External vs internal
 and the phase constant `c0` are captured at assembly; tangency is validated
 geometrically after assembly (`mech check` reports, `mech run` aborts).
+
+**The touch row is a signed distance.** For a point `p` on body B and a
+profile `c(s)` on body A (origin at the host anchor `oA`), let `s*` be the
+foot of the perpendicular — the closest point of the curve to `p` — and `n`
+the outward unit normal there (the right-hand normal of the counter-clockwise
+tangent). The row is `gap = n . (p - c(s*))`, positive outside the curve, less
+the roller radius when there is one. A roller of radius `rho` centered on the
+anchor is therefore in contact exactly when the center sits `rho` outside the
+curve: the *true* offset curve, so a concave region tighter than the roller
+simply cannot be reached (no cusped pitch curve is ever constructed).
+
+Because `gap` is the distance to the *closest* point it is stationary in `s`
+at the foot (`p - c` is parallel to `n`, and `n . c'(s) = 0`), so the Jacobian
+needs no `ds` term — the pin-row pattern projected on the world normal:
+
+```text
+d gap/d(xB, yB) = +n           d gap/d thB = +n . perp(R(thB) pLocal)
+d gap/d(xA, yA) = -n           d gap/d thA = -n . perp(R(thA) (oA + c(s*)))
+```
+
+(verified against central finite differences on a moving oval profile, to
+better than 1e-6 over random off-manifold states). The foot is searched afresh
+at every evaluation — a coarse scan over a precomputed outline (>= 256
+samples), then a bracketed Newton iteration to machine precision — so the row
+is a pure function of `q` with no tracked state to go stale between solver
+trial steps (unlike `psi`, which must be tracked). Curves are C2: a circle is
+exact; `polar` is the periodic cubic spline `r(phi)`; `points` is a pair of
+periodic cubic splines `x(s)`, `y(s)` on chord length.
+
+M6a contacts are **bilateral**: the row holds in both directions, i.e. force
+closure is assumed (a spring or gravity keeps a real follower on its cam).
+`mech check` labels each touch accordingly. The mechanism stays non-causal:
+the cam in `examples/eccentric.mech` is driven, but the contact relates the
+two bodies symmetrically.
 
 ### 5.3 Solving
 
@@ -565,6 +632,10 @@ order: identical inputs give bit-identical trajectories (tested).
 | `gear g { ... } on b.c` | pitch circle centered at any host anchor | M3 |
 | `mesh g1 g2` | roll row (with the psi carrier term) | M3 |
 | `mesh g1 g2 tangent` | roll row + live contact row | M3 |
+| `profile p on b.c { circle: R }` | closed curve `c(s) = R(cos s, sin s)` at anchor `b.c`, riding `b` | M6a |
+| `profile p on b.c { polar: ... }` | periodic cubic spline `r(phi)` through the `(angle, radius)` knots | M6a |
+| `profile p on b.c { points: ... }` | periodic cubic splines through the points, normalised counter-clockwise | M6a |
+| `touch f.tip on p [roller r]` | row `signedGap(f.tip, p) - r` (bilateral, kinematic) | M6a |
 | `drive b at w from a0 deg` | row `theta_b - (a0 + w*t)` | M1 |
 | `drive b torque tau` | force `Q_theta_b += tau` | M3 |
 | `spring sp a.p -> b.q { k }` | Hooke force pair at the anchors | M3 |
@@ -585,7 +656,7 @@ order: identical inputs give bit-identical trajectories (tested).
 
 ## 8. Test matrix
 
-`mech test` (13409 checks) covers: lexer tokens/units/keywords/comments/errors;
+`mech test` (13553 checks) covers: lexer tokens/units/keywords/comments/errors;
 parser AST shapes for all M3 and M4 forms and all error classes; model checks,
 desugaring, gear radius arithmetic, module rules, mass derivation (rods,
 discs, compound assemblies, overrides), DOF arithmetic including tangent
@@ -639,6 +710,24 @@ and the flagship file itself is regression-tested end to end: escape arbor
 minus 6 degrees per beat, minute `= escape/60`, hour `= minute/12`, all
 clockwise, constraints and ledger intact.
 
+The M6a suite adds: the profile curves themselves (a constant-radius polar
+table equal to a circle to 1e-12 in value and both derivatives; spline error
+and periodicity; C2 across a knot; the foot search against a brute-force
+reference to 1e-9 on 300 random points, with correct signs and
+orientation-normalised clockwise input); the grammar (shapes, host either
+side of the block, degree units, every error class with its line number); the
+model (every profile and touch diagnostic, the dynamic-mode rejection, DOF
+arithmetic); and the kinematics. The acceptance test is the eccentric disc:
+over two turns at 5-degree steps the follower height matches the closed form
+`y = e sin(theta) + sqrt((R + rho)^2 - e^2 cos^2(theta))` to 1e-9, with and
+without a roller, through the exact circle and a constant-radius polar spline
+(and to 2e-6 through a 64-point spline circle, listed both ways round). The analytic
+Jacobian matches central differences on a moving oval profile with a swing-arm
+roller follower; a ground-hosted profile pins a rod tip exactly on a fixed
+circle; an unreachable contact is reported rather than hidden; and both
+shipped cams (`eccentric`, `lobecam`) build, assemble and solve over two
+turns, with the plate cam's follower dwelling at 36 mm and 46 mm to 20 um.
+
 ## 9. Milestone history & reserved ground
 
 M1 walked the skeleton (lexer/parser/rods/pins/drives); M2 added shafts,
@@ -654,8 +743,18 @@ the horologist's motion work (an equal-tooth-sum 10:30 x 8:32 stack, two
 coaxial shafts on one anchor) carrying the minute and hour hands — every
 hand sweeping clockwise because the weight is `cw`.
 
-Motion-work *synthesis* (the compiler choosing the equal-tooth-sum stack
-itself, rather than the flagship writing it out), contact-rich pallet
-geometry (impulse faces as constraint rows rather than event summaries),
-and multiple mechanisms in one file sharing a world are reserved for later
-milestones.
+M6a opened contact (see `docs/design/contact.md`): `profile` curves and
+bilateral, kinematic point-on-curve `touch` joints — the first higher pair,
+enough for plate cams with translating or swinging followers. One deviation
+from the design note: the foot of the perpendicular is searched afresh at
+each evaluation rather than tracked like `psi`, which keeps the row a pure
+function of `q`.
+
+The rest of M6 is reserved: cam displacement-diagram sugar with pressure-angle
+and undercut reports (6b), unilateral contact with separation, impact and
+restitution in the dynamics (6c), and rolling contact between arbitrary
+curves generalizing `mesh` (6d). Also reserved: motion-work *synthesis* (the
+compiler choosing the equal-tooth-sum stack itself, rather than the flagship
+writing it out), contact-rich pallet geometry (impulse faces as constraint
+rows rather than event summaries — what 6c unlocks), and multiple mechanisms
+in one file sharing a world.

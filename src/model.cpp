@@ -27,6 +27,35 @@ int Model::gearIndex(const std::string& name) const {
     return -1;
 }
 
+int Model::profileIndex(const std::string& name) const {
+    for (size_t i = 0; i < profiles.size(); ++i)
+        if (profiles[i].name == name) return (int)i;
+    return -1;
+}
+
+ContactState Model::touchState(const TouchJoint& t, const std::vector<double>& q) const {
+    const Profile& pr = profiles[(size_t)t.profile];
+    const Body& host = bodies[(size_t)pr.body];
+    const Vec2 pw = worldAnchor(t.body, t.anchor, q);
+    const Vec2 origin = host.anchors[(size_t)pr.hostAnchor].local;
+    double th = 0.0;
+    Vec2 tr{0.0, 0.0};
+    if (host.qOffset >= 0) {
+        th = q[(size_t)host.qOffset + 0];
+        tr = {q[(size_t)host.qOffset + 1], q[(size_t)host.qOffset + 2]};
+    }
+    // the point in the profile's own frame (anchor-centered, body-aligned)
+    const Vec2 u = rotate(pw - tr, -th) - origin;
+    const ProfileCurve::Foot f = pr.curve->nearest(u);
+    ContactState cs;
+    cs.gap = f.signedDist;
+    cs.s = f.s;
+    cs.footLocal = f.point;
+    cs.foot = rotate(origin + f.point, th) + tr;
+    cs.normal = rotate(f.normal, th);
+    return cs;
+}
+
 Vec2 Model::worldAnchor(int bodyIdx, int anchorIdx, const std::vector<double>& q) const {
     const Body& b = bodies[bodyIdx];
     Vec2 l = b.anchors[anchorIdx].local;
@@ -50,6 +79,8 @@ DofReport Model::dofReport() const {
     r.nTangentMeshes = 0;
     for (const MeshJoint& mm : meshes) if (mm.tangent) ++r.nTangentMeshes;
     r.nGears = (int)gears.size();
+    r.nProfiles = (int)profiles.size();
+    r.nTouches = (int)touches.size();
     r.nDrives = 0;
     for (const Drive& d : drives) if (d.enabled) ++r.nDrives;
     r.nTorques = (int)torques.size();
@@ -64,11 +95,11 @@ DofReport Model::dofReport() const {
     }
     // Planar Grubler-Kutzbach: pins and slides each remove 2 DOF; a mesh's
     // roll-without-slip row removes 1; a tangent mesh's contact row removes
-    // one more. Springs, torque drives and weights are forces, not
+    // one more; a (bilateral) touch's gap row removes 1. Springs, torque drives and weights are forces, not
     // constraints. A mode's active holds are rate-0 drive rows: they remove
     // one DOF each while engaged (the report shows the initial states).
     const int j = r.nPins + r.nSlides;
-    r.freeDof = 3 * (r.nBodies - 1) - 2 * j - r.nMeshes - r.nTangentMeshes;
+    r.freeDof = 3 * (r.nBodies - 1) - 2 * j - r.nMeshes - r.nTangentMeshes - r.nTouches;
     r.residualDof = r.freeDof - r.nDrives;
     return r;
 }
@@ -160,6 +191,11 @@ std::vector<std::string> Model::assemble(std::vector<double>& q) const {
         for (const MeshJoint& mm : meshes) {
             const int ha = gears[mm.gearA].body, hb = gears[mm.gearB].body;
             if (placed[ha] || placed[hb]) { meshLinked[ha] = 1; meshLinked[hb] = 1; }
+        }
+        // M6: a contact links the touching body to the profile's host
+        for (const TouchJoint& tj : touches) {
+            const int hb = profiles[(size_t)tj.profile].body;
+            if (placed[tj.body] || placed[hb]) { meshLinked[tj.body] = 1; meshLinked[hb] = 1; }
         }
         for (size_t i = 1; i < n; ++i) {
             if (!placed[i] && !meshLinked[i]) {
@@ -271,6 +307,20 @@ std::vector<std::string> Model::validateAssembly(const std::vector<double>& q) c
                 ga.name.c_str(), gb.name.c_str(),
                 mm.sgn < 0 ? "internal" : "external", d, std::fabs(want),
                 std::fabs(d - std::fabs(want)));
+            errs.push_back(buf);
+        }
+    }
+    for (const TouchJoint& tj : touches) {
+        const Profile& pr = profiles[(size_t)tj.profile];
+        const double err = touchState(tj, q).gap - tj.roller;
+        if (std::fabs(err) > 1e-6) {
+            char buf[320];
+            std::snprintf(buf, sizeof buf,
+                "touch '%s.%s' on profile '%s': gap %.3g m at the initial pose — "
+                "the contact did not close (is the point near the curve?)",
+                bodies[(size_t)tj.body].name.c_str(),
+                bodies[(size_t)tj.body].anchors[(size_t)tj.anchor].name.c_str(),
+                pr.name.c_str(), err);
             errs.push_back(buf);
         }
     }
@@ -712,6 +762,98 @@ Model buildModel(const MechanismDecl& decl) {
         m.gears.push_back(g);
     }
 
+    // --- M6 profiles: closed contact curves on a host anchor --------------------
+    std::unordered_set<std::string> profileNames;
+    for (const ProfileDecl& pd : decl.profiles) {
+        if (!profileNames.insert(pd.name).second) {
+            throw SemanticError{pd.line, "duplicate profile name '" + pd.name + "'"};
+        }
+        Profile pr;
+        pr.name = pd.name;
+        pr.line = pd.line;
+        pr.body = m.bodyIndex(pd.host);
+        if (pr.body < 0) {
+            throw SemanticError{pd.line, "profile '" + pd.name +
+                "' refers to unknown host body '" + pd.host + "'"};
+        }
+        const std::string anchName = pd.hostAnchor.empty() ? "A" : pd.hostAnchor;
+        pr.hostAnchor = m.anchorIndex(pr.body, anchName);
+        if (pr.hostAnchor < 0) {
+            if (pd.hostAnchor.empty() && m.bodies[pr.body].isGround) {
+                throw SemanticError{pd.line, "profile '" + pd.name + "' on ground '" +
+                    pd.host + "' needs an explicit anchor — e.g. 'on " + pd.host +
+                    ".p' (ground bodies have no default anchor)"};
+            }
+            throw SemanticError{pd.line, "profile '" + pd.name +
+                "': host body '" + pd.host + "' has no anchor '" + anchName + "'"};
+        }
+
+        const size_t kMaxKnots = 1024;
+        if (pd.kind == ProfileDecl::Kind::Circle) {
+            if (!(pd.radius > 0.0)) {
+                throw SemanticError{pd.line, "profile '" + pd.name +
+                    "': circle needs a positive radius"};
+            }
+            pr.curve = std::make_shared<const ProfileCurve>(ProfileCurve::circle(pd.radius));
+        } else if (pd.kind == ProfileDecl::Kind::Polar) {
+            if (pd.polar.size() < 3) {
+                throw SemanticError{pd.line, "profile '" + pd.name +
+                    "': polar needs at least 3 (angle, radius) pairs"};
+            }
+            if (pd.polar.size() > kMaxKnots) {
+                throw SemanticError{pd.line, "profile '" + pd.name +
+                    "': polar has too many pairs (max 1024)"};
+            }
+            std::vector<double> ang, rad;
+            for (size_t i = 0; i < pd.polar.size(); ++i) {
+                const double a = pd.polar[i].first, r = pd.polar[i].second;
+                if (a < 0.0 || a >= 2.0 * kPi) {
+                    throw SemanticError{pd.line, "profile '" + pd.name +
+                        "': polar angles must lie in [0, 360) degrees"};
+                }
+                if (i > 0 && !(a > ang.back())) {
+                    throw SemanticError{pd.line, "profile '" + pd.name +
+                        "': polar angles must be strictly increasing"};
+                }
+                if (!(r > 0.0)) {
+                    throw SemanticError{pd.line, "profile '" + pd.name +
+                        "': polar radii must be positive"};
+                }
+                ang.push_back(a);
+                rad.push_back(r);
+            }
+            pr.curve = std::make_shared<const ProfileCurve>(ProfileCurve::polar(ang, rad));
+        } else {
+            const std::vector<Vec2>& pts = pd.points;
+            if (pts.size() < 3) {
+                throw SemanticError{pd.line, "profile '" + pd.name +
+                    "': points needs at least 3 points"};
+            }
+            if (pts.size() > kMaxKnots) {
+                throw SemanticError{pd.line, "profile '" + pd.name +
+                    "': points has too many points (max 1024)"};
+            }
+            double area2 = 0.0, perim = 0.0;
+            for (size_t i = 0; i < pts.size(); ++i) {
+                const Vec2& a = pts[i];
+                const Vec2& b = pts[(i + 1) % pts.size()];
+                const double edge = vlen(b - a);
+                if (edge < 1e-9) {
+                    throw SemanticError{pd.line, "profile '" + pd.name +
+                        "': points has two coincident neighbours"};
+                }
+                area2 += crossz(a, b);
+                perim += edge;
+            }
+            if (std::fabs(area2) < 1e-9 * perim * perim) {
+                throw SemanticError{pd.line, "profile '" + pd.name +
+                    "': points enclose no area (collinear?)"};
+            }
+            pr.curve = std::make_shared<const ProfileCurve>(ProfileCurve::points(pts));
+        }
+        m.profiles.push_back(pr);
+    }
+
     // --- meshes ---------------------------------------------------------------
     for (const MeshDecl& md : decl.meshes) {
         MeshJoint mm;
@@ -747,6 +889,44 @@ Model buildModel(const MechanismDecl& decl) {
             throw SemanticError{md.line, buf};
         }
         m.meshes.push_back(mm);
+    }
+
+    // --- M6 touches: a point rides a profile -------------------------------------
+    for (const TouchDecl& td : decl.touches) {
+        TouchJoint tj;
+        tj.line = td.line;
+        tj.body = m.bodyIndex(td.body);
+        if (tj.body < 0) {
+            throw SemanticError{td.line, "touch refers to unknown body '" + td.body + "'"};
+        }
+        tj.anchor = m.anchorIndex(tj.body, td.anchor);
+        if (tj.anchor < 0) {
+            throw SemanticError{td.line, "body '" + td.body +
+                "' has no anchor '" + td.anchor + "'"};
+        }
+        tj.profile = m.profileIndex(td.profile);
+        if (tj.profile < 0) {
+            throw SemanticError{td.line, "touch refers to unknown profile '" +
+                td.profile + "'"};
+        }
+        const Profile& pr = m.profiles[(size_t)tj.profile];
+        if (tj.body == pr.body) {
+            throw SemanticError{td.line, "body '" + td.body +
+                "' cannot touch its own profile '" + pr.name + "'"};
+        }
+        if (td.hasRoller) {
+            if (!(td.roller > 0.0)) {
+                throw SemanticError{td.line, "touch roller needs a positive radius "
+                    "(omit 'roller' for a knife-edge tip)"};
+            }
+            tj.roller = td.roller;
+        }
+        if (m.world.dynamic) {
+            throw SemanticError{td.line, "touch in a dynamic mechanism is not supported yet "
+                "(M6a is kinematic: no world block, springs, torque or weight drives, or "
+                "modes) — unilateral contact with separation is planned for M6c"};
+        }
+        m.touches.push_back(tj);
     }
 
     // --- M4 intent layer: 'reduce' synthesizes whole gear trains ----------

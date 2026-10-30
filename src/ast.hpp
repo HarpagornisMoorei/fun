@@ -1,4 +1,4 @@
-// mech — ast.hpp: parse tree for the .mech language (M4)
+// mech — ast.hpp: parse tree for the .mech language (M6)
 #pragma once
 #include "geom.hpp"
 #include <map>
@@ -148,6 +148,34 @@ struct DialDecl {
     int line = 0;
 };
 
+// M6 — contact. A profile is a closed curve attached to a host body, like a
+// gear is a pitch circle: its origin is the host anchor, its axes the body's.
+//   profile lobe on cam.A { circle: 0.03 }
+//   profile lobe on cam.A { polar: (0 deg, 0.030) (90 deg, 0.034) ... }
+//   profile lobe on cam.A { points: (x, y) (x, y) ... }
+struct ProfileDecl {
+    enum class Kind { None, Circle, Polar, Points };
+    Kind kind = Kind::None;
+    std::string name;
+    double radius = 0.0;                          // circle
+    std::vector<std::pair<double, double>> polar; // (angle rad, radius)
+    std::vector<Vec2> points;
+    std::string host;
+    std::string hostAnchor;               // "" -> default anchor "A"
+    int line = 0;
+};
+
+// touch follower.tip on lobe [roller 0.008] — a point of one body rides a
+// profile of another: one row, the signed gap to the curve (less the roller
+// radius, if any) is zero.
+struct TouchDecl {
+    std::string body, anchor;
+    std::string profile;
+    bool hasRoller = false;
+    double roller = 0.0;
+    int line = 0;
+};
+
 // M5 — a hybrid element: a state machine over the mechanism's constraint
 // sets, the kernel's only non-smooth element (the escapement is the flagship).
 //   mode esc {
@@ -204,6 +232,8 @@ struct MechanismDecl {
     std::vector<HandDecl> hands;
     std::vector<DialDecl> dials;
     std::vector<ModeDecl> modes;       // M5 hybrid elements
+    std::vector<ProfileDecl> profiles; // M6 contact curves
+    std::vector<TouchDecl> touches;    // M6 point-on-curve contacts
     int line = 0;
 };
 

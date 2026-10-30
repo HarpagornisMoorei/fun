@@ -1,4 +1,4 @@
-// mech — parser.cpp: recursive-descent parser for the .mech language (M3)
+// mech — parser.cpp: recursive-descent parser for the .mech language (M6)
 //
 // Grammar (M3 kernel + sugar):
 //   program     := mechanism*
@@ -58,6 +58,15 @@
 //                  ('>' | '<') num [('deg' | 'deg/s')]
 //   reset       := 'impulse' IDENT num ['mJ']
 //                | 'impulse' IDENT 'maintain' num ['deg']
+//
+// M6 additions ('profile' and 'touch' are keywords; 'circle', 'polar',
+// 'points' and 'roller' are contextual identifiers):
+//   profileDecl := 'profile' IDENT [ 'on' IDENT ['.' IDENT] ]
+//                  '{' shape '}' [ 'on' IDENT ['.' IDENT] ]
+//   shape       := 'circle' ':' num
+//                | 'polar' ':' ( '(' num ['deg'] ',' num ')' )+
+//                | 'points' ':' ( '(' num ',' num ')' )+
+//   touchDecl   := 'touch' ref 'on' IDENT [ 'roller' num ]
 //
 // 'dir', 'tangent' and all property names are contextual identifiers (not
 // keywords), so they remain usable as ordinary names. Comments ('//', '#')
@@ -171,9 +180,11 @@ private:
         else if (acceptKw("hand")) handDecl(m);
         else if (acceptKw("dial")) dialDecl(m);
         else if (acceptKw("mode")) modeDecl(m);
+        else if (acceptKw("profile")) profileDecl(m);
+        else if (acceptKw("touch")) touchDecl(m);
         else fail("expected a statement ('ground', 'body', 'rod', 'shaft', 'world', 'gear', "
-                  "'mesh', 'spring', 'pin', 'slide', 'drive', 'reduce', 'hand', 'dial' "
-                  "or 'mode'), got '" + cur().text + "'");
+                  "'mesh', 'spring', 'pin', 'slide', 'drive', 'reduce', 'hand', 'dial', "
+                  "'mode', 'profile' or 'touch'), got '" + cur().text + "'");
     }
 
     void anchorBodyDecl(MechanismDecl& m, BodyDecl::Kind kind) {
@@ -374,6 +385,93 @@ private:
             }
         }
         m.meshes.push_back(d);
+    }
+
+    // M6 — profile lobe on cam.A { circle: 0.03 }
+    //      profile lobe { polar: (0 deg, 0.030) (90 deg, 0.034) (180 deg, 0.030) } on cam
+    // The host may come before or after the block (like a rod's attach).
+    // 'circle', 'polar' and 'points' are contextual identifiers.
+    void profileDecl(MechanismDecl& m) {
+        ProfileDecl p;
+        Token name = expectIdent();
+        p.name = name.text;
+        p.line = name.line;
+        bool hasHost = false;
+        auto host = [&]() {
+            p.host = expectIdent().text;
+            if (acceptSym(".")) p.hostAnchor = expectIdent().text;
+            hasHost = true;
+        };
+        if (acceptKw("on")) host();
+        expectSym("{");
+
+        while (!acceptSym("}")) {
+            if (atEnd()) fail("unterminated '{' in profile '" + p.name + "'");
+            if (cur().type != Tok::Ident ||
+                (cur().text != "circle" && cur().text != "polar" && cur().text != "points")) {
+                fail("expected profile shape ('circle', 'polar' or 'points'), got '"
+                     + cur().text + "'");
+            }
+            if (p.kind != ProfileDecl::Kind::None) {
+                fail("profile '" + p.name + "' already has a shape — give it exactly one");
+            }
+            const std::string shape = cur().text;
+            next();
+            expectSym(":");
+            if (shape == "circle") {
+                p.kind = ProfileDecl::Kind::Circle;
+                p.radius = parseNum();
+            } else if (shape == "polar") {
+                p.kind = ProfileDecl::Kind::Polar;
+                while (acceptSym("(")) {
+                    double a = parseNum();
+                    if (cur().type == Tok::UnitDeg) { next(); a = deg2rad(a); }
+                    expectSym(",");
+                    const double r = parseNum();
+                    expectSym(")");
+                    p.polar.emplace_back(a, r);
+                    skipSeparators();
+                }
+                if (p.polar.empty()) fail("'polar:' needs (angle, radius) pairs");
+            } else {
+                p.kind = ProfileDecl::Kind::Points;
+                while (acceptSym("(")) {
+                    const double x = parseNum();
+                    expectSym(",");
+                    const double y = parseNum();
+                    expectSym(")");
+                    p.points.push_back(Vec2{x, y});
+                    skipSeparators();
+                }
+                if (p.points.empty()) fail("'points:' needs (x, y) pairs");
+            }
+            skipSeparators();
+        }
+        if (p.kind == ProfileDecl::Kind::None) {
+            throw ParseError{name.line, name.col, "profile '" + p.name +
+                "' has no shape — give it 'circle', 'polar' or 'points'"};
+        }
+        if (!hasHost && acceptKw("on")) host();
+        if (!hasHost) {
+            throw ParseError{name.line, name.col, "profile '" + p.name +
+                "' needs a host — e.g. 'profile " + p.name + " on cam.A { ... }'"};
+        }
+        m.profiles.push_back(p);
+    }
+
+    // M6 — touch follower.tip on lobe [roller 0.008]
+    void touchDecl(MechanismDecl& m) {
+        TouchDecl t;
+        t.line = cur().line;
+        parseRef(t.body, t.anchor);
+        expectKw("on");
+        t.profile = expectIdent().text;
+        if (cur().type == Tok::Ident && cur().text == "roller") {
+            next();
+            t.hasRoller = true;
+            t.roller = parseNum();
+        }
+        m.touches.push_back(t);
     }
 
     // spring sp a.h -> b.k { k: 9, rest: 1.2, damp: 0.1 }

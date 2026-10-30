@@ -1,8 +1,9 @@
 # Design note: contact and higher pairs (M6)
 
-Status: proposal, nothing implemented. This note fixes the representation
-before any code is written, because contact is where the design is hardest
-to change afterwards.
+Status: **6a implemented** (profiles `circle`/`polar`/`points`, bilateral
+kinematic `touch`, the eccentric and plate-cam examples). 6b–6d remain a
+proposal. This note fixed the representation before code was written,
+because contact is where the design is hardest to change afterwards.
 
 ## Why
 
@@ -70,11 +71,14 @@ The foot parameter `s` is the closest point: `tau_w(s) · d = 0`, with
 `tau_w = R(theta_A) c'(s)`. The row is the signed gap
 `g = n_w · d`, `n_w = perp(tau_w) / |tau_w|`.
 
-**`s` is not a generalized coordinate.** It is tracked like the mesh's
-`psi`: warm-started from the previous evaluation, refined by a scalar Newton
-iteration, and found by a coarse global scan only on first use or after a
-re-make. This keeps `q` at three entries per body and the mass matrix
-untouched.
+**`s` is not a generalized coordinate.** This keeps `q` at three entries per
+body and the mass matrix untouched. *As implemented in 6a* the foot is not
+tracked like the mesh's `psi`: it is searched afresh at every evaluation
+(coarse scan over a precomputed outline, then bracketed Newton), so the row
+is a pure function of `q` with no hidden state to go stale between LM trial
+steps. The cost is a few hundred distance tests per evaluation. Tracking
+remains an option if dynamics (6c) makes that cost matter, but a re-make
+after separation would then need the global scan anyway.
 
 **First-order Jacobian needs no `ds` term** (envelope theorem; at the foot
 `d` is parallel to `n_w`, so `d · dn_w = 0`, and `n_w · tau_w = 0`):
@@ -89,7 +93,7 @@ contact normal. I checked it against central finite differences on an
 ellipse (non-circular, rotated, both bodies displaced): agreement to
 ~1e-10.
 
-**Not yet derived: the second-order bias term** `J̇ q̇` that dynamics needs.
+**Still not derived: the second-order bias term** `J̇ q̇` that dynamics needs.
 It differs from the pin case because the contact point slides:
 `g̈` picks up a curvature term (`kappa`, and `1 − kappa g` in the foot
 rate). The existing finite-difference constraint-acceleration test is the

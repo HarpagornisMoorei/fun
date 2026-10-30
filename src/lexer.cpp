@@ -21,6 +21,8 @@ const std::unordered_set<std::string>& keywords() {
         "reduce", "hand", "dial",
         // M5
         "mode",
+        // M6
+        "profile", "touch",
     };
     return kw;
 }
