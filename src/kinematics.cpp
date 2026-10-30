@@ -8,6 +8,7 @@
 //   mesh rows (1 each):   rA*thA + s*rB*thB - (rA + s*rB)*psi - rollConst = 0
 //   tangent rows (1 per tangent mesh):
 //                         |cB - cA|^2 - (rA + s*rB)^2          = 0
+//   polar mesh rows (1 each):  thB - thB0 - F(psi - thA)  = 0   (M6d; F = integral of r_A/(d - r_A))
 //   touch rows (1 each):  signedGap(point, profile) - roller   = 0   (M6a)
 //
 // Derivations (see docs/LANG.md):
@@ -77,6 +78,7 @@ int ConstraintSystem::rowCount() const {
     for (const MeshJoint& mm : m.meshes) {
         rows += mm.tangent ? 2 : 1;
     }
+    rows += (int)m.polarMeshes.size();
     for (const TouchJoint& tj : m.touches)
         if (tj.engaged) ++rows;        // M6c: a lifted-off contact adds no row
     return rows;
@@ -136,6 +138,15 @@ void ConstraintSystem::residuals(const std::vector<double>& q, double t,
             const double want = ga.radius + s * gb.radius;
             c[r++] = dot(d, d) - want * want;
         }
+    }
+    for (const PolarMesh& pm : m.polarMeshes) {
+        const Profile& pa = m.profiles[(size_t)pm.profA];
+        const Profile& pb = m.profiles[(size_t)pm.profB];
+        const double thA = q[(size_t)m.bodies[(size_t)pa.body].qOffset];
+        const double thB = q[(size_t)m.bodies[(size_t)pb.body].qOffset];
+        double rho, drho;
+        const double F = pm.phase(*pa.curve, pm.psi - thA, rho, drho);
+        c[r++] = thB - pm.thB0 - F;
     }
     for (const TouchJoint& tj : m.touches) {
         if (!tj.engaged) continue;
@@ -230,6 +241,17 @@ void ConstraintSystem::jacobian(const std::vector<double>& q,
             ++r;
         }
     }
+    for (const PolarMesh& pm : m.polarMeshes) {
+        const Profile& pa = m.profiles[(size_t)pm.profA];
+        const Profile& pb = m.profiles[(size_t)pm.profB];
+        const int oA = m.bodies[(size_t)pa.body].qOffset;
+        const int oB = m.bodies[(size_t)pb.body].qOffset;
+        double rho, drho;
+        pm.phase(*pa.curve, pm.psi - q[(size_t)oA], rho, drho);
+        addJ(J, cols, r, oA, rho);        // d/dthA of -F(psi - thA)
+        addJ(J, cols, r, oB, 1.0);
+        ++r;
+    }
     for (const TouchJoint& tj : m.touches) {
         if (!tj.engaged) continue;
         touchRow(tj, q, &J[(size_t)r * cols]);
@@ -264,15 +286,25 @@ bool ConstraintSystem::solve(std::vector<double>& q, double t, int& itersOut,
     // costs nothing in the warm-started steady state.
     const std::vector<double> q0 = q;
     static const double kTilt[2] = {0.37, -0.53};
+    std::vector<double> best;
+    double bestRes = 1e300;
     for (int attempt = 0; attempt < 3; ++attempt) {
         if (attempt > 0) {
             q = q0;
+            // signed arithmetic: (i % 3) is unsigned, and 0 - 1 wraps to 2^64 - 1
             for (size_t i = 0; i < q.size(); ++i)
-                q[i] += kTilt[attempt - 1] * (0.5 + 0.25 * ((i % 3) - 1));
+                q[i] += kTilt[attempt - 1] * (0.5 + 0.25 * ((int)(i % 3) - 1));
         }
-        if (solveAttempt(q, t, itersOut, maxResidualOut)) return true;
+        double res = 0.0;
+        if (solveAttempt(q, t, itersOut, &res)) {
+            if (maxResidualOut) *maxResidualOut = res;
+            return true;
+        }
+        if (res < bestRes) { bestRes = res; best = q; }
     }
-    return false;   // q holds the closest attempt
+    q = best;                                  // the closest attempt, as promised
+    if (maxResidualOut) *maxResidualOut = bestRes;
+    return false;
 }
 
 bool ConstraintSystem::solveAttempt(std::vector<double>& q, double t, int& itersOut,

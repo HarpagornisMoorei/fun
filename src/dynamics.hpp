@@ -29,7 +29,8 @@ struct HybridStats {
                                   // and by contact impacts (M6c)
     long liftoffs = 0;            // M6c: contacts that separated
     long impacts = 0;             // M6c: contacts that touched down again
-    double driveWork = 0.0;       // M6c: J delivered by rate drives (reaction x rate)
+    double driveWork = 0.0;       // M6c: J delivered by rate drives (reaction x rate) and
+                                  // torque drives (torque x angular velocity)
 };
 
 class DynamicsSystem {

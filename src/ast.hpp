@@ -63,8 +63,10 @@ struct GearDecl {
     int line = 0;
 };
 
-// mesh g1 g2 [tangent] — roll without slip; `tangent` additionally enforces
-// the center-distance (pitch-circle tangency) row live, which is what lets
+// mesh g1 g2 [tangent] — roll without slip. M6d: g1 and g2 may instead be two
+// star-shaped profiles (circle, polar, ellipse) on fixed shafts — a non-circular
+// gear pair, whose contact point lies on the line of centers.
+// For gears, `tangent` additionally enforces the center-distance (pitch-circle tangency) row live, which is what lets
 // unconstrained planets orbit their suns without a carrier.
 struct MeshDecl {
     std::string gearA, gearB;
@@ -154,11 +156,17 @@ struct DialDecl {
 //   profile lobe on cam.A { circle: 0.03 }
 //   profile lobe on cam.A { polar: (0 deg, 0.030) (90 deg, 0.034) ... }
 //   profile lobe on cam.A { points: (x, y) (x, y) ... }
+//   profile gear on shaft.A { ellipse: 0.05 0.043 focus }   (M6d)
+//   profile tooth on wheel.A { polygon: (x, y) (x, y) ... fillet 0.0005 }   (M6e)
 struct ProfileDecl {
-    enum class Kind { None, Circle, Polar, Points };
+    enum class Kind { None, Circle, Polar, Points, Ellipse, Polygon };
     Kind kind = Kind::None;
     std::string name;
     double radius = 0.0;                          // circle
+    double ellipseA = 0.0, ellipseB = 0.0;        // ellipse semi-axes
+    bool ellipseFocus = false;                    // anchor at the focus (a gear pivot)
+    bool hasFillet = false;                       // polygon: corner radius (required)
+    double fillet = 0.0;
     std::vector<std::pair<double, double>> polar; // (angle rad, radius)
     std::vector<Vec2> points;
     std::string host;

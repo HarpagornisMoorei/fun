@@ -1,10 +1,10 @@
 # Design note: contact and higher pairs (M6)
 
-Status: **6a, 6b and 6c implemented** (profiles `circle`/`polar`/`points`,
+Status: **6a, 6b, 6c and 6d implemented, plus 6e (polygons and the ratchet)** (profiles `circle`/`polar`/`points`,
 bilateral kinematic `touch`, `cam` displacement-diagram synthesis with
 pressure-angle and undercut reports; the eccentric, lobe-cam and plate-cam
-examples; unilateral contact in the dynamics with `jumpcam`). 6d remains a
-proposal. This note fixed the representation before code was written,
+examples; unilateral contact in the dynamics with `jumpcam`; non-circular
+gears with `ellipgears`). This note fixed the representation before code was written,
 because contact is where the design is hardest to change afterwards.
 
 ## Why
@@ -173,6 +173,58 @@ rows are, before the code.
   landing. Touch-down is now armed within the contact band.
 * Friction is still deferred; the sliding speed `u` it needs falls out of the
   bias term.
+
+**6d as implemented, and where it departed from the table.**
+
+The table proposed a `roll` contact (arc-length matching of two profiles). What
+shipped is `mesh` over two profiles, and the reasons are worth recording.
+
+* *No new keyword.* A gear mesh is already "roll without slip between two pitch
+  curves"; a non-circular gear is the same statement with `r(phi)` in place of a
+  constant radius, so `mesh` accepts two profiles.
+* *No arc-length rows.* Arc-length matching between arbitrary curves needs the two
+  contact points as unknowns (an auxiliary coordinate, or implicit derivatives of a
+  closest-pair search), threaded through the solver and the mass matrix. For fixed
+  shafts the contact point always lies on the line of centers, which makes the whole
+  relation a function of the two shaft angles alone — one row, no new unknowns,
+  and it carries over to the dynamics with only `r_A'`.
+* *The row is the tangent branch, not `r_A + r_B = d`.* That algebraic form is
+  singular at the symmetric poses (the Jacobian is exactly zero where `r'`
+  vanishes) and has two mirrored solutions, one not tangent. Integrating the
+  instantaneous-center ratio gives `thB - thB0 - F(psi - thA)` with Jacobian
+  `(rho, 1)`: never singular, and on the right branch by construction.
+* *Conjugacy is verified, not assumed.* The row only describes rolling for a
+  conjugate pair, so the compiler sweeps the whole turn and refuses a pair that
+  crosses instead of rolling. Arc-length equality is then a *test* (independent
+  brute-force geometry on the solved motion), not a constraint.
+* *Scope.* Fixed centers and external contact. Moving centers (a carrier) and
+  internal contact need the contact point as an unknown after all; that, and
+  rolling between curves that are not a conjugate pair, is what the arc-length
+  formulation would buy, and is left for later.
+* *A solver bug surfaced.* The multi-start restarts had always been broken (an
+  unsigned `(i % 3) - 1` wrapped to 2^64 - 1 and sent every angle coordinate to
+  ~1e18), and a failed solve left `q` at the last attempt rather than the closest.
+  It never mattered because the first attempt nearly always converges; an
+  elliptical pair started on its singular symmetric pose was the first mechanism
+  to need a restart. Both are fixed.
+
+**6e: sharp-cornered parts (not in the original plan).** The Geneva drive and the
+ratchet both need corners, and the spline-based `points` profile cannot hold one (a
+cubic spline through a corner rings by tens of percent, and the contact normal
+with it). `polygon` is therefore an *exact* curve of edges and tangent circular
+fillets, not a spline, with an analytic nearest-point search; `fillet` is required
+because a perfectly sharp corner has no contact normal. The ratchet is the
+sharpest test of 6c — contact made and lost once per tooth, an impact each time.
+
+What it taught: (1) **the ledger needed torque work** (a torque drive does work too;
+without it a torque-driven contact mechanism reported a misleading residual);
+(2) **a frictionless locked pawl rings** — the system is conservative, so it
+oscillates about the jam instead of settling, and the right assertion is the
+wheel's own equation of motion (impulse-momentum, to 0.01%) rather than "at
+rest"; (3) a pawl spring strong enough to matter *stalls* the forward direction
+(its normal force on the ramp cancels the drive torque), which is correct physics.
+The Geneva drive remains open: it needs two-sided slot contact and a locking arc
+(curve-against-curve contact, not point-on-curve).
 
 Acceptance examples to add under `examples/`: `eccentric`, `platecam`,
 `geneva`, `ratchet`, `ellipgears`.

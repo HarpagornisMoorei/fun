@@ -1,0 +1,56 @@
+// ratchet — a ratchet wheel and a gravity pawl. Twelve sawtooth teeth, each a
+// gentle ramp and a radial drop face. Turned clockwise (the torque below) the
+// wheel runs under the pawl: the tip climbs each ramp, drops over the tooth tip
+// and lands in the next root with a click. Turned the other way the radial face
+// meets the tip and the wheel locks.
+//
+// What it exercises: a *polygon* profile (straight edges joined by 0.5 mm
+// fillets — exact lines and arcs, so the foot, normal and curvature are
+// analytic and nothing rings, as a spline through a corner would), and the
+// unilateral contact of M6c in its most characteristic setting: contact made
+// and lost once per tooth, an impact each time, every joule accounted for.
+//
+//   mech run examples/ratchet.mech --headless 1
+//   mech run examples/ratchet.mech            (watch the pawl)
+//
+// A sharp corner has no contact normal, so every polygon needs a fillet; a
+// tiny one (0.0002) is fine.
+//
+// Change the torque to +0.004 to see the lock: the wheel advances a degree or two
+// to bring a radial face onto the tip, and is held. It does not come perfectly to
+// rest — a frictionless pawl and wheel are a conservative system, so the jammed
+// pair rings at about a degree, with the contact force swinging around the value
+// that balances the torque. (Friction, the thing that would damp it, is the
+// natural next step for the contact model.)
+mechanism ratchet {
+  world { gravity: 9.81  step: 0.0005 }
+
+  ground frame {
+    anchor axle  at (0, 0)
+    anchor pivot at (-0.031640, 0.056210)       // the pawl's pin, above and left of the wheel
+  }
+
+  body wheel {
+    anchor axle at (0, 0)
+    mass: 0.05
+    from: 0 deg
+  }
+  pin wheel.axle -> frame.axle
+
+  profile teeth on wheel.axle {
+    polygon:
+      (0.030000, 0.000000) (0.031177, 0.018000) (0.025981, 0.015000) (0.018000, 0.031177)
+      (0.015000, 0.025981) (0.000000, 0.036000) (0.000000, 0.030000) (-0.018000, 0.031177)
+      (-0.015000, 0.025981) (-0.031177, 0.018000) (-0.025981, 0.015000) (-0.036000, 0.000000)
+      (-0.030000, 0.000000) (-0.031177, -0.018000) (-0.025981, -0.015000) (-0.018000, -0.031177)
+      (-0.015000, -0.025981) (-0.000000, -0.036000) (-0.000000, -0.030000) (0.018000, -0.031177)
+      (0.015000, -0.025981) (0.031177, -0.018000) (0.025981, -0.015000) (0.036000, -0.000000)
+    fillet 0.0005
+  }
+
+  // the pawl: a light rod hanging from its pin, tip resting in a root
+  rod pawl on frame.pivot { length: 0.04, from: -40 deg }
+  touch pawl.B on teeth
+
+  drive wheel torque -0.004                    // clockwise: the ratcheting direction
+}

@@ -269,6 +269,18 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
         }
     }
 
+    // M6d: non-circular mesh rows. R = thB - thB0 - F(psi - thA), F' = rho, so
+    //   R'  = wB + rho wA
+    //   R'' = aB + rho aA - rho'(phi_A) wA^2          (phi_A' = -wA)
+    // and J qdd + bias = 0 with J = (rho, 1) and bias = -rho' wA^2.
+    for (const PolarMesh& pm : m.polarMeshes) {
+        const Profile& pa = m.profiles[(size_t)pm.profA];
+        const double wA = bodyW(pa.body);
+        double rho, drho;
+        pm.phase(*pa.curve, pm.psi - q[(size_t)m.bodies[(size_t)pa.body].qOffset], rho, drho);
+        bias[r++] = -drho * wA * wA;
+    }
+
     // M6c: touch rows. The row is the signed gap g(q) of a point against a
     // curve, so with w the point's velocity relative to the curve's material
     // point at the foot, t the unit tangent, kappa the curve's curvature and
@@ -394,17 +406,20 @@ void DynamicsSystem::integrate(std::vector<double>& q, std::vector<double>& qd,
     // semi-implicit Euler drifts at first order on this non-separable system
     // (the mass matrix depends on q); RK4 keeps chaotic mechanisms' energy
     // flat to well under a percent at the default 2 ms step.
-    // M6c: the rate drives' power (reaction torque x prescribed rate) at each
-    // stage, for the energy ledger: Simpson over the four stages.
-    auto power = [&]() {
+    // M6c: the drives' power at each stage, for the energy ledger: Simpson over
+    // the four stages. A rate drive delivers (reaction torque x prescribed rate);
+    // a torque drive delivers (torque x the body's angular velocity there).
+    auto power = [&](const std::vector<double>& v) {
         double P = 0.0;
         for (size_t di = 0; di < m.drives.size(); ++di)
             if (m.drives[di].enabled) P += lastReaction_[di] * m.drives[di].omegaRad;
+        for (const TorqueDrive& td : m.torques)
+            P += td.torque * v[(size_t)m.bodies[(size_t)td.body].qOffset];
         return P;
     };
     std::vector<double> a1, a2, a3, a4;
     accelerations(q, qd, a1);
-    const double P1 = power();
+    const double P1 = power(qd);
 
     std::vector<double> qS(nq), qdS(nq);
     for (int i = 0; i < nq; ++i) {
@@ -412,21 +427,21 @@ void DynamicsSystem::integrate(std::vector<double>& q, std::vector<double>& qd,
         qdS[i] = qd[i] + 0.5 * h * a1[i];
     }
     accelerations(qS, qdS, a2);
-    const double P2 = power();
+    const double P2 = power(qdS);
 
     for (int i = 0; i < nq; ++i) {
         qS[i] = q[i] + 0.5 * h * qd[i] + 0.25 * h * h * a1[i];
         qdS[i] = qd[i] + 0.5 * h * a2[i];
     }
     accelerations(qS, qdS, a3);
-    const double P3 = power();
+    const double P3 = power(qdS);
 
     for (int i = 0; i < nq; ++i) {
         qS[i] = q[i] + h * qd[i] + 0.5 * h * h * a2[i];
         qdS[i] = qd[i] + h * a3[i];
     }
     accelerations(qS, qdS, a4);
-    lastDriveWork_ = h / 6.0 * (P1 + 2.0 * P2 + 2.0 * P3 + power());
+    lastDriveWork_ = h / 6.0 * (P1 + 2.0 * P2 + 2.0 * P3 + power(qdS));
 
     for (int i = 0; i < nq; ++i)
         qd[i] += h / 6.0 * (a1[i] + 2.0 * a2[i] + 2.0 * a3[i] + a4[i]);

@@ -8,7 +8,7 @@
 //                | driveDecl
 //
 //   groundDecl  := 'ground' IDENT '{' anchor* '}'
-//   bodyDecl    := 'body' IDENT '{' (anchor | 'mass' ':' num)* '}'
+//   bodyDecl    := 'body' IDENT '{' (anchor | 'mass' ':' num | 'from' ':' num 'deg')* '}'
 //   anchor      := 'anchor' IDENT 'at' '(' num ',' num ')'
 //                  [ 'dir' '(' num ',' num ')' ]
 //
@@ -66,6 +66,8 @@
 //   shape       := 'circle' ':' num
 //                | 'polar' ':' ( '(' num ['deg'] ',' num ')' )+
 //                | 'points' ':' ( '(' num ',' num ')' )+
+//                | 'ellipse' ':' num num [ 'focus' ]          (M6d)
+//                | 'polygon' ':' ( '(' num ',' num ')' )+ 'fillet' num   (M6e)
 //   touchDecl   := 'touch' ref 'on' IDENT { 'roller' num | 'restitution' num }
 //
 // M6b ('cam' is contextual at statement start so `cam` stays usable as a
@@ -214,6 +216,14 @@ private:
                 next();
                 expectSym(":");
                 b.props["mass"] = parseNum();
+            } else if (kind == BodyDecl::Kind::Free && cur().type == Tok::Kw &&
+                       cur().text == "from") {
+                // release angle, as for a rod: assembly seeds this body at the angle
+                next();
+                expectSym(":");
+                b.props["from"] = parseNum();
+                if (cur().type == Tok::UnitDeg) { next(); }
+                else fail("expected 'deg' after the body's release angle, got '" + cur().text + "'");
             } else {
                 expectKw("anchor");
                 AnchorDecl a;
@@ -420,9 +430,10 @@ private:
         while (!acceptSym("}")) {
             if (atEnd()) fail("unterminated '{' in profile '" + p.name + "'");
             if (cur().type != Tok::Ident ||
-                (cur().text != "circle" && cur().text != "polar" && cur().text != "points")) {
-                fail("expected profile shape ('circle', 'polar' or 'points'), got '"
-                     + cur().text + "'");
+                (cur().text != "circle" && cur().text != "polar" && cur().text != "points" &&
+                 cur().text != "ellipse" && cur().text != "polygon")) {
+                fail("expected profile shape ('circle', 'polar', 'points', 'ellipse' or "
+                     "'polygon'), got '" + cur().text + "'");
             }
             if (p.kind != ProfileDecl::Kind::None) {
                 fail("profile '" + p.name + "' already has a shape — give it exactly one");
@@ -433,6 +444,30 @@ private:
             if (shape == "circle") {
                 p.kind = ProfileDecl::Kind::Circle;
                 p.radius = parseNum();
+            } else if (shape == "polygon") {
+                p.kind = ProfileDecl::Kind::Polygon;
+                while (acceptSym("(")) {
+                    const double x = parseNum();
+                    expectSym(",");
+                    const double y = parseNum();
+                    expectSym(")");
+                    p.points.push_back(Vec2{x, y});
+                    skipSeparators();
+                }
+                if (p.points.empty()) fail("'polygon:' needs (x, y) vertices");
+                if (cur().type == Tok::Ident && cur().text == "fillet") {
+                    next();
+                    p.hasFillet = true;
+                    p.fillet = parseNum();
+                }
+            } else if (shape == "ellipse") {
+                p.kind = ProfileDecl::Kind::Ellipse;
+                p.ellipseA = parseNum();
+                p.ellipseB = parseNum();
+                if (cur().type == Tok::Ident && cur().text == "focus") {
+                    next();
+                    p.ellipseFocus = true;
+                }
             } else if (shape == "polar") {
                 p.kind = ProfileDecl::Kind::Polar;
                 while (acceptSym("(")) {
@@ -461,7 +496,7 @@ private:
         }
         if (p.kind == ProfileDecl::Kind::None) {
             throw ParseError{name.line, name.col, "profile '" + p.name +
-                "' has no shape — give it 'circle', 'polar' or 'points'"};
+                "' has no shape — give it 'circle', 'polar', 'points', 'ellipse' or 'polygon'"};
         }
         if (!hasHost && acceptKw("on")) host();
         if (!hasHost) {

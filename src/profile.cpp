@@ -104,6 +104,90 @@ ProfileCurve ProfileCurve::circle(double radius) {
     return c;
 }
 
+ProfileCurve ProfileCurve::ellipse(double a, double b, bool focus) {
+    ProfileCurve c;
+    c.kind_ = Kind::Ellipse;
+    c.ea_ = a;
+    c.eb_ = b;
+    c.efocus_ = focus;
+    c.ecx_ = focus ? std::sqrt(std::max(0.0, a * a - b * b)) : 0.0;
+    c.period_ = 2.0 * kPi;
+    c.finish();
+    return c;
+}
+
+ProfileCurve ProfileCurve::polygon(const std::vector<Vec2>& in, double fillet) {
+    std::vector<Vec2> v(in);
+    double area2 = 0.0;
+    for (size_t i = 0; i < v.size(); ++i) area2 += crossz(v[i], v[(i + 1) % v.size()]);
+    if (area2 < 0.0) std::reverse(v.begin(), v.end());
+
+    const size_t n = v.size();
+    struct Corner { Vec2 T1, T2, C; double r, a0, sweep, sgn; bool arc; };
+    std::vector<Corner> cn(n);
+    double minF = 1e300;
+    for (size_t i = 0; i < n; ++i) {
+        const Vec2 P = v[(i + n - 1) % n], V = v[i], N = v[(i + 1) % n];
+        const Vec2 d1 = normalize(V - P), d2 = normalize(N - V);
+        const double turn = std::atan2(crossz(d1, d2), dot(d1, d2));    // signed, left turn > 0
+        Corner c;
+        c.arc = std::fabs(turn) > 1e-9;
+        c.sgn = turn >= 0.0 ? 1.0 : -1.0;
+        if (!c.arc) {
+            c.T1 = c.T2 = V;
+            c.r = c.a0 = c.sweep = 0.0;
+            c.C = V;
+        } else {
+            const double half = 0.5 * std::fabs(turn);
+            const double tmax = 0.5 * std::min(vlen(V - P), vlen(N - V));   // half an edge each
+            const double t = std::min(fillet * std::tan(half), tmax);
+            c.r = t / std::tan(half);
+            c.T1 = V - t * d1;
+            c.T2 = V + t * d2;
+            c.C = c.T1 + (c.sgn * c.r) * perp(d1);
+            c.a0 = std::atan2(c.T1.y - c.C.y, c.T1.x - c.C.x);
+            c.sweep = std::fabs(turn);
+            minF = std::min(minF, c.r);
+        }
+        cn[i] = c;
+    }
+
+    ProfileCurve pc;
+    pc.kind_ = Kind::Polygon;
+    pc.minFillet_ = minF > 1e299 ? 0.0 : minF;
+    double s = 0.0;
+    auto addLine = [&](Vec2 a, Vec2 b) {
+        const double L = vlen(b - a);
+        if (L < 1e-12) return;
+        Prim q;
+        q.arc = false;
+        q.a = a;
+        q.dir = (1.0 / L) * (b - a);
+        q.len = L;
+        q.s0 = s;
+        s += L;
+        pc.prims_.push_back(q);
+    };
+    for (size_t i = 0; i < n; ++i) {
+        if (cn[i].arc) {
+            Prim q;
+            q.arc = true;
+            q.c = cn[i].C;
+            q.r = cn[i].r;
+            q.a0 = cn[i].a0;
+            q.sgn = cn[i].sgn;
+            q.len = cn[i].r * cn[i].sweep;
+            q.s0 = s;
+            s += q.len;
+            pc.prims_.push_back(q);
+        }
+        addLine(cn[i].T2, cn[(i + 1) % n].T1);
+    }
+    pc.period_ = s;
+    pc.finish();
+    return pc;
+}
+
 ProfileCurve ProfileCurve::polar(const std::vector<double>& angles,
                                  const std::vector<double>& radii) {
     ProfileCurve c;
@@ -140,6 +224,18 @@ ProfileCurve ProfileCurve::points(const std::vector<Vec2>& in) {
 }
 
 void ProfileCurve::finish() {
+    if (kind_ == Kind::Polygon) {      // no sample table: the foot search is analytic
+        maxRadius_ = 0.0;
+        minRadius_ = 1e300;
+        const int M = 4096;
+        for (int k = 0; k < M; ++k) {
+            Vec2 p, d1, d2;
+            eval(period_ * (double)k / (double)M, p, d1, d2);
+            maxRadius_ = std::max(maxRadius_, vlen(p));
+            minRadius_ = std::min(minRadius_, vlen(p));
+        }
+        return;
+    }
     const size_t knots = a_.t.size();
     const size_t K = std::max<size_t>(256, 8 * knots);
     sampleS_.resize(K);
@@ -182,6 +278,76 @@ void ProfileCurve::eval(double s, Vec2& p, Vec2& d1, Vec2& d2) const {
         b_.eval(s, p.y, d1.y, d2.y);
         return;
     }
+    case Kind::Ellipse: {
+        const double cs = std::cos(s), sn = std::sin(s);
+        p = {ecx_ + ea_ * cs, eb_ * sn};
+        d1 = {-ea_ * sn, eb_ * cs};
+        d2 = {-ea_ * cs, -eb_ * sn};
+        return;
+    }
+    case Kind::Polygon: {
+        double w = s - period_ * std::floor(s / period_);
+        size_t lo = 0, hi = prims_.size() - 1;      // last piece whose s0 <= w
+        while (lo < hi) {
+            const size_t mid = (lo + hi + 1) / 2;
+            if (prims_[mid].s0 <= w) lo = mid; else hi = mid - 1;
+        }
+        const Prim& q = prims_[lo];
+        const double u = w - q.s0;
+        p = primPoint(q, u);
+        if (!q.arc) {
+            d1 = q.dir;
+            d2 = {0.0, 0.0};
+        } else {
+            const double ang = q.a0 + q.sgn * u / q.r;
+            d1 = q.sgn * Vec2{-std::sin(ang), std::cos(ang)};
+            d2 = (-1.0 / q.r) * Vec2{std::cos(ang), std::sin(ang)};
+        }
+        return;
+    }
+    }
+}
+
+Vec2 ProfileCurve::primPoint(const Prim& q, double u) const {
+    if (!q.arc) return q.a + u * q.dir;
+    const double ang = q.a0 + q.sgn * u / q.r;
+    return q.c + q.r * Vec2{std::cos(ang), std::sin(ang)};
+}
+
+void ProfileCurve::polarEval(double phi, double& r, double& dr, double& d2r) const {
+    switch (kind_) {
+    case Kind::Circle:
+        r = radius_;
+        dr = d2r = 0.0;
+        return;
+    case Kind::Polar:
+        a_.eval(phi, r, dr, d2r);
+        return;
+    case Kind::Ellipse: {
+        const double cs = std::cos(phi), sn = std::sin(phi);
+        if (efocus_) {
+            // r = p / (1 - e cos phi), p = b^2 / a, e = sqrt(a^2 - b^2) / a
+            const double e = ecx_ / ea_, p = eb_ * eb_ / ea_;
+            const double D = 1.0 - e * cs;
+            r = p / D;
+            dr = -p * e * sn / (D * D);
+            d2r = -p * e * cs / (D * D) + 2.0 * p * e * e * sn * sn / (D * D * D);
+        } else {
+            // r = ab / sqrt(N), N = b^2 cos^2 + a^2 sin^2
+            const double N = eb_ * eb_ * cs * cs + ea_ * ea_ * sn * sn;
+            const double Np = (ea_ * ea_ - eb_ * eb_) * std::sin(2.0 * phi);
+            const double Npp = 2.0 * (ea_ * ea_ - eb_ * eb_) * std::cos(2.0 * phi);
+            const double ab = ea_ * eb_;
+            r = ab * std::pow(N, -0.5);
+            dr = -0.5 * ab * std::pow(N, -1.5) * Np;
+            d2r = 0.75 * ab * std::pow(N, -2.5) * Np * Np - 0.5 * ab * std::pow(N, -1.5) * Npp;
+        }
+        return;
+    }
+    case Kind::Points:
+    case Kind::Polygon:
+        r = dr = d2r = 0.0;   // not star-shaped; callers check starShaped()
+        return;
     }
 }
 
@@ -198,6 +364,44 @@ ProfileCurve::Foot ProfileCurve::nearest(Vec2 u) const {
         f.normal = {cs, sn};
         f.signedDist = rr - radius_;
         f.curvature = 1.0 / radius_;
+        return f;
+    }
+
+    if (kind_ == Kind::Polygon) {
+        // exact: the closest point of every straight piece and fillet, best wins
+        double bestD2 = 1e300;
+        size_t bi = 0;
+        double bu = 0.0;
+        for (size_t i = 0; i < prims_.size(); ++i) {
+            const Prim& q = prims_[i];
+            double uu;
+            if (!q.arc) {
+                uu = std::min(q.len, std::max(0.0, dot(u - q.a, q.dir)));
+            } else {
+                const Vec2 vv = u - q.c;
+                double rel = q.sgn * (std::atan2(vv.y, vv.x) - q.a0);
+                rel -= 2.0 * kPi * std::floor(rel / (2.0 * kPi));       // in [0, 2 pi)
+                const double sweep = q.len / q.r;
+                if (rel <= sweep) {
+                    uu = rel * q.r;
+                } else {   // off the end of the arc: whichever endpoint is nearer
+                    const Vec2 e0 = primPoint(q, 0.0), e1 = primPoint(q, q.len);
+                    uu = dot(u - e0, u - e0) <= dot(u - e1, u - e1) ? 0.0 : q.len;
+                }
+            }
+            const Vec2 d = u - primPoint(q, uu);
+            const double dd = dot(d, d);
+            if (dd < bestD2) { bestD2 = dd; bi = i; bu = uu; }
+        }
+        const Prim& q = prims_[bi];
+        Vec2 p, d1, d2;
+        eval(q.s0 + bu, p, d1, d2);
+        f.s = q.s0 + bu;
+        f.point = p;
+        f.tangent = d1;                                   // unit speed
+        f.normal = {d1.y, -d1.x};
+        f.signedDist = dot(f.normal, u - p);
+        f.curvature = q.arc ? q.sgn / q.r : 0.0;
         return f;
     }
 
@@ -262,6 +466,14 @@ ProfileCurve::Foot ProfileCurve::nearest(Vec2 u) const {
 
 std::vector<Vec2> ProfileCurve::outline(int n) const {
     std::vector<Vec2> out;
+    if (kind_ == Kind::Polygon) {                  // piece by piece; fillets in <= 4 deg steps
+        for (const Prim& q : prims_) {
+            if (!q.arc) { out.push_back(q.a); continue; }
+            const int m = std::max(2, (int)std::ceil(q.len / q.r / deg2rad(4.0)));
+            for (int k = 0; k < m; ++k) out.push_back(primPoint(q, q.len * (double)k / (double)m));
+        }
+        return out;
+    }
     out.reserve((size_t)n);
     for (int k = 0; k < n; ++k) {
         Vec2 p, d1, d2;

@@ -118,6 +118,39 @@ struct MeshJoint {
     int line = 0;
 };
 
+// M6d — a non-circular gear pair: two star-shaped profiles (circle, polar,
+// ellipse) on shafts pinned to ground, rolling on each other. The contact
+// point always lies on the line of centers, at distance r_A(phi_A) from A and
+// r_B(phi_B) from B, where phi is the polar angle of the contact point in each
+// body's own frame:  phi_A = psi - thA,  phi_B = psi + pi - thB  (psi: world
+// angle of the line of centers A -> B), and r_A + r_B = d. That algebraic
+// relation is singular wherever r' vanishes (at the symmetric poses of an
+// ellipse pair) and has two mirrored solutions, only one of them tangent. The
+// *rolling* relation is its tangent branch: instantaneous centers on the line of
+// centers give  d thB = -rho dthA,  rho = r_A / (d - r_A), which integrates to
+//     thB - thB0 - F(psi - thA) = 0,       F(phi) = integral of rho,
+// a row whose Jacobian (rho, 1) never vanishes and which cannot pick the wrong
+// branch. It describes real rolling only for a *conjugate* pair, which the model
+// verifies (the log-derivatives of r must agree wherever the pair can touch), and
+// thB0 is the phase captured at assembly, as for a gear mesh.
+struct PolarMesh {
+    int profA = -1, profB = -1;
+    double d = 0.0, psi = 0.0;        // center distance, angle of the line of centers
+    Vec2 cA, cB;                      // the (fixed) centers, world
+    double conjDefect = 0.0;          // worst |r_A'/r_A - r_B'/r_B| over a turn
+    double minRatio = 0.0, maxRatio = 0.0;   // |omega_B / omega_A| over a turn
+    mutable double thB0 = 0.0;        // phase constant, captured at assembly
+    double Ftot = 0.0;                // F over one full turn of phi
+    std::vector<double> Fnodes, rhoNodes, drhoNodes;   // F, rho, rho' at 2048 nodes over [0, 2 pi]
+    int line = 0;
+
+    // F(phi) by quintic Hermite on the node table (F, F' = rho and F'' = rho' are
+    // all exact at the nodes, so F is C2 and as accurate as the analytic terms the
+    // Jacobian and the dynamics' bias use), plus the exact rho and d rho / d phi
+    // at phi. `A` is profile A's curve.
+    double phase(const ProfileCurve& A, double phi, double& rho, double& drho) const;
+};
+
 // M6 — a closed curve riding a host body (see profile.hpp). The curve's
 // origin is the host anchor; its axes are the host body's.
 struct Profile {
@@ -336,6 +369,7 @@ struct DofReport {
     int nModes = 0;          // M5: hybrid elements
     int nHolds = 0;          // M5: hold rows enabled in the initial states
     int nProfiles = 0;       // M6: contact curves
+    int nPolarMeshes = 0;    // M6d: non-circular gear pairs (one row each)
     int nTouches = 0;        // M6: point-on-curve contact rows
     int freeDof = 0;      // Grubler-Kutzbach mobility before drives
     int residualDof = 0;  // mobility left over after rate drives
@@ -362,6 +396,7 @@ public:
     std::vector<Profile> profiles;    // M6: contact curves
     std::vector<TouchJoint> touches;  // M6: point-on-curve contacts
     std::vector<CamInfo> cams;        // M6b: synthesized plate cams
+    std::vector<PolarMesh> polarMeshes;   // M6d: non-circular gear pairs
 
     int nq() const { return 3 * (int)(bodies.size() - 1); }
 
