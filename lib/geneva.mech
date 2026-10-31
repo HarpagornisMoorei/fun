@@ -1,0 +1,98 @@
+// geneva — an external Geneva drive: a crank carrying a pin turns steadily, and each turn the pin
+// enters a slot of the wheel, turns it through 360/N degrees, leaves, and a locking disc on the crank
+// holds the wheel still until the next turn.
+//
+//   import "../lib/geneva.mech"
+//   world { gravity: 0  step: 0.0002 }
+//   ground bench { anchor o at (0, 0) }
+//   use geneva(N = 4) as gv on bench at (0, 0)
+//   drive gv.crank at 60 deg/s
+//
+// The wheel's shaft is at the instance origin and the crank's at (a, 0). At crank angle 0 the wheel is
+// locked, the pin pointing away from it; the pin enters a slot at 90 + 180/N degrees and the wheel
+// has turned a full step (clockwise, against the crank) by 270 - 180/N.
+//
+// Everything is ordinary contact (M6): the pin is a touch of the crank's anchor, with a roller, on the
+// wheel's slots (a polygon profile), and the locking is a touch of each slot-mouth corner of the wheel on
+// the crank's locking disc (a polygon with a notch). So it is unilateral: it has backlash (`clearance`),
+// the pin hits the slot with an impact if the clearance is nonzero, and an energy ledger. See docs/GENEVA.md.
+//
+// Parameters:
+//   N           slots (3 or more)
+//   a           centre distance, m. The pin's radius on the crank is a sin(pi/N), and the wheel's
+//               outer radius at the slots a cos(pi/N), both fixed by the geometry
+//   rho         pin and slot half-width, m (the pin's roller is rho - clearance)
+//   clearance   backlash per side, m. Zero is the ideal Geneva, but then the pin chatters between the walls
+//   lock_gap    gap between the locking disc and the wheel, m. A tight gap (below ~0.1 mm) makes the
+//               disc catch the wheel on its way in and out and the mechanism jams: the energy ledger
+//               shows it (and `mech check` warns if the disc starts inside the wheel)
+//   notch       half-width (degrees) of the notch in the locking disc around the pin's direction; the
+//               default, 90 - 180/N, is the half-angle of the engagement. Too narrow and the wheel's mouth
+//               corners hit the disc as they pass it
+//   facets      straight pieces in the locking disc's rim
+//   wheel_mass, wheel_inertia, crank_mass, crank_inertia
+// Ports: wheel, crank (bodies), slots, lock (profiles).
+part geneva(N = 4, a = 0.1, rho = 0.008, clearance = 0.0001, lock_gap = 0.0003, notch = 90 - 180 / N, facets = 90,
+            wheel_mass = 0.05, wheel_inertia = 0.0001, crank_mass = 0.05, crank_inertia = 0.0001) {
+  param r      = a * sin(pi / N)                     // pin radius on the crank
+  param Rt     = a * cos(pi / N)                     // wheel radius at the slot mouths
+  param floor  = a - r - rho - 0.004                 // slot depth: the pin never reaches the bottom
+  param delta  = atan(rho / Rt)                      // angle of a slot-mouth corner from the slot's axis
+  param Rtip   = sqrt(Rt * Rt + rho * rho)
+  // the locking disc is the circle through the two mouth corners that face the crank when the wheel is locked
+  param Rl     = sqrt(pow(a - Rtip * cos(pi / N - delta), 2) + pow(Rtip * sin(pi / N - delta), 2)) - lock_gap
+  param Rn     = 0.5 * (a - Rtip)                     // the notch's floor: well inside the closest approach of a mouth corner to the crank
+  param beta   = notch * pi / 180
+
+  ground frame {
+    anchor W at (0, 0)
+    anchor D at (a, 0)
+  }
+
+  body wheel {
+    anchor W at (0, 0)
+    for k = 0 to N - 1 {
+      anchor tipa[k] at (Rtip * cos(pi / N + 2 * pi * k / N - delta), Rtip * sin(pi / N + 2 * pi * k / N - delta))
+      anchor tipb[k] at (Rtip * cos(pi / N + 2 * pi * k / N + delta), Rtip * sin(pi / N + 2 * pi * k / N + delta))
+    }
+    mass: wheel_mass
+    inertia: wheel_inertia
+    from: 0 deg
+  }
+  pin wheel.W -> frame.W
+
+  profile slots on wheel.W {
+    polygon:
+      for k = 0 to N - 1 {
+        (Rt * cos(pi / N + 2 * pi * k / N) + rho * sin(pi / N + 2 * pi * k / N), Rt * sin(pi / N + 2 * pi * k / N) - rho * cos(pi / N + 2 * pi * k / N))
+        (floor * cos(pi / N + 2 * pi * k / N) + rho * sin(pi / N + 2 * pi * k / N), floor * sin(pi / N + 2 * pi * k / N) - rho * cos(pi / N + 2 * pi * k / N))
+        (floor * cos(pi / N + 2 * pi * k / N) - rho * sin(pi / N + 2 * pi * k / N), floor * sin(pi / N + 2 * pi * k / N) + rho * cos(pi / N + 2 * pi * k / N))
+        (Rt * cos(pi / N + 2 * pi * k / N) - rho * sin(pi / N + 2 * pi * k / N), Rt * sin(pi / N + 2 * pi * k / N) + rho * cos(pi / N + 2 * pi * k / N))
+      }
+    fillet 0.0003
+  }
+
+  body crank {
+    anchor D at (0, 0)
+    anchor P at (r, 0)
+    mass: crank_mass
+    inertia: crank_inertia
+  }
+  pin crank.D -> frame.D
+
+  profile lock on crank.D {
+    polygon:
+      for i = 0 to facets {
+        (Rl * cos(beta + (2 * pi - 2 * beta) * i / facets), Rl * sin(beta + (2 * pi - 2 * beta) * i / facets))
+      }
+      (Rn * cos(-beta), Rn * sin(-beta))
+      (Rn * cos(beta), Rn * sin(beta))
+    fillet 0.0003
+  }
+
+  touch crank.P on slots roller rho - clearance
+  for k = 0 to N - 1 {
+    touch wheel.tipa[k] on lock
+    touch wheel.tipb[k] on lock
+  }
+}

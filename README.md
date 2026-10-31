@@ -130,6 +130,13 @@ drive piston.guide force 500                    // ... or push with 500 N
 free `body` can say where its mass is (`com: (0.5, 0)`). Every example here is checked against a closed form (the
 yoke is exactly r cos θ; a bead in a rotating tube follows r₀ cosh ωt). See [`docs/JOINTS.md`](docs/JOINTS.md).
 
+## A Geneva drive
+
+`lib/geneva.mech` is a complete external Geneva drive made of ordinary unilateral contacts: a pin entering the slots of an N-slot
+wheel, and a locking disc that holds it between turns. `use geneva(N = 4) as gv`, drive `gv.crank`, and the wheel advances
+`360/N` degrees per turn, exactly the closed form `atan2(r sin c, a + r cos c) − π/N` while the pin is in the slot. See
+[`docs/GENEVA.md`](docs/GENEVA.md).
+
 ## Rack and pinion, belts and chains
 
 ```
@@ -204,6 +211,7 @@ See [`docs/LIB.md`](docs/LIB.md); `import` and rotation are in [`docs/PARTS.md`]
 | `ellipgears` | a pair of elliptical gears: input steady, output surging between 3x and 1/3x |
 | `jumpcam` | the plate cam with mass, a spring and a contact that can let go — cam jump, impacts, energy ledger |
 | `scotchyoke`, `quickreturn`, `boom`, `slidingbead` | slots and slides on moving bodies: a Scotch yoke (x = r cos θ), a quick-return lever (ratio 2), a hydraulic boom driven by a linear actuator, a bead flung out along a rotating tube (r₀ cosh ωt) |
+| `geneva` | an external Geneva drive from `lib/geneva.mech`: the wheel steps 90° per crank turn and is locked in between; closed-form wheel angle while the pin is in the slot |
 | `rackpinion`, `rollingwheel`, `beltdrive` | a pinion driving a rack (x = r θ); a disc rolling down a toothed slope (a = g sin α / (1 + I/mr²)); a belt over three pulleys, one crossed |
 | `camstar` | n library cams on a hub from one `for` loop, each turned with `rotate` so its follower pushes radially outward |
 | `camshaft` | two library cams geared 2:1 from outside the parts, `import`ed from `lib/` |
@@ -221,5 +229,5 @@ gears); M6a through M6f (profiles, cam synthesis, unilateral contact,
 non-circular gears, polygons and a ratchet, friction) are implemented, as are
 parameters and sweeps ([`docs/PARAMS.md`](docs/PARAMS.md)) reusable parts
 ([`docs/PARTS.md`](docs/PARTS.md)), a library of standard ones ([`docs/LIB.md`](docs/LIB.md)) and prismatic joints, slots and linear
-drives ([`docs/JOINTS.md`](docs/JOINTS.md)), and a rack and pinion with belts ([`docs/RACKBELT.md`](docs/RACKBELT.md)). `scripts/` holds offscreen-rendering harnesses for
+drives ([`docs/JOINTS.md`](docs/JOINTS.md)), a rack and pinion with belts ([`docs/RACKBELT.md`](docs/RACKBELT.md)), and the Geneva drive ([`docs/GENEVA.md`](docs/GENEVA.md)). `scripts/` holds offscreen-rendering harnesses for
 screenshots without a display.

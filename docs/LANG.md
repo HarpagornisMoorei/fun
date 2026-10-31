@@ -1431,6 +1431,10 @@ M9 added reusable parts: `part` with parameters and `use ... as name on ground a
 (see `docs/PARTS.md`), expanded at parse time so the solver, dynamics and tooling are
 unchanged, and an instanced file runs bit for bit like the flat one.
 
+M17 added the Geneva drive as a library part (`lib/geneva.mech`, `docs/GENEVA.md`): intermittent motion from nine unilateral
+contacts, with a warning when a dynamic contact starts inside its curve and a mobility count that no longer counts unilateral
+contacts as constraints.
+
 M16 added the rack and pinion (`mesh P on B.A`) and belts (`belt N a -> b -> c [reverse c]`), each a rolling row of
 the kind a gear mesh already is, drawn from the shared scene in SVG and the viewer (`docs/RACKBELT.md`).
 

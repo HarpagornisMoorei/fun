@@ -1,0 +1,21 @@
+// geneva — an external Geneva drive from lib/geneva.mech: the crank turns at 60 deg/s, and once a turn its pin
+// carries the four-slot wheel through exactly a quarter turn (clockwise, against the crank) and a locking disc
+// holds it still for the rest.
+//
+//   mech run examples/geneva.mech --headless 10 --csv geneva.csv
+//   mech render examples/geneva.mech --frames 48 --span 6 -o geneva.svg
+//
+// While the pin is in the slot the wheel's angle is the pin's, to within the backlash:
+//   phi(t) = atan2(r sin(th), a + r cos(th)) - pi/N + asin(clearance / |wheel centre - pin|)
+// with th the crank angle from the point where the pin is nearest the wheel's shaft. Try `--set clearance=0.0004`
+// to see more backlash, and `--set N=6` for six slots.
+import "../lib/geneva.mech"
+
+mechanism genevadrive {
+  world { gravity: 0  step: 0.0002 }
+
+  ground bench { anchor o at (0, 0) }
+  use geneva() as gv on bench at (0, 0)
+
+  drive gv.crank at 60 deg/s
+}

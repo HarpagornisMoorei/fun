@@ -224,8 +224,9 @@ oscillates about the jam instead of settling, and the right assertion is the
 wheel's own equation of motion (impulse-momentum, to 0.01%) rather than "at
 rest"; (3) a pawl spring strong enough to matter *stalls* the forward direction
 (its normal force on the ramp cancels the drive torque), which is correct physics.
-The Geneva drive remains open: it needs two-sided slot contact and a locking arc
-(curve-against-curve contact, not point-on-curve).
+The Geneva drive was left open here; it needed no new joint after all (M17, `docs/GENEVA.md`): the
+pin is a roller touching the slot walls, and the locking arc is the wheel's slot-mouth corners touching
+a notched disc.
 
 **6f: friction.** `touch ... friction mu` is regularized Coulomb: `F_t = mu N
 tanh(s/eps)` through the slip Jacobian, with `N` iterated against the same solve. The

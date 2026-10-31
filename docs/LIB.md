@@ -93,3 +93,15 @@ A library file is a `.mech` file with parts and nothing else (it may import othe
 the formula that tells you the part is right in the header comment, and a test for it next to
 the others.
 
+
+## `geneva.mech`
+
+An external Geneva drive (M17, `docs/GENEVA.md`): a crank with a pin and a locking disc, and an N-slot wheel, built from
+unilateral contacts. Parameters: `N` (4), `a` (0.1, the centre distance), `rho` (0.008, pin radius), `clearance` (0.0001,
+side backlash), `lock_gap` (0.0003), `notch` (90 − 180/N degrees), `facets`, and masses and inertias. Ports: `wheel`,
+`crank`, `slots`, `lock`. The wheel's shaft is at the instance origin, the crank's at `(a, 0)`; at crank angle 0 the wheel is
+locked. A dynamic part: the mechanism supplies the `world` and the crank's drive.
+
+Checked against the closed form of the wheel's angle while the pin is in the slot (leading wall, then trailing wall after the
+backlash transit), for N = 3, 4 and 6, with the wheel still until the pin comes in, a full step `−360/N` per turn, and the
+energy ledger closing.

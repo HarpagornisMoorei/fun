@@ -146,7 +146,8 @@ DofReport Model::dofReport() const {
     // constraints. A mode's active holds are rate-0 drive rows: they remove
     // one DOF each while engaged (the report shows the initial states).
     const int j = r.nPins + r.nSlides;
-    r.freeDof = 3 * (r.nBodies - 1) - 2 * j - r.nSlots - r.nMeshes - r.nTangentMeshes - r.nTouches -
+    // a unilateral contact (dynamic mechanism) is an inequality that may or may not hold: it is not a constraint of the count
+    r.freeDof = 3 * (r.nBodies - 1) - 2 * j - r.nSlots - r.nMeshes - r.nTangentMeshes - (world.dynamic ? 0 : r.nTouches) -
                  r.nPolarMeshes - r.nRacks - r.nTangentRacks - r.nBeltRows;
     r.residualDof = r.freeDof - r.nDrives - r.nLinearRate;     // a slot removes one DOF, a linear rate drive one
     return r;
@@ -416,6 +417,23 @@ std::vector<std::string> Model::assemble(std::vector<double>& q) const {
     for (const TouchJoint& tj : touches) {
         tj.engaged = !world.dynamic ||
                      std::fabs(touchState(tj, q).gap - tj.roller) <= 1e-6;
+    }
+    // A contact that starts inside its curve is not a contact that starts in flight: nothing pushes the
+    // point out, and the first impact would be a violent one (a locking disc a little too large, a pin
+    // wider than its slot). Say so.
+    if (world.dynamic) {
+        for (const TouchJoint& tj : touches) {
+            const double pen = tj.roller - (touchState(tj, q).gap);
+            if (pen > 1e-5) {
+                char buf[360];
+                std::snprintf(buf, sizeof buf,
+                    "touch '%s.%s' on profile '%s' starts %.3g mm inside the curve (the point should be outside it, "
+                    "or on it) — the first impact will be violent; check the dimensions",
+                    bodies[(size_t)tj.body].name.c_str(), bodies[(size_t)tj.body].anchors[(size_t)tj.anchor].name.c_str(),
+                    profiles[(size_t)tj.profile].name.c_str(), 1000.0 * pen);
+                warnings.push_back(buf);
+            }
+        }
     }
 
     // M4: dials without an explicit center/radius capture them from the
