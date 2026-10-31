@@ -21,8 +21,8 @@ std::string touchLabel(const Model& m, const TouchJoint& tj) {
 
 } // namespace
 
-Recorder::Recorder(const Model& m, const DynamicsSystem* dyn, std::vector<Probe> probes)
-    : m_(m), dyn_(dyn), probes_(std::move(probes)) {
+Recorder::Recorder(const Model& m, const DynamicsSystem* dyn, std::vector<Probe> probes, bool forces)
+    : m_(m), dyn_(dyn), probes_(std::move(probes)), forces_(forces && dyn != nullptr) {
     cols_.push_back("t[s]");
     for (size_t bi = 1; bi < m.bodies.size(); ++bi) {
         const std::string& n = m.bodies[bi].name;
@@ -67,6 +67,17 @@ Recorder::Recorder(const Model& m, const DynamicsSystem* dyn, std::vector<Probe>
         for (const Belt& b : m.belts)                       // M16: the force carried across each link of a belt
             for (size_t i = 0; i + 1 < b.gears.size(); ++i)
                 cols_.push_back(b.name + ".link" + std::to_string(i + 1) + "[N]");
+        if (forces_) {
+            for (const PinJoint& p : m.pins)
+                cols_.push_back(m.bodies[(size_t)p.bodyA].name + "." + m.bodies[(size_t)p.bodyA].anchors[(size_t)p.anchA].name + "-" +
+                                m.bodies[(size_t)p.bodyB].name + "." + m.bodies[(size_t)p.bodyB].anchors[(size_t)p.anchB].name + ".pin[N]");
+            for (const SlideJoint& s : m.slides) {
+                cols_.push_back(slideLabel(m, s) + ".normal[N]");
+                if (s.lockDir) cols_.push_back(slideLabel(m, s) + ".moment[N*m]");
+            }
+            for (size_t si = 0; si < m.springs.size(); ++si)
+                cols_.push_back((m.springs[si].name.empty() ? "spring" + std::to_string(si + 1) : m.springs[si].name) + ".spring[N]");
+        }
         cols_.push_back("KE[J]");
         cols_.push_back("PE[J]");
         cols_.push_back("E[J]");
@@ -127,6 +138,34 @@ std::vector<double> Recorder::sample(double t, const std::vector<double>& q,
             r.push_back(m_.linDrives[li].isForce ? m_.linDrives[li].force : dyn_->linearReactions()[li]);
         for (size_t k = 0; k < m_.racks.size(); ++k) r.push_back(dyn_->rackForces()[k]);
         for (double f : dyn_->beltForces()) r.push_back(f);
+        if (forces_) {
+            const std::vector<double>& lam = dyn_->lambdas();
+            size_t row = 0;
+            auto at = [&](size_t i) { return i < lam.size() ? lam[i] : 0.0; };
+            for (size_t pi = 0; pi < m_.pins.size(); ++pi) {            // the pin's two rows are the force on its first body
+                r.push_back(std::hypot(at(row), at(row + 1)));
+                row += 2;
+            }
+            for (const SlideJoint& s : m_.slides) {
+                r.push_back(std::fabs(at(row++)));
+                if (s.lockDir) r.push_back(std::fabs(at(row++)));
+            }
+            auto vel = [&](int bi, int ai) -> Vec2 {                    // velocity of an anchor
+                const Body& b = m_.bodies[(size_t)bi];
+                if (b.qOffset < 0) return {0.0, 0.0};
+                const Vec2 rr = rotate(b.anchors[(size_t)ai].local, q[(size_t)b.qOffset]);
+                const double w = qd[(size_t)b.qOffset];
+                return {qd[(size_t)b.qOffset + 1] - w * rr.y, qd[(size_t)b.qOffset + 2] + w * rr.x};
+            };
+            for (const SpringJoint& sp : m_.springs) {
+                const Vec2 pa = m_.worldAnchor(sp.bodyA, sp.anchA, q), pb = m_.worldAnchor(sp.bodyB, sp.anchB, q);
+                const Vec2 d = pb - pa;
+                const double L = vlen(d);
+                double tension = 0.0;
+                if (L > 1e-9) tension = sp.k * (L - sp.rest) + sp.damp * dot(vel(sp.bodyB, sp.anchB) - vel(sp.bodyA, sp.anchA), (1.0 / L) * d);
+                r.push_back(std::fabs(tension));
+            }
+        }
         const double KE = dyn_->kinetic(q, qd), PE = dyn_->potential(q);
         const HybridStats& hs = dyn_->hybridStats();
         r.push_back(KE);

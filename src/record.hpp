@@ -16,6 +16,9 @@
 //   <body>.omega[rad/s] .vx[m/s] .vy[m/s]   velocities
 //   <body>.<anchor>@<profile>.N[N] .engaged contact force; 1 while on the curve
 //   drive.<body>[N*m]                       reaction torque of each rate drive
+//   with `forces`: <A>.<a>-<B>.<b>.pin[N]     size of the force a pin carries
+//                  <guide>.normal[N] .moment[N*m]   what a slide (or slot: normal only) carries across its rail
+//                  <spring>.spring[N]         tension of each spring
 //   KE[J] PE[J] E[J]
 //   ledger.weight[J] .impulse[J] .drive[J] .impact[J] .friction[J]
 //   ledger.residual[J]    (E - E0) - (weight + impulse + drive - impact - friction)
@@ -36,7 +39,8 @@ struct Probe {
 class Recorder {
 public:
     // `dyn` is null for a kinematic run.
-    Recorder(const Model& m, const DynamicsSystem* dyn, std::vector<Probe> probes);
+    // `forces` (dynamic runs): also record the load on every joint (see below); off by default, the columns are many.
+    Recorder(const Model& m, const DynamicsSystem* dyn, std::vector<Probe> probes, bool forces = false);
 
     // Mechanical energy at the start of the run; the ledger residual is measured from it.
     void setBaseline(double E0) { E0_ = E0; }
@@ -55,6 +59,7 @@ private:
     const DynamicsSystem* dyn_;
     std::vector<Probe> probes_;
     std::vector<std::string> cols_;
+    bool forces_ = false;
     double E0_ = 0.0;
 };
 

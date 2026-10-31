@@ -1439,6 +1439,8 @@ M9 added reusable parts: `part` with parameters and `use ... as name on ground a
 (see `docs/PARTS.md`), expanded at parse time so the solver, dynamics and tooling are
 unchanged, and an instanced file runs bit for bit like the flat one.
 
+M20 added `mech report` (`docs/REPORT.md`): the constraint multipliers, reduced to peak, RMS and mean per drive and joint.
+
 M19 added conditions (`<  >  <=  >=  ==  !=  &&  ||  !`, as 1 and 0), `if(c, a, b)`, `if cond { } else if cond { } else { }`
 as a statement and inside anchor and polygon lists, and `require COND "message"` (see `docs/PARAMS.md`); `lib/geneva.mech` uses
 `require` to refuse the parameters it knows jam.

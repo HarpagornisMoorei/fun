@@ -20,6 +20,7 @@
 #include "loader.hpp"
 #include "parser.hpp"
 #include "render.hpp"
+#include "report.hpp"
 #include "viewer.hpp"
 #include "../tests/tests.hpp"
 
@@ -151,6 +152,9 @@ void printHelp() {
         "  --trace <b.a>       draw the path of body b's anchor a (coupler curve)\n"
         "  --speed <x>         initial speed multiplier (default 1)\n"
         "  --paused            start paused\n"
+        "\n"
+        "report options (what the mechanism has to carry: drive torque and power, joint loads):\n"
+        "  mech report <file.mech> [--time s] [--set name=value] [--top n] [--csv file]\n"
         "\n"
         "sweep options:\n"
         "  --set <name=a:b:step | name=v1,v2,... | name=v>   (repeatable: a grid)\n"
@@ -839,6 +843,47 @@ int cmdRender(const std::string& path, const RenderOptions& opt, const ParamOver
     return 0;
 }
 
+// mech report FILE [--time s] [--set name=v ...] [--top n] [--csv file]: what the mechanism has to carry
+int cmdReport(const std::string& path, double seconds, const ParamOverrides& ov, int top, const std::string& csvPath) {
+    const Program prog = loadAndParse(path, ov);
+    const Model m = buildOrThrow(path, prog.mechanisms[0]);
+    const Report r = buildReport(m, seconds);
+    if (!r.ok) throw ToolError{path, 0, 0, r.error};
+    std::printf("report of '%s': %g s of a dynamic run (h = %g ms)\n", m.name.c_str(), seconds, 1000.0 * m.world.step);
+    std::printf("loads are the constraint multipliers: rigid bodies and ideal joints, so they are what the joints must supply\n");
+    const char* groups[] = {"drive", "joint", "slide", "spring", "contact", "rack", "belt"};
+    const char* titles[] = {"drives (size the motor: peak torque, RMS torque for the continuous rating, peak speed, power)",
+                            "pins (size the bearings: peak and RMS radial load)", "slides and slots (side load and moment on the guide)",
+                            "springs (tension)", "contacts (normal force)", "racks (tooth force)", "belts (force carried by each link)"};
+    for (size_t g = 0; g < 7; ++g) {
+        std::vector<const ReportRow*> rows;
+        for (const ReportRow& row : r.rows) if (row.group == groups[g]) rows.push_back(&row);
+        if (rows.empty()) continue;
+        std::printf("\n%s\n", titles[g]);
+        std::printf("  %-28s %-22s %11s %11s %11s %9s\n", "", "", "peak", "RMS", "mean", "peak at");
+        int shown = 0;
+        for (const ReportRow* row : rows) {
+            if (std::string(groups[g]) != "drive" && top > 0 && shown >= top * (std::string(groups[g]) == "slide" ? 2 : 1)) break;
+            const std::string q = row->quantity + " [" + row->unit + "]";
+            std::printf("  %-28s %-22s %11.4g %11.4g %11.4g %7.3f s\n", row->name.c_str(), q.c_str(), row->peak, row->rms, row->mean, row->peakAt);
+            ++shown;
+        }
+        if (top > 0 && std::string(groups[g]) != "drive" && (int)rows.size() > shown)
+            std::printf("  ... and %zu more (--top 0 shows all)\n", rows.size() - (size_t)shown);
+    }
+    if (!csvPath.empty()) {
+        std::FILE* f = std::fopen(csvPath.c_str(), "w");
+        if (!f) throw ToolError{path, 0, 0, "cannot write " + csvPath};
+        std::fprintf(f, "group,name,quantity,unit,peak,peak_at_s,rms,mean\n");
+        for (const ReportRow& row : r.rows)
+            std::fprintf(f, "%s,%s,%s,%s,%.12g,%.12g,%.12g,%.12g\n", row.group.c_str(), row.name.c_str(), row.quantity.c_str(),
+                         row.unit.c_str(), row.peak, row.peakAt, row.rms, row.mean);
+        std::fclose(f);
+        std::printf("\nwrote %s\n", csvPath.c_str());
+    }
+    return 0;
+}
+
 int cmdSweep(const std::string& path, const std::vector<std::string>& setSpecs, const SweepOptions& opt,
              const std::string& csvPath) {
     const std::string src = readFile(path);
@@ -959,6 +1004,24 @@ int main(int argc, char** argv) {
             if (ro.frames < 1 || ro.frames > 600) { std::fprintf(stderr, "--frames must be between 1 and 600\n"); return 1; }
             if (ro.frames > 1 && !(ro.span > 0.0)) { std::fprintf(stderr, "an animation needs --span <sec>\n"); return 1; }
             return cmdRender(argv[2], ro, set, outPath);
+        }
+        if (cmd == "report") {
+            if (argc < 3) { std::fprintf(stderr, "usage: mech report <file.mech> [--time s] [--set name=value ...] [--top n] [--csv file]\n"); return 1; }
+            ParamOverrides ov;
+            double seconds = 2.0;
+            int top = 8;
+            std::string csvPath;
+            for (int i = 3; i < argc; ++i) {
+                const std::string a = argv[i];
+                std::string err;
+                if (a == "--set" && i + 1 < argc) { if (!parseSetArg(argv[++i], ov, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; } }
+                else if (a == "--time" && i + 1 < argc) seconds = std::atof(argv[++i]);
+                else if (a == "--top" && i + 1 < argc) top = std::atoi(argv[++i]);
+                else if (a == "--csv" && i + 1 < argc) csvPath = argv[++i];
+                else { std::fprintf(stderr, "unknown option '%s'\n", a.c_str()); return 1; }
+            }
+            if (!(seconds > 0.0)) { std::fprintf(stderr, "--time must be positive\n"); return 1; }
+            return cmdReport(argv[2], seconds, ov, top, csvPath);
         }
         if (cmd == "sweep") {
             if (argc < 3) {

@@ -535,6 +535,8 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
         }
     }
 
+    lastLambda_.assign(lam.begin(), lam.end());
+
     // M16: rack tangential force (the rolling row's multiplier, N) and belt link forces
     lastRackForce_.assign(m.racks.size(), 0.0);
     for (size_t k = 0; k < m.racks.size(); ++k)

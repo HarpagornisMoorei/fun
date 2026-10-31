@@ -130,6 +130,13 @@ drive piston.guide force 500                    // ... or push with 500 N
 free `body` can say where its mass is (`com: (0.5, 0)`). Every example here is checked against a closed form (the
 yoke is exactly r cos θ; a bead in a rotating tube follows r₀ cosh ωt). See [`docs/JOINTS.md`](docs/JOINTS.md).
 
+## Sizing: what a design has to carry
+
+`mech report FILE --time T` runs a dynamic mechanism and tabulates the peak, RMS and mean of every load: each drive's torque, speed
+and power (the motor's peak and continuous rating), each pin's radial force (the bearing's load), each slide's side load and
+moment, springs, contacts, racks and belts. The numbers are the solver's constraint multipliers, checked against closed
+forms (a bead in a spinning tube, an offset mass under gravity). `--csv` writes them. See [`docs/REPORT.md`](docs/REPORT.md).
+
 ## Speed
 
 `mech sweep` runs its rows on all cores (`--jobs N` to choose), and large or contact-heavy mechanisms run several times
@@ -234,5 +241,5 @@ gears); M6a through M6f (profiles, cam synthesis, unilateral contact,
 non-circular gears, polygons and a ratchet, friction) are implemented, as are
 parameters and sweeps ([`docs/PARAMS.md`](docs/PARAMS.md)) reusable parts
 ([`docs/PARTS.md`](docs/PARTS.md)), a library of standard ones ([`docs/LIB.md`](docs/LIB.md)) and prismatic joints, slots and linear
-drives ([`docs/JOINTS.md`](docs/JOINTS.md)), a rack and pinion with belts ([`docs/RACKBELT.md`](docs/RACKBELT.md)), and the Geneva drive ([`docs/GENEVA.md`](docs/GENEVA.md)). `scripts/` holds offscreen-rendering harnesses for
+drives ([`docs/JOINTS.md`](docs/JOINTS.md)), a rack and pinion with belts ([`docs/RACKBELT.md`](docs/RACKBELT.md)), the Geneva drive ([`docs/GENEVA.md`](docs/GENEVA.md)) and load reports ([`docs/REPORT.md`](docs/REPORT.md)). `scripts/` holds offscreen-rendering harnesses for
 screenshots without a display.

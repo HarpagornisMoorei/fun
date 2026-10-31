@@ -14,7 +14,7 @@
 namespace mech {
 
 SimSeries simulate(const Model& m, double seconds, double dt, const std::vector<Probe>& probes,
-                   long every) {
+                   long every, bool forces) {
     SimSeries out;
     out.dynamic = m.world.dynamic;
     std::vector<double> q;
@@ -49,7 +49,7 @@ SimSeries simulate(const Model& m, double seconds, double dt, const std::vector<
     std::vector<double> qd((size_t)m.nq(), 0.0);
     dyn.projectVelocities(q, qd);
     const double E0 = dyn.kinetic(q, qd) + dyn.potential(q);
-    Recorder rec(m, &dyn, probes);
+    Recorder rec(m, &dyn, probes, forces);
     rec.setBaseline(E0);
     out.columns = rec.columns();
     out.rows.push_back(rec.sample(0.0, q, qd, sys.maxResidual(q, 0.0)));

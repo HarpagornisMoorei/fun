@@ -8,6 +8,7 @@
 #include "../src/lexer.hpp"
 #include "../src/loader.hpp"
 #include "../src/linalg.hpp"
+#include "../src/report.hpp"
 #include "../src/model.hpp"
 #include "../src/parser.hpp"
 #include "../src/profile.hpp"
@@ -9340,6 +9341,135 @@ mechanism m { ground bench { anchor o at (0, 0) } use spoked(n = N) as w on benc
     }
 }
 
+// ============================================================================
+// M20 — `mech report`: what a mechanism has to carry. The loads are the constraint multipliers, so each has a
+// closed form:
+//   * a bead in a tube turned at constant w: the side force is the Coriolis force 2 m r' w = 2 m r0 w^2 sinh(w t) and the
+//     drive's torque is d/dt (m r^2 w) = 2 m r r' w = 2 m r0^2 w^2 cosh(w t) sinh(w t)
+//   * a mass m at distance d from its pin, turned at constant w in gravity: the drive torque is m g d cos(theta)
+//     (peak m g d, RMS m g d / sqrt 2, mean power 0, peak power w m g d), and the pin's force is m |g up - w^2 d r_hat|:
+//     peak m (w^2 d + g), RMS m sqrt(w^4 d^2 + g^2)
+//   * at rest: a hanging mass loads its pin with m g, a block on a rail loads the rail with m g, a stretched spring
+//     has the tension k x, and one that oscillates has RMS k x0 / sqrt 2
+// ============================================================================
+
+void testReport() {
+    std::printf("[report M20]\n");
+    auto find = [](const Report& r, const char* group, const char* name, const char* quantity) -> const ReportRow* {
+        for (const ReportRow& row : r.rows)
+            if (row.group == group && row.name == name && row.quantity == quantity) return &row;
+        return nullptr;
+    };
+    // ---- the columns are opt-in: a plain run's CSV is what it was
+    {
+        const Model m = modelFromFile("examples/slidingbead.mech");
+        const SimSeries plain = simulate(m, 0.05, 1.0 / 60.0, {}, 1), loaded = simulate(m, 0.05, 1.0 / 60.0, {}, 1, true);
+        bool anyPlain = false, pin = false, normal = false, moment = false;
+        for (const std::string& c : plain.columns) if (c.find(".pin[") != std::string::npos || c.find(".normal[N]") != std::string::npos) anyPlain = true;
+        for (const std::string& c : loaded.columns) {
+            if (c == "tube.A-frame.pivot.pin[N]") pin = true;
+            if (c == "bead.g.normal[N]") normal = true;
+            if (c == "bead.g.moment[N*m]") moment = true;
+        }
+        CHECK(!anyPlain && pin && normal && moment);
+        CHECK(loaded.columns.size() == plain.columns.size() + 3);
+        // a kinematic mechanism has nothing to carry
+        const Report k = buildReport(modelFromFile("examples/fourbar.mech"), 1.0);
+        CHECK(!k.ok && k.error.find("dynamic") != std::string::npos);
+    }
+    // ---- a bead in a rotating tube
+    {
+        const Model m = modelFromFile("examples/slidingbead.mech");
+        const double w = deg2rad(120.0), r0 = 0.1, mb = 0.1, T = 1.0;
+        const Report r = buildReport(m, T);
+        CHECK(r.ok);
+        const ReportRow* side = find(r, "slide", "bead.g", "side force");
+        const ReportRow* torque = find(r, "drive", "tube", "torque");
+        const ReportRow* speed = find(r, "drive", "tube", "speed");
+        const ReportRow* mom = find(r, "slide", "bead.g", "moment");
+        CHECK(side && torque && speed && mom);
+        if (side && torque && speed && mom) {
+            CHECK_APPROX(side->peak, 2.0 * mb * r0 * w * w * std::sinh(w * T), 2e-3 * side->peak);
+            CHECK_APPROX(torque->peak, 2.0 * mb * r0 * r0 * w * w * std::cosh(w * T) * std::sinh(w * T), 2e-3 * torque->peak);
+            CHECK_APPROX(side->peakAt, T, 0.01);
+            CHECK_APPROX(speed->peak, w, 1e-9);
+            CHECK(mom->peak < 1e-9);                                  // the bead's mass is on its guide point: no moment
+            // RMS of the side force over [0, T]: 2 m r0 w^2 sqrt( (sinh 2wT / (4 w T)) - 1/2 )
+            const double rms = 2.0 * mb * r0 * w * w * std::sqrt(std::sinh(2.0 * w * T) / (4.0 * w * T) - 0.5);
+            CHECK_APPROX(side->rms, rms, 3e-3 * rms);
+        }
+    }
+    // ---- an offset mass turned at constant speed in gravity: closed forms over one whole turn
+    {
+        const double mass = 2.0, d = 0.3, g = 9.81, w = kPi / 3.0;
+        const std::string src = "mechanism arm { world { gravity: 9.81 step: 0.002 } ground frame { anchor p at (0, 0) } "
+            "body b { anchor A at (0, 0) mass: 2 com: (0.3, 0) inertia: 0.05 } pin b.A -> frame.p drive b at 60 deg/s from 0 deg }";
+        const Report r = buildReport(buildFromText(src.c_str()), 6.0);
+        CHECK(r.ok);
+        const ReportRow* tq = find(r, "drive", "b", "torque");
+        const ReportRow* pw = find(r, "drive", "b", "power");
+        const ReportRow* pin = find(r, "joint", "b.A-frame.p", "force");
+        CHECK(tq && pw && pin);
+        if (tq && pw && pin) {
+            const double mgd = mass * g * d;
+            CHECK_APPROX(tq->peak, mgd, 2e-3 * mgd);
+            CHECK_APPROX(tq->rms, mgd / std::sqrt(2.0), 2e-3 * mgd);
+            CHECK(std::fabs(tq->mean) < 2e-3 * mgd);                  // up and down: no net torque over a turn
+            CHECK_APPROX(pw->peak, w * mgd, 2e-3 * w * mgd);
+            CHECK(std::fabs(pw->mean) < 2e-3 * w * mgd);              // and no net power
+            CHECK_APPROX(pin->peak, mass * (w * w * d + g), 2e-3 * pin->peak);
+            CHECK_APPROX(pin->rms, mass * std::sqrt(std::pow(w * w * d, 2) + g * g), 2e-3 * pin->rms);
+        }
+    }
+    // ---- at rest: a hanging mass, a block on a rail, a spring
+    {
+        const std::string hang = "mechanism hang { world { gravity: 9.81 step: 0.002 } ground frame { anchor p at (0, 0) } "
+            "body b { anchor A at (0, 0) mass: 3 com: (0.4, 0) inertia: 0.05 from: -90 deg } pin b.A -> frame.p }";
+        const Report r = buildReport(buildFromText(hang.c_str()), 0.5);
+        const ReportRow* pin = find(r, "joint", "b.A-frame.p", "force");
+        CHECK(pin != nullptr);
+        if (pin) { CHECK_APPROX(pin->peak, 3.0 * 9.81, 1e-6); CHECK_APPROX(pin->rms, 3.0 * 9.81, 1e-6); }
+
+        const std::string block = "mechanism blk { world { gravity: 9.81 step: 0.002 } ground frame { anchor rail at (0, 0) dir (1, 0) } "
+            "body b { anchor g at (0, 0) dir (1, 0) mass: 4 } slide b.g -> frame.rail }";
+        const Report rb = buildReport(buildFromText(block.c_str()), 0.3);
+        const ReportRow* nrm = find(rb, "slide", "b.g", "side force");
+        const ReportRow* mm = find(rb, "slide", "b.g", "moment");
+        CHECK(nrm && mm);
+        if (nrm && mm) { CHECK_APPROX(nrm->peak, 4.0 * 9.81, 1e-6); CHECK(mm->peak < 1e-9); }
+
+        // a mass on a spring: stretched by x0 and let go, five whole periods; k = 100 N/m, m = 1 kg
+        const double k = 100.0, x0 = 0.05, period = 2.0 * kPi / std::sqrt(k / 1.0);
+        const std::string spr = "mechanism spr { world { gravity: 0 step: 0.001 } ground frame { anchor rail at (0.35, 0) dir (1, 0) anchor wall at (0, 0) } "
+            "body b { anchor g at (0, 0) dir (1, 0) mass: 1 } slide b.g -> frame.rail spring s frame.wall -> b.g { k: 100 rest: 0.3 } }";
+        const Report rs = buildReport(buildFromText(spr.c_str()), 5.0 * period);
+        const ReportRow* sp = find(rs, "spring", "s", "tension");
+        CHECK(sp != nullptr);
+        if (sp) {
+            CHECK_APPROX(sp->peak, k * x0, 2e-3 * k * x0);
+            CHECK_APPROX(sp->rms, k * x0 / std::sqrt(2.0), 3e-3 * k * x0);
+            CHECK_APPROX(sp->peakAt, 0.0, period / 2.0 + 1e-9);          // at t = 0, or a half period later at the other extreme
+        }
+    }
+    // ---- the command line
+    {
+        TempDir td;
+        const std::string csv = td.dir + "/r.csv", log = td.dir + "/log.txt";
+        auto run = [&](const std::string& args) { return std::system(("./mech report " + args + " > " + log + " 2>&1").c_str()); };
+        CHECK(run("examples/slidingbead.mech --time 1 --csv " + csv) == 0);
+        const std::string out = readFile(log.c_str()), file = readFile(csv.c_str());
+        CHECK(out.find("drives (size the motor") != std::string::npos && out.find("tube.A-frame.pivot") != std::string::npos);
+        CHECK(file.compare(0, 53, "group,name,quantity,unit,peak,peak_at_s,rms,mean\ndrive") == 0 || file.find("group,name,quantity") == 0);
+        CHECK(file.find("slide,bead.g,side force,N,") != std::string::npos);
+        CHECK(run("examples/fourbar.mech") != 0 && readFile(log.c_str()).find("needs a dynamic mechanism") != std::string::npos);
+        CHECK(run("examples/slidingbead.mech --time 0") != 0);
+        CHECK(run("examples/slidingbead.mech --bogus") != 0);
+        CHECK(run("nofile.mech") != 0);
+        CHECK(run("examples/slidingbead.mech --set nothing=1") != 0);
+        CHECK(run("examples/geneva.mech --time 0.5 --top 1") == 0 && readFile(log.c_str()).find("more (--top 0 shows all)") != std::string::npos);
+    }
+}
+
 int runAllTests() {
     testLexer();
     testParser();
@@ -9383,6 +9513,7 @@ int runAllTests() {
     testGeneva();
     testSpeed();
     testConditionals();
+    testReport();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

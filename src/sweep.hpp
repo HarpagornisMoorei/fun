@@ -30,7 +30,7 @@ struct SimSeries {
 // Assemble and run a model: a kinematic file for `seconds` at `dt` per frame, a dynamic
 // one at its world step. Records every `every`-th step (the t = 0 row always).
 SimSeries simulate(const Model& m, double seconds, double dt, const std::vector<Probe>& probes,
-                   long every = 1);
+                   long every = 1, bool forces = false);
 
 // What to measure from a series. `spec` is one of
 //   max:<col> min:<col> mean:<col> final:<col>   a recorded column (the [unit] may be omitted)
