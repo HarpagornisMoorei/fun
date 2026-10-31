@@ -394,13 +394,22 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
             BJ[j][o + 2] = wv[2];
         }
     }
+    // The columns each row touches: a joint row involves two bodies, so a row has a handful of nonzeros however
+    // large the mechanism is. The sums below visit only those, in the same order and so with the same rounding
+    // as a sum over every column (the terms left out are exact zeros).
+    std::vector<std::vector<int>> nzJ((size_t)rows), nzB((size_t)rows);
+    for (int j = 0; j < rows; ++j) {
+        const double* Jj = &J[(size_t)j * nq];
+        for (int cix = 0; cix < nq; ++cix) if (Jj[cix] != 0.0) nzJ[(size_t)j].push_back(cix);
+        for (int cix = 0; cix < nq; ++cix) if (BJ[j][cix] != 0.0 || Jj[cix] != 0.0) nzB[(size_t)j].push_back(cix);
+    }
     // A = J W J^T (it does not depend on the forces)
     std::vector<double> A((size_t)rows * rows, 0.0);
     for (int j = 0; j < rows; ++j) {
         const double* Jj = &J[(size_t)j * nq];
         for (int k = j; k < rows; ++k) {
             double s = 0.0;
-            for (int cix = 0; cix < nq; ++cix) s += Jj[cix] * BJ[k][cix];
+            for (int cix : nzJ[(size_t)j]) s += Jj[cix] * BJ[k][cix];
             A[(size_t)j * rows + k] = s;
             A[(size_t)k * rows + j] = s;
         }
@@ -422,7 +431,7 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
         for (int j = 0; j < rows; ++j) {
             const double* Jj = &J[(size_t)j * nq];
             double s = 0.0;
-            for (int cix = 0; cix < nq; ++cix) s += Jj[cix] * z[cix];
+            for (int cix : nzJ[(size_t)j]) s += Jj[cix] * z[cix];
             rhs[j] = -(s + bias[j]);
         }
         lam.assign((size_t)rows, 0.0);
@@ -430,7 +439,7 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
         qdd = z;
         for (int j = 0; j < rows; ++j) {
             if (lam[j] == 0.0) continue;
-            for (int cix = 0; cix < nq; ++cix) qdd[cix] += BJ[j][cix] * lam[j];
+            for (int cix : nzB[(size_t)j]) qdd[cix] += BJ[j][cix] * lam[j];
         }
     };
     solveWith(Qeff);
@@ -684,23 +693,29 @@ void DynamicsSystem::projectVelocities(const std::vector<double>& q,
     }
     std::vector<double> A2((size_t)rows * rows, 0.0);
     std::vector<double> r2(rows, 0.0);
+    std::vector<std::vector<int>> nzJ2((size_t)rows), nzB2((size_t)rows);     // see accelerations(): only the columns a row touches
+    for (int j = 0; j < rows; ++j) {
+        const double* Jj = &J2[(size_t)j * nq];
+        for (int cix = 0; cix < nq; ++cix) if (Jj[cix] != 0.0) nzJ2[(size_t)j].push_back(cix);
+        for (int cix = 0; cix < nq; ++cix) if (BJ2[j][cix] != 0.0) nzB2[(size_t)j].push_back(cix);
+    }
     for (int j = 0; j < rows; ++j) {
         const double* Jj = &J2[(size_t)j * nq];
         for (int k = j; k < rows; ++k) {
             double s = 0.0;
-            for (int cix = 0; cix < nq; ++cix) s += Jj[cix] * BJ2[k][cix];
+            for (int cix : nzJ2[(size_t)j]) s += Jj[cix] * BJ2[k][cix];
             A2[(size_t)j * rows + k] = s;
             A2[(size_t)k * rows + j] = s;
         }
         double s = 0.0;
-        for (int cix = 0; cix < nq; ++cix) s += Jj[cix] * qd[cix];
+        for (int cix : nzJ2[(size_t)j]) s += Jj[cix] * qd[cix];
         r2[j] = s - nu[j];
     }
     std::vector<double> mu;
     if (dampedSolve(A2, r2, rows, mu)) {
         for (int j = 0; j < rows; ++j) {
             if (mu[j] == 0.0) continue;
-            for (int cix = 0; cix < nq; ++cix) qd[cix] -= BJ2[j][cix] * mu[j];
+            for (int cix : nzB2[(size_t)j]) qd[cix] -= BJ2[j][cix] * mu[j];
             // the impulse on row j is -mu_j; on a prescribed coordinate it
             // does work (-mu_j) * nu_j
             if (impulseWork) *impulseWork -= mu[j] * nu[j];
