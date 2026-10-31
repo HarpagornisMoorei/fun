@@ -71,6 +71,7 @@ struct SweepOptions {
     std::vector<std::string> reports;   // empty: a sensible default for the file
     std::vector<std::string> probes;
     std::string path;                   // where the source came from: anchors relative `import`s
+    int jobs = 0;                       // worker threads (0: one per core); the rows come out in grid order either way
 };
 
 // Run the sweep over the full grid of axes (first axis slowest). Throws std::runtime_error

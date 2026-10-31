@@ -62,11 +62,12 @@ const double kFrictionEps = 2e-3;
 // The damping is relative to each row's own diagonal. (It used to be one absolute number scaled by the
 // largest diagonal, which for masses spanning many decades — a 10 kg boom and a 1e-5 kg linkage — swamped
 // the rows that come from the heavy bodies and skewed the multipliers by percent.)
-bool dampedSolve(std::vector<double> A, const std::vector<double>& b, int n,
+bool dampedSolve(const std::vector<double>& A, const std::vector<double>& b, int n,
                  std::vector<double>& x) {
     double eps = 1e-10;
+    thread_local std::vector<double> Ad;
     for (int attempt = 0; attempt < 6; ++attempt) {
-        std::vector<double> Ad = A;
+        Ad = A;
         for (int i = 0; i < n; ++i) {
             const double d = Ad[(size_t)i * n + i];
             Ad[(size_t)i * n + i] += eps * std::max(d, 1e-12) + 1e-15;
@@ -381,7 +382,10 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
     // --- KKT via Schur complement --------------------------------------------
     std::vector<MassBlock> Mblocks;
     massBlocks(q, Mblocks);
-    std::vector<std::vector<double>> BJ(rows, std::vector<double>(nq, 0.0));
+    // scratch reused from call to call (a large mechanism would otherwise allocate and zero hundreds of kilobytes per step)
+    thread_local std::vector<std::vector<double>> BJ;
+    BJ.resize((size_t)rows);
+    for (int j = 0; j < rows; ++j) BJ[(size_t)j].assign((size_t)nq, 0.0);
     for (int j = 0; j < rows; ++j) {
         const double* Jj = &J[(size_t)j * nq];
         for (size_t bi = 1; bi < m.bodies.size(); ++bi) {
@@ -404,7 +408,8 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
         for (int cix = 0; cix < nq; ++cix) if (BJ[j][cix] != 0.0 || Jj[cix] != 0.0) nzB[(size_t)j].push_back(cix);
     }
     // A = J W J^T (it does not depend on the forces)
-    std::vector<double> A((size_t)rows * rows, 0.0);
+    thread_local std::vector<double> A;
+    A.assign((size_t)rows * rows, 0.0);
     for (int j = 0; j < rows; ++j) {
         const double* Jj = &J[(size_t)j * nq];
         for (int k = j; k < rows; ++k) {
@@ -678,7 +683,9 @@ void DynamicsSystem::projectVelocities(const std::vector<double>& q,
     // energy whenever joint rows couple several bodies' coordinates.
     std::vector<MassBlock> Mblocks;
     massBlocks(q, Mblocks);   // at the stabilized configuration
-    std::vector<std::vector<double>> BJ2(rows, std::vector<double>(nq, 0.0));
+    thread_local std::vector<std::vector<double>> BJ2;
+    BJ2.resize((size_t)rows);
+    for (int j = 0; j < rows; ++j) BJ2[(size_t)j].assign((size_t)nq, 0.0);
     for (int j = 0; j < rows; ++j) {
         const double* Jj = &J2[(size_t)j * nq];
         for (size_t bi = 1; bi < m.bodies.size(); ++bi) {
@@ -691,7 +698,8 @@ void DynamicsSystem::projectVelocities(const std::vector<double>& q,
             BJ2[j][o + 2] = wv[2];
         }
     }
-    std::vector<double> A2((size_t)rows * rows, 0.0);
+    thread_local std::vector<double> A2;
+    A2.assign((size_t)rows * rows, 0.0);
     std::vector<double> r2(rows, 0.0);
     std::vector<std::vector<int>> nzJ2((size_t)rows), nzB2((size_t)rows);     // see accelerations(): only the columns a row touches
     for (int j = 0; j < rows; ++j) {

@@ -76,7 +76,7 @@ declaration is read.
 ## 4. Sweeps
 
 ```bash
-mech sweep FILE --set AXIS [--set AXIS ...] --time T --report METRIC [...]
+mech sweep FILE --set AXIS [--set AXIS ...] --time T --report METRIC [...] [--jobs N]
 ```
 
 An **axis** is a parameter with several values:
@@ -99,7 +99,7 @@ A **metric** reduces one run to one number:
 | `maxres` | worst constraint residual over the run |
 | `ledger` | worst absolute energy-ledger residual |
 
-Output is an aligned table; `--csv FILE` writes it as `axes...,metrics...,error`.
+Rows run on all cores (`--jobs N` picks the number of threads, 1 for none); the table is the same either way. Output is an aligned table; `--csv FILE` writes it as `axes...,metrics...,error`.
 
 ```bash
 # where does the follower start to leave the cam?

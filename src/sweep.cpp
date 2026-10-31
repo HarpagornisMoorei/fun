@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <atomic>
 #include <stdexcept>
+#include <thread>
 
 namespace mech {
 
@@ -273,7 +275,10 @@ SweepResult runSweep(const std::string& source, const std::vector<SweepAxis>& ax
         metrics.push_back(mt);
     }
 
-    for (size_t flat = 0; flat < total; ++flat) {
+    // Every row builds and runs its own model from the shared token list, so rows are independent and can run on
+    // several threads; each writes its own slot, so the result is the same whatever the thread count.
+    res.rows.assign(total, SweepRow());
+    auto runRow = [&](size_t flat) {
         SweepRow row;
         ParamOverrides ov;
         size_t rem = flat;
@@ -298,8 +303,23 @@ SweepResult runSweep(const std::string& source, const std::vector<SweepAxis>& ax
             row.error = where(e.line, e.msg);
         } catch (const SemanticError& e) {
             row.error = where(e.line, e.msg);
+        } catch (const std::exception& e) {      // a worker thread must not let anything escape
+            row.error = e.what();
         }
-        res.rows.push_back(row);
+        res.rows[flat] = row;
+    };
+    {
+        unsigned want = opt.jobs > 0 ? (unsigned)opt.jobs : std::thread::hardware_concurrency();
+        if (want < 1) want = 1;
+        if (want > total) want = (unsigned)total;
+        std::atomic<size_t> nextRow(0);
+        auto worker = [&]() {
+            for (size_t f = nextRow++; f < total; f = nextRow++) runRow(f);
+        };
+        std::vector<std::thread> pool;
+        for (unsigned w = 1; w < want; ++w) pool.emplace_back(worker);
+        worker();
+        for (std::thread& t : pool) t.join();
     }
     return res;
 }

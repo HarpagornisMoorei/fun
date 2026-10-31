@@ -130,6 +130,11 @@ drive piston.guide force 500                    // ... or push with 500 N
 free `body` can say where its mass is (`com: (0.5, 0)`). Every example here is checked against a closed form (the
 yoke is exactly r cos θ; a bead in a rotating tube follows r₀ cosh ωt). See [`docs/JOINTS.md`](docs/JOINTS.md).
 
+## Speed
+
+`mech sweep` runs its rows on all cores (`--jobs N` to choose), and large or contact-heavy mechanisms run several times
+faster than before with identical output; `sh scripts/bench.sh` measures it. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
+
 ## A Geneva drive
 
 `lib/geneva.mech` is a complete external Geneva drive made of ordinary unilateral contacts: a pin entering the slots of an N-slot

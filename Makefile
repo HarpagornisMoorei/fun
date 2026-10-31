@@ -4,7 +4,7 @@
 # builds and runs (check / run --headless / test).
 
 CXX      ?= g++
-CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -Isrc
+CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -Isrc -pthread
 
 CORE_SRC := src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/render.cpp src/scene.cpp src/loader.cpp src/sweep.cpp src/kinematics.cpp src/dynamics.cpp
 CORE_HDR := src/geom.hpp src/ast.hpp src/lexer.hpp src/parser.hpp src/linalg.hpp \

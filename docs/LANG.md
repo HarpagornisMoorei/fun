@@ -1431,6 +1431,9 @@ M9 added reusable parts: `part` with parameters and `use ... as name on ground a
 (see `docs/PARTS.md`), expanded at parse time so the solver, dynamics and tooling are
 unchanged, and an instanced file runs bit for bit like the flat one.
 
+M18 sped the core up without changing a number (pruned polygon contact search, sparse rows and an envelope Cholesky in
+the multiplier solve, parallel sweeps; `docs/PERFORMANCE.md`).
+
 M17 added the Geneva drive as a library part (`lib/geneva.mech`, `docs/GENEVA.md`): intermittent motion from nine unilateral
 contacts, with a warning when a dynamic contact starts inside its curve and a mobility count that no longer counts unilateral
 contacts as constraints.

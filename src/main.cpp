@@ -973,6 +973,7 @@ int main(int argc, char** argv) {
                 const std::string a = argv[i];
                 if (a == "--set" && i + 1 < argc) sets.push_back(argv[++i]);
                 else if (a == "--time" && i + 1 < argc) opt.seconds = std::atof(argv[++i]);
+                else if (a == "--jobs" && i + 1 < argc) opt.jobs = std::atoi(argv[++i]);
                 else if (a == "--dt" && i + 1 < argc) opt.dt = std::atof(argv[++i]);
                 else if (a == "--report" && i + 1 < argc) opt.reports.push_back(argv[++i]);
                 else if (a == "--probe" && i + 1 < argc) opt.probes.push_back(argv[++i]);

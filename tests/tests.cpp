@@ -7,6 +7,7 @@
 #include "../src/kinematics.hpp"
 #include "../src/lexer.hpp"
 #include "../src/loader.hpp"
+#include "../src/linalg.hpp"
 #include "../src/model.hpp"
 #include "../src/parser.hpp"
 #include "../src/profile.hpp"
@@ -8992,6 +8993,148 @@ void testGeneva() {
     }
 }
 
+// ============================================================================
+// M18 — speed. The three speedups change nothing about the numbers, so each is held to an independent oracle:
+// the pruned polygon nearest-point search against a brute-force distance to every outline segment, the envelope Cholesky
+// against the plain dense algorithm bit for bit, and a sweep on several threads against the same sweep on one.
+// ============================================================================
+
+namespace {
+
+// the dense Cholesky solve as it was before the envelope version (the reference)
+bool denseCholesky(const std::vector<double>& A, const std::vector<double>& b, int n, std::vector<double>& x) {
+    std::vector<double> L(A);
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j <= i; ++j) {
+            double s = L[(size_t)i * n + j];
+            for (int k = 0; k < j; ++k) s -= L[(size_t)i * n + k] * L[(size_t)j * n + k];
+            if (i == j) { if (s <= 1e-14) return false; L[(size_t)i * n + i] = std::sqrt(s); }
+            else L[(size_t)i * n + j] = s / L[(size_t)j * n + j];
+        }
+    }
+    std::vector<double> y(n);
+    for (int i = 0; i < n; ++i) {
+        double s = b[i];
+        for (int k = 0; k < i; ++k) s -= L[(size_t)i * n + k] * y[k];
+        y[i] = s / L[(size_t)i * n + i];
+    }
+    x.assign(n, 0.0);
+    for (int i = n - 1; i >= 0; --i) {
+        double s = y[i];
+        for (int k = i + 1; k < n; ++k) s -= L[(size_t)k * n + i] * x[k];
+        x[i] = s / L[(size_t)i * n + i];
+    }
+    return true;
+}
+
+} // namespace
+
+void testSpeed() {
+    std::printf("[speed M18]\n");
+    unsigned seed = 7;
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return ((seed >> 8) & 0xFFFF) / 65535.0; };
+
+    // ---- polygon nearest point: a 100-sided disc with a notch, and a star, queried from inside, outside and far away
+    {
+        std::vector<Vec2> disc;
+        for (int i = 0; i <= 100; ++i) {
+            const double a = 0.9 + (2.0 * kPi - 1.8) * i / 100.0;
+            disc.push_back(Vec2{0.0626 * std::cos(a), 0.0626 * std::sin(a)});
+        }
+        disc.push_back(Vec2{0.03 * std::cos(-0.9), 0.03 * std::sin(-0.9)});
+        disc.push_back(Vec2{0.03 * std::cos(0.9), 0.03 * std::sin(0.9)});
+        std::vector<Vec2> star;
+        for (int i = 0; i < 24; ++i) {
+            const double a = 2.0 * kPi * i / 24.0, r = (i % 2 == 0) ? 0.05 : 0.03;
+            star.push_back(Vec2{r * std::cos(a), r * std::sin(a)});
+        }
+        for (const std::vector<Vec2>* poly : {&disc, &star}) {
+            const ProfileCurve c = ProfileCurve::polygon(*poly, 0.0003);
+            const std::vector<Vec2> ring = c.outline(4000);
+            double worst = 0.0;
+            for (int t = 0; t < 400; ++t) {
+                const double sc = (t % 4 == 0) ? 3.0 : (t % 4 == 1) ? 0.2 : 1.0;
+                const Vec2 u{(rnd() - 0.5) * 0.2 * sc, (rnd() - 0.5) * 0.2 * sc};
+                double best = 1e9;                      // brute force: the distance to every segment of the outline
+                for (size_t q = 0; q < ring.size(); ++q) {
+                    const Vec2 p0 = ring[q], p1 = ring[(q + 1) % ring.size()], e = p1 - p0;
+                    const double l2 = dot(e, e);
+                    const double tt = l2 > 0.0 ? std::min(1.0, std::max(0.0, dot(u - p0, e) / l2)) : 0.0;
+                    best = std::min(best, vlen(u - (p0 + e * tt)));
+                }
+                const ProfileCurve::Foot f = c.nearest(u);
+                // the foot is on the curve, and no sample is nearer than it (up to the sampling's own spacing)
+                worst = std::max(worst, std::fabs(vlen(u - f.point) - best));
+                CHECK(vlen(u - f.point) <= best + 1e-9);
+                CHECK(std::fabs(std::fabs(f.signedDist) - vlen(u - f.point)) < 1e-9);
+            }
+            CHECK(worst < 2e-5);
+        }
+    }
+
+    // ---- the envelope Cholesky is the dense one, bit for bit, for banded, arrow-shaped and dense matrices
+    {
+        for (int kind = 0; kind < 3; ++kind) {
+            const int n = (kind == 2) ? 25 : 70;
+            std::vector<double> M((size_t)n * n, 0.0);
+            // A = B B^T + I with B sparse in the shape of the kind, so A is symmetric positive definite with that envelope
+            std::vector<double> B((size_t)n * n, 0.0);
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) {
+                    bool on = false;
+                    if (kind == 0) on = std::abs(i - j) <= 2;                      // chain
+                    else if (kind == 1) on = (i == j) || j == 0 || i == 0 || std::abs(i - j) == 1;   // arrow plus chain
+                    else on = true;                                                // dense
+                    if (on) B[(size_t)i * n + j] = rnd() - 0.4;
+                }
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) {
+                    double s = (i == j) ? 1.0 : 0.0;
+                    for (int k = 0; k < n; ++k) s += B[(size_t)i * n + k] * B[(size_t)j * n + k];
+                    M[(size_t)i * n + j] = s;
+                }
+            std::vector<double> b((size_t)n), x1, x2;
+            for (double& v : b) v = rnd() - 0.5;
+            CHECK(denseCholesky(M, b, n, x1) && choleskySolve(M, b, n, x2));
+            bool same = x1.size() == x2.size();
+            for (size_t i = 0; same && i < x1.size(); ++i) same = (x1[i] == x2[i]);
+            CHECK(same);
+        }
+        // a pivot that collapses is reported the same way
+        std::vector<double> neg = {1.0, 2.0, 2.0, 1.0}, bb = {1.0, 1.0}, xx;
+        CHECK(!choleskySolve(neg, bb, 2, xx));
+    }
+
+    // ---- a sweep gives the same rows on one thread and on several, in the same order
+    {
+        const std::string src = readFile("examples/jumpcam.mech");
+        SweepAxis ax;
+        std::string err;
+        CHECK(parseAxis("speed=300:700:50", ax, err));
+        SweepOptions one, many;
+        one.seconds = many.seconds = 0.15;
+        one.reports = many.reports = {"liftoffs", "maxres"};
+        one.jobs = 1;
+        many.jobs = 4;
+        const SweepResult a = runSweep(src, {ax}, one), b = runSweep(src, {ax}, many);
+        CHECK(a.rows.size() == 9 && b.rows.size() == 9);
+        bool same = a.rows.size() == b.rows.size();
+        for (size_t i = 0; same && i < a.rows.size(); ++i) {
+            same = a.rows[i].params == b.rows[i].params && a.rows[i].error == b.rows[i].error && a.rows[i].metrics.size() == b.rows[i].metrics.size();
+            for (size_t k = 0; same && k < a.rows[i].metrics.size(); ++k) same = a.rows[i].metrics[k] == b.rows[i].metrics[k];
+        }
+        CHECK(same);
+        // a design that does not build is an error row, in its place, under threads too
+        SweepAxis bad;
+        CHECK(parseAxis("rise_deg=100,10,60", bad, err));
+        SweepOptions o3;
+        o3.seconds = 0.2;
+        o3.jobs = 3;
+        const SweepResult r = runSweep(readFile("examples/platecam.mech"), {bad}, o3);
+        CHECK(r.rows.size() == 3 && r.rows[0].error.empty() && !r.rows[1].error.empty() && r.rows[2].error.empty());
+    }
+}
+
 int runAllTests() {
     testLexer();
     testParser();
@@ -9033,6 +9176,7 @@ int runAllTests() {
     testSlides();
     testRackBelt();
     testGeneva();
+    testSpeed();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

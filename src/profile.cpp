@@ -423,27 +423,6 @@ ProfileCurve::Foot ProfileCurve::nearest(Vec2 u) const {
             const double dd = exact(q, uu);
             if (dd < bestD2 || (dd == bestD2 && i < bi)) { bestD2 = dd; bi = i; bu = uu; }
         }
-        if (false) for (size_t i = 0; i < prims_.size(); ++i) {
-            const Prim& q = prims_[i];
-            double uu;
-            if (!q.arc) {
-                uu = std::min(q.len, std::max(0.0, dot(u - q.a, q.dir)));
-            } else {
-                const Vec2 vv = u - q.c;
-                double rel = q.sgn * (std::atan2(vv.y, vv.x) - q.a0);
-                rel -= 2.0 * kPi * std::floor(rel / (2.0 * kPi));       // in [0, 2 pi)
-                const double sweep = q.len / q.r;
-                if (rel <= sweep) {
-                    uu = rel * q.r;
-                } else {   // off the end of the arc: whichever endpoint is nearer
-                    const Vec2 e0 = primPoint(q, 0.0), e1 = primPoint(q, q.len);
-                    uu = dot(u - e0, u - e0) <= dot(u - e1, u - e1) ? 0.0 : q.len;
-                }
-            }
-            const Vec2 d = u - primPoint(q, uu);
-            const double dd = dot(d, d);
-            if (dd < bestD2) { bestD2 = dd; bi = i; bu = uu; }
-        }
         const Prim& q = prims_[bi];
         Vec2 p, d1, d2;
         eval(q.s0 + bu, p, d1, d2);
