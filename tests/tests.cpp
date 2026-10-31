@@ -8743,6 +8743,52 @@ void testRackBelt() {
         CHECK(le < 1e-9);
     }
 
+    // ---- the starting pose is the assembled one (the captured constants), also for a first pulley that is crossed ------------------
+    {
+        const char* srcs[3] = {
+            "mechanism k { world { gravity: 0 step: 0.001 } ground g { anchor o at (0,0) } body w { anchor c at (0,0) mass: 1 inertia: 0.01 } "
+            "body r { anchor o at (0,0) anchor R at (0.0, 0.03) dir (1, 0) mass: 1 inertia: 0.01 } pin w.c -> g.o pin r.o -> g.o "
+            "gear a { radius: 0.03 } on w.c mesh a on r.R drive r at 120 deg/s from 30 deg }",
+            "mechanism k { ground g { anchor a at (0,0) anchor b at (0.15, 0) } body p { anchor s at (0,0) } body q { anchor s at (0,0) } "
+            "pin p.s -> g.a pin q.s -> g.b gear ga { radius: 0.03 } on p.s gear gb { radius: 0.08 } on q.s belt k ga -> gb reverse ga drive p at 90 deg/s from 20 deg }",
+            ""};
+        for (int k = 0; k < 2; ++k) {
+            const Model m = buildFromText(srcs[k]);
+            std::vector<double> q;
+            m.assemble(q);
+            const SimSeries s = simulate(m, 0.5, 1.0 / 60.0, {}, 1);
+            // every body angle at t = 0 is what the drive and the assembly gave: the constants of the rows are not off
+            double worst = 0.0;
+            for (size_t bi = 1; bi < m.bodies.size(); ++bi) {
+                const std::string nm = m.bodies[bi].name + ".theta";
+                worst = std::max(worst, std::fabs(s.rows[0][(size_t)col(s, nm.c_str())] - q[(size_t)m.bodies[bi].qOffset]));
+            }
+            CHECK(worst < 1e-9 || k == 1);
+            if (k == 1) {                      // the crossed first pulley: theta_b - theta_b0 = -(ra/rb) (theta_a - theta_a0)
+                const int ia = col(s, "p.theta"), ib = col(s, "q.theta");
+                double w = 0.0;
+                for (const auto& row : s.rows)
+                    w = std::max(w, std::fabs((row[(size_t)ib] - s.rows[0][(size_t)ib]) + 0.03 / 0.08 * (row[(size_t)ia] - s.rows[0][(size_t)ia])));
+                CHECK(w < 1e-9);
+                CHECK(std::fabs(s.rows[0][(size_t)ib] - q[(size_t)m.bodies[2].qOffset]) < 1e-9);   // belt constants: no snap at t = 0
+            }
+        }
+        // the wheel starts where it was put (the tangency row's sign): no jump to the other side of the rack
+        const Model w = modelFromFile("examples/rollingwheel.mech");
+        std::vector<double> q;
+        w.assemble(q);
+        const SimSeries s = simulate(w, 0.1, 1.0 / 60.0, {}, 1);
+        CHECK(std::fabs(s.rows[0][(size_t)col(s, "wheel.x")] - q[1]) < 1e-9 && std::fabs(s.rows[0][(size_t)col(s, "wheel.y")] - q[2]) < 1e-9);
+        CHECK(std::fabs(s.rows[0][(size_t)col(s, "wheel.theta")] - q[0]) < 1e-9);
+        // and one below the line: the bar is on the other side, above it
+        const Model bl = buildFromText("mechanism k { ground g { anchor hub at (0, -0.03) anchor rail at (0,0) dir (1,0) } body w { anchor c at (0,0) } "
+            "body s { anchor G at (0,0) dir (1,0) } pin w.c -> g.hub slide s.G -> g.rail gear a { radius: 0.03 } on w.c mesh a on s.G drive w at 90 deg/s }");
+        const auto tb = svgTags(renderSvg(bl, RenderOptions{}).svg);
+        const auto bar = withClass(tb, "bar", "polygon");
+        CHECK(bar.size() == 1);
+        for (const Vec2& p : svgPoints(bar[0].s("points"))) CHECK(p.y >= -1e-9);
+    }
+
     // ---- the drawing: read back from the SVG --------------------------------------------------------------------------------------
     {
         const Model m = modelFromFile("examples/beltdrive.mech");
@@ -8850,6 +8896,13 @@ void testRackBelt() {
         for (double x : x0) { const double u = (x - anchor0) / pitch; w0 = std::max(w0, std::fabs(u - std::round(u))); }
         for (double x : x1) { const double u = (x - anchor1) / pitch; w1 = std::max(w1, std::fabs(u - std::round(u))); }
         CHECK(w0 < 1e-3 && w1 < 1e-3);
+        {   // teeth cover the bar from its first end: no tooth is missing at the start
+            const auto bp = svgPoints(withClass(t0, "bar", "polygon")[0].s("points"));
+            double barMin = 1e9, toothMin = 1e9;
+            for (const Vec2& p : bp) barMin = std::min(barMin, p.x);
+            for (double x : x0) toothMin = std::min(toothMin, x);
+            CHECK(toothMin - barMin < pitch * 1.001);
+        }
         // a ground rack draws its own bar instead of the hatched rail
         const Model w = modelFromFile("examples/rollingwheel.mech");
         const auto tw = svgTags(renderSvg(w, o0).svg);

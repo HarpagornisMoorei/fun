@@ -1,4 +1,4 @@
-# The mech language — M14 specification
+# The mech language — M16 specification
 
 This document pins down the M6f kernel: lexical structure, grammar, static
 semantics, the kinematic solver's mathematical formulation, the
@@ -11,7 +11,7 @@ non-circular gear pairs (`mesh` between two profiles), and polygon profiles
 with filleted corners (ratchets and anything with teeth), and Coulomb friction at
 contacts, plus (M8) named parameters, numeric expressions and sweeps, and (M9) reusable
 parts, and (M10) `import` with a library of standard parts, (M11) rotated mounts, (M12) loops and indexed names, (M13) SVG drawings, and (M14) prismatic joints between any two bodies,
-slots and linear drives. It is the contract
+slots and linear drives, and (M16) a pinion on a rack and belts over pulleys. It is the contract
 the implementation is tested against (`mech test`).
 
 ---
@@ -85,7 +85,7 @@ importDecl  = "import" STRING ;                          (* M10: top level only 
 mechanism   = "mechanism" IDENT "{" { stmt } "}" ;
 
 stmt        = groundDecl | bodyDecl | rodDecl | shaftDecl | worldDecl
-            | gearDecl | meshDecl | springDecl | pinDecl | slideDecl
+            | gearDecl | meshDecl | beltDecl | springDecl | pinDecl | slideDecl
             | driveDecl
             | reduceDecl | handDecl | dialDecl
             | modeDecl | weightDriveDecl                 (* M5 *)
@@ -134,7 +134,9 @@ primary     = NUMBER | "pi" | IDENT                          (* a declared param
 
 gearDecl    = "gear" IDENT "{" { gearProp } "}" "on" ref ;
 gearProp    = ( "teeth" | "module" | "radius" | "mass" ) ":" num ;
-meshDecl    = "mesh" IDENT IDENT [ "tangent" ] ;     (* two gears, or (M6d) two profiles *)
+meshDecl    = "mesh" IDENT IDENT [ "tangent" ]       (* two gears, or (M6d) two profiles *)
+            | "mesh" IDENT "on" IDENT "." IDENT [ "tangent" ] ;   (* M16: a pinion on a rack: the anchor's line is the pitch line *)
+beltDecl    = "belt" IDENT IDENT { "->" IDENT } [ "reverse" IDENT { IDENT } ] ;   (* M16; "reverse" names end at the line *)
 
 springDecl  = "spring" IDENT ref "->" ref "{" { springProp } "}" ;
 springProp  = ( "k" | "rest" | "damp" ) ":" num ;
@@ -1428,6 +1430,9 @@ compared by running many of it. Reusable parts and composition remain open.
 M9 added reusable parts: `part` with parameters and `use ... as name on ground at (x, y)`
 (see `docs/PARTS.md`), expanded at parse time so the solver, dynamics and tooling are
 unchanged, and an instanced file runs bit for bit like the flat one.
+
+M16 added the rack and pinion (`mesh P on B.A`) and belts (`belt N a -> b -> c [reverse c]`), each a rolling row of
+the kind a gear mesh already is, drawn from the shared scene in SVG and the viewer (`docs/RACKBELT.md`).
 
 M15 moved the drawing logic into one shared scene (`src/scene.*`) drawn by both `mech render` (SVG) and the OpenGL viewer, which
 gained the M14 drawing and lost its own ground-bar and ring-gear mistakes (`docs/VIEWER.md`).
