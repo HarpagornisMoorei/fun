@@ -1,6 +1,6 @@
-# The mech language — M6e specification
+# The mech language — M8 specification
 
-This document pins down the M6e kernel: lexical structure, grammar, static
+This document pins down the M6f kernel: lexical structure, grammar, static
 semantics, the kinematic solver's mathematical formulation, the
 constrained-dynamics integrator, the intent layer's synthesis rules, the
 hybrid elements (`mode` blocks with weight drives — the escapement's kernel),
@@ -8,7 +8,9 @@ contact (`profile` curves and point-on-curve `touch` joints — the first
 higher pair — bilateral in kinematic files, unilateral with lift-off and
 impact in dynamic ones), plate cams stated as displacement diagrams, and
 non-circular gear pairs (`mesh` between two profiles), and polygon profiles
-with filleted corners (ratchets and anything with teeth). It is the contract the implementation is tested against (`mech test`).
+with filleted corners (ratchets and anything with teeth), and Coulomb friction at
+contacts, plus (M8) named parameters, numeric expressions and sweeps. It is the contract
+the implementation is tested against (`mech test`).
 
 ---
 
@@ -61,11 +63,12 @@ Four principles govern the design:
   `radius`, and the whole M5 hybrid vocabulary (`state`, `when`, `hold`,
   `impulse`, `maintain`, `theta`, `omega`, `advance`, `weight`, `barrel`,
   `drop`, `kg`, `m`, `mJ`) and the M6 contact vocabulary (`circle`, `polar`,
-  `points`, `roller`, `restitution`, `ellipse`, `focus`, `polygon`, `fillet`) and the M6b cam vocabulary (`cam` at statement start,
+  `points`, `roller`, `restitution`, `ellipse`, `focus`, `polygon`, `fillet`, `friction`) and the M6b cam vocabulary (`cam` at statement start,
   `base`, `start`, `turn`, `rise`, `fall`, `return`, `over`, `dwell`,
   `cycloidal`, `harmonic`, `modtrap`) are *contextual* identifiers (not
-  keywords), usable as names — a body called `cam` is fine.
-* Punctuation: `{ } ( ) , : ; . - -> < >`
+  keywords), usable as names — a body called `cam` is fine. So is `param`, which
+  only means something at statement start (M8, see below).
+* Punctuation: `{ } ( ) , : ; . - -> < > + * / =`
 * Comments: `// line` and `# line`.
 * Whitespace (including newlines) is insignificant; statements may be
   separated by `;` or `,` or nothing.
@@ -83,7 +86,8 @@ stmt        = groundDecl | bodyDecl | rodDecl | shaftDecl | worldDecl
             | reduceDecl | handDecl | dialDecl
             | modeDecl | weightDriveDecl                 (* M5 *)
             | profileDecl | touchDecl                      (* M6 *)
-            | camDecl ;                                   (* M6b *)
+            | camDecl                                     (* M6b *)
+            | paramDecl ;                                 (* M8 *)
 
 groundDecl  = "ground" IDENT "{" { anchorDecl } "}" ;
 bodyDecl    = "body" IDENT "{" { anchorDecl | "mass" ":" num
@@ -98,6 +102,16 @@ shaftDecl   = "shaft" IDENT [ attach ] ;        (* M4: attach optional *)
 attach      = ( "on" | "at" ) ref ;                    (* pins anchor A *)
 
 worldDecl   = "world" "{" { ( "gravity" | "step" ) ":" num } "}" ;
+
+paramDecl   = "param" IDENT "=" expr ;                       (* M8 *)
+(* Everywhere this grammar writes `num`, M8 accepts an expression that evaluates to one. *)
+expr        = term { ( "+" | "-" ) term } ;
+term        = unary { ( "*" | "/" ) unary } ;
+unary       = [ "-" | "+" ] unary | primary ;
+primary     = NUMBER | "pi" | IDENT                          (* a declared parameter *)
+            | FUNC1 "(" expr ")"                             (* sqrt sin cos tan atan abs *)
+            | FUNC2 "(" expr "," expr ")"                    (* min max pow *)
+            | "(" expr ")" ;
 
 gearDecl    = "gear" IDENT "{" { gearProp } "}" "on" ref ;
 gearProp    = ( "teeth" | "module" | "radius" | "mass" ) ":" num ;
@@ -150,7 +164,7 @@ shape       = "circle" ":" num
             | "polygon" ":" { "(" num "," num ")" } "fillet" num   (* M6e *)
             | "polar" ":" { "(" num [ "deg" ] "," num ")" }      (* angle, radius *)
             | "points" ":" { "(" num "," num ")" } ;
-touchDecl   = "touch" ref "on" IDENT { "roller" num | "restitution" num } ;
+touchDecl   = "touch" ref "on" IDENT { "roller" num | "restitution" num | "friction" num } ;
 
 (* M6b: a plate cam stated as motion. Segments run in the order the follower
    meets them as the cam turns, and must fill exactly one turn. *)
@@ -218,6 +232,20 @@ Checks run at model build time, each error pointing at a source line:
   One hold row exists per held body across the whole mechanism: two modes
   cannot hold the same body.
 
+**M8 parameter checks:**
+
+* `param name = expr` is a parse-time constant: it may use only earlier parameters,
+  the numbers it is written with, `pi` and the functions above. A parameter is
+  scoped to its mechanism, and declaring one twice is an error.
+* A parameter name may not be a unit token (`deg`, `rpm`, ...), `pi` or a function
+  name. Division by zero, a domain error (`sqrt(-1)`), a non-finite result, an unknown
+  function and a wrong argument count are errors at the offending token.
+* `--set name=value` replaces the declared right-hand side before anything that uses it
+  is read, so every dependent parameter follows. An override naming no parameter is an
+  error that lists the declared ones. Parameters leave no trace in the model: a file
+  built with `--set` is bit-for-bit the model of the file with the number edited.
+* `mech sweep` is specified in [`PARAMS.md`](PARAMS.md).
+
 **M6e polygon checks:**
 
 * `polygon: (x, y) ... fillet r` is a closed polygon in the anchor's frame whose every
@@ -269,9 +297,10 @@ Checks run at model build time, each error pointing at a source line:
   body (so ground cannot touch its own profile). `roller` must be positive;
   without it the point is a knife-edge tip.
 * A `touch` is **bilateral** in a kinematic mechanism and **unilateral** in a
-  dynamic one (6.5). `restitution e` (Newton's coefficient, `0 <= e <= 1`,
-  default 0) belongs to the dynamic case; in a kinematic mechanism nothing
-  ever lands, so it is an error rather than silently ignored.
+  dynamic one (6.5). `restitution e` (Newton's coefficient, `0 <= e <= 1`, default
+  0) and `friction mu` (Coulomb, `mu >= 0`, default 0) belong to the dynamic case; in
+  a kinematic mechanism nothing lands or slides under a force, so each is an error
+  rather than silently ignored.
 
 **M6b cam checks** (each pointing at the offending segment's own line):
 
@@ -868,7 +897,7 @@ A prescribed (rate-driven) body is "infinitely heavy", so the impulse it feels
 does work: the energy ledger is
 
 ```text
-dE = weight + impulse + drive - impact
+dE = weight + impulse + drive - impact - friction
 drive  = integral of (reaction torque x prescribed rate) dt   (Simpson over the
          four RK4 stages) + the work of each impact's impulse on driven rows
 impact = (impulse work) - dT   >= 0, the energy the landing discarded
@@ -903,12 +932,49 @@ radial face onto the tip, and is held — but a jammed frictionless pair keeps r
 by about a degree, the force swinging around the value that balances the torque
 (from ~0.2 N to over 16 N at the extreme, where the pawl nears dead center). The wheel's own
 equation of motion still holds exactly: `integral of N cross(footArm, n) dt = tau T -
-I (w_end - w_start)`, which the tests check to 0.01%. Only friction (or a damper on
-the wheel) would bring it to rest.
+I (w_end - w_start)`, which the tests check to 0.01%. Friction is what brings it to
+rest (6.6).
 
-Not modelled: friction (the tangential slip speed `u` is available, so Coulomb
-friction needs no new row), more than one contact point per `touch`, and
-compliant (spring-damper) contact.
+### 6.6 Friction (M6f)
+
+`touch ... friction mu` adds Coulomb friction at an engaged contact: a tangential
+force of magnitude at most `mu N` opposing the slip. The slip speed is the
+tangential part of the point's velocity relative to the curve's material point at
+the foot, `s = t . w` (the same `w` as in 6.5), and it acts through the slip
+Jacobian `Jt` (`Jt_B = (t . perp(rB), t)`, `Jt_A = -(t . perp(rA), t)`) as the
+generalized force `Q = -F_t Jt^T`. Like `restitution`, it belongs to dynamic
+mechanisms; in a kinematic one nothing slides under a force, so it is an error.
+
+**Regularized, not stuck.** The force is smooth, `F_t = mu N tanh(s / eps)`, so an
+explicit integrator can take it. Below `eps` (2 mm/s, and widened as below) a contact
+*creeps* rather than sticking; there is no static-friction branch. For a tip or a
+brake this is invisible; for a block that should hold on a slope it means a
+very slow slide at about `eps`. A locked ratchet is held by geometry, not by
+static friction, and settles to a still wheel (angle constant to 1e-3 degree).
+
+**Three problems, three answers.**
+
+* *`N` is the multiplier of the solve it loads.* Solve, add friction from that `N`,
+  solve again; three passes. This converges unless the geometry is jammed
+  (a Painleve configuration, which a rigid-body model with Coulomb friction can
+  genuinely fail to resolve).
+* *Stiffness.* The friction "spring" `mu N / eps` acting on a light body is stiff,
+  and explicit RK4 blows up past `h (mu N / eps) mobility ~ 2.7`. The width is
+  therefore `eps_eff = max(eps, mu N h mobility)`, where `mobility` is the
+  *constrained* inverse inertia along the slip direction,
+  `Jt W Jt^T - (Jt W J^T)(J W J^T)^-1 (J W Jt^T)`. A 0.0001 kg m^2 wheel under
+  `mu = 0.5` and a 2 ms step stops in the predicted 0.04 s and does not overshoot.
+* *Energy.* Friction dissipates `F_t s >= 0`; it is integrated over the RK4 stages
+  (Simpson, like the drives' power) into the ledger as `friction`, so the books still
+  close: `dE = weight + impulse + drive - impact - friction`.
+
+Friction is applied at the anchor point, which is right for a knife-edge tip. With a
+`roller` it is an approximation (a freely rolling roller would feel almost none).
+Impacts are frictionless: no tangential impulse at a landing.
+
+Not modelled: static friction proper (stick), tangential impact impulses, rolling
+resistance, more than one contact point per `touch`, and compliant
+(spring-damper) contact.
 
 ## 7. Desugaring register
 
@@ -929,6 +995,7 @@ compliant (spring-damper) contact.
 | `profile p on b.c { polar: ... }` | periodic cubic spline `r(phi)` through the `(angle, radius)` knots | M6a |
 | `profile p on b.c { points: ... }` | periodic cubic splines through the points, normalised counter-clockwise | M6a |
 | `touch f.tip on p [roller r]` | row `signedGap(f.tip, p) - r`; on a cam, `r` defaults to the cam's roller | M6a |
+| `touch ... friction mu` (dynamic) | tangential force `mu N tanh(s/eps)` opposing the slip, widened for stability, with its dissipation in the ledger | M6f |
 | `touch ... restitution e` (dynamic) | two-state element: row while engaged, lift-off at `lambda < 0`, Newton impact `qd+ = (1+e) qs - e qd-` at touch-down | M6c |
 | `cam c on b.a { base Rb roller rho rise h over a deg ... }` | solve the pitch curve `r0 + s(theta)`, offset inward by `rho`, emit a 720-point closed `points` profile; reject undercut | M6b |
 | `rise/fall/return/dwell` segments | piecewise displacement diagram `s(theta)` with rest-to-rest laws; must close on the base circle in exactly one turn | M6b |
@@ -952,7 +1019,7 @@ compliant (spring-damper) contact.
 
 ## 8. Test matrix
 
-`mech test` (13979 checks) covers: lexer tokens/units/keywords/comments/errors;
+`mech test` (14682 checks) covers: lexer tokens/units/keywords/comments/errors;
 parser AST shapes for all M3 and M4 forms and all error classes; model checks,
 desugaring, gear radius arithmetic, module rules, mass derivation (rods,
 discs, compound assemblies, overrides), DOF arithmetic including tangent
@@ -1087,6 +1154,49 @@ reversed, the wheel is held, and the impulse-momentum identity above holds to
 from the ledger, flipping the polygon's normal or the sign of its curvature
 breaks checks.
 
+The M6f suite adds: the friction clause (any order with `roller` and `restitution`,
+negative and kinematic uses rejected, zero legal); a **brake** in closed form — a
+wheel spinning against a spring-loaded shoe on a rail, so `N = k (R - rest) = 4 N`
+and the friction torque is exactly `mu N R`: the wheel decelerates at 5.00000 rad/s^2
+to five digits, stops at 1.0 s and stays stopped without overshoot, the spring's
+force and the shoe's position are undisturbed, doubling `mu` doubles the
+deceleration, zero friction does not decelerate at all, the same holds spinning
+the other way, and the energy dissipated is `(1/2) I w^2` to 1e-4 with the ledger
+closing to 1e-6 J; the stiffness stress (a 0.0001 kg m^2 wheel, `mu = 0.5`, a 2 ms
+step) stopping in the predicted 0.04 s without blowing up or overshooting; the
+locked ratchet coming to rest under friction (angle constant to 1e-3 degree) with the
+static balance `N cross(footArm, n) = tau` to 1e-5; the forward ratchet with friction
+(slower, still one click per tooth, ledger closing to 2e-6 J with a friction term);
+and bit-for-bit determinism. Flipping the friction's sign, dropping its dissipation
+from the ledger, removing the stability widening, or mis-scaling `mu` breaks checks.
+
+The M7 suite adds: the Recorder's columns (unique names, units in the name, one header
+cell per column, no energies or velocities in a kinematic run); the exported eccentric
+disc equal to its closed form to 1e-9 through the CSV text (12 significant digits
+round-trip), the probe equal to the body's pose, the foot on the disc and the normal
+through its centre; the cam's design pressure angle recovered from the exported
+contact normal (20.59 deg both ways, at the same cam angle to the 1-degree grid); a
+brake's ledger residual under 1e-6 J *at every sample* with the spring's 4 N, the
+deceleration and monotone kinetic energy as columns; and the command line end to end
+(row count, last time, closed form from the file itself; misuse — unknown or
+ground-hosted probe, `--csv` without `--headless`, `--every 0`, `--dt` on a dynamic
+file — refused with a nonzero status). Dropping friction from the exported ledger,
+flipping the normal, mis-indexing the probe, or ignoring `--every` breaks checks.
+
+The M8 suite adds: expression precedence, associativity and unary signs against
+hand-computed values; every function and its domain errors; parameters in every
+numeric position of every statement (the parameterized model equals the literal one
+bit for bit, assembled state included); `--set` overrides, dependent parameters
+following them, and the unused-override error; sweep axes (ranges including
+inclusive endpoints with floating-point steps, lists, refusals); kinematic sweeps
+against closed forms for all cells of a grid, first axis slowest; the jumpcam
+lift-off threshold within one step of the closed-form 443.9 rpm; a design that stops
+building partway through a sweep reporting the compiler's message in its own row; each
+metric reduction against its definition; and the command line end to end, including
+exit status 2 for a sweep with invalid designs. Reversing subtraction or division,
+ignoring an override, accepting an unused one, swapping grid order, or dropping the
+absolute value in the ledger metric breaks checks.
+
 ## 9. Milestone history & reserved ground
 
 M1 walked the skeleton (lexer/parser/rods/pins/drives); M2 added shafts,
@@ -1137,8 +1247,25 @@ corner is a real corner rather than a ringing spline), torque work in the energy
 ledger, and `from:` on free bodies — `examples/ratchet.mech` is a ratchet wheel
 and gravity pawl that clicks once per tooth forward and locks in reverse.
 
-The rest is reserved: friction (a frictionless ratchet rings when locked), and
-turning the escapement's event summary into contact rows. Also reserved: motion-work *synthesis* (the
+M6f added friction: `touch ... friction mu`, regularized Coulomb with a stability
+width taken from the constrained inertia and its dissipation in the ledger. The
+ratchet's reverse lock now comes to rest (it rang forever without).
+
+M7 is tooling rather than language: `mech run --headless --csv` exports a run as a
+time series (see `docs/EXPORT.md`) — poses, contact gap and force, velocities,
+energies, and every term of the energy ledger *with its residual as a column*, so
+conservation is something to plot rather than a number at the end. It is built on a
+`Recorder` that the tests drive directly; the exported contact normal reproduces the
+plate cam's design pressure angle (20.590 deg against the formula's 20.59 deg).
+
+M8 added `param` and numeric expressions, `--set`, and `mech sweep` (see
+`docs/PARAMS.md`): the language stays a description of one mechanism, and designs are
+compared by running many of it. Reusable parts and composition remain open.
+
+The rest is reserved: static friction proper (the regularization creeps at ~2 mm/s
+instead of sticking), tangential impact impulses, curve-against-curve contact (the
+Geneva drive's locking arc), and turning the escapement's event summary into contact
+rows. Also reserved: motion-work *synthesis* (the
 compiler choosing the equal-tooth-sum stack itself, rather than the flagship
 writing it out), contact-rich pallet geometry (impulse faces as constraint
 rows rather than event summaries — what 6c unlocks), and multiple mechanisms

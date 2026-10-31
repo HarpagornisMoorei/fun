@@ -186,6 +186,7 @@ struct TouchJoint {
     int profile = -1;
     double roller = 0.0;
     double restitution = 0.0;
+    double friction = 0.0;            // Coulomb coefficient mu (dynamic mechanisms)
     mutable bool engaged = true;
     int line = 0;
 };

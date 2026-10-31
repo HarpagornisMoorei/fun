@@ -10,7 +10,14 @@
 //
 //   mech run examples/eccentric.mech --headless 2
 //   mech run examples/eccentric.mech --trace follower.tip
+//
+// The offset is a parameter, so the closed form can be checked by the tool itself: the
+// follower's highest point is R + rho + e and its lowest R + rho - e.
+//
+//   mech sweep examples/eccentric.mech --set e=0.005:0.02:0.005 --report max:follower.y --report min:follower.y
 mechanism eccentric {
+  param e = 0.010            // how far the disc's centre is off the axle, m
+
   ground frame {
     anchor axle at (0, 0)
     anchor rail at (0, 0.09) dir (0, 1)     // follower line of travel, above the cam
@@ -19,7 +26,7 @@ mechanism eccentric {
   // the disc: axle at the origin, rim centre 10 mm off it
   body cam {
     anchor axle at (0, 0)
-    anchor rim  at (0.010, 0)
+    anchor rim  at (e, 0)
   }
   pin cam.axle -> frame.axle
   profile disc on cam.rim { circle: 0.030 }

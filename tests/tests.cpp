@@ -9,14 +9,20 @@
 #include "../src/model.hpp"
 #include "../src/parser.hpp"
 #include "../src/profile.hpp"
+#include "../src/record.hpp"
+#include "../src/sweep.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include <sys/wait.h>
+#include <unistd.h>
 
 using namespace mech;
 
@@ -4955,17 +4961,25 @@ void testPolygonRatchet() {
         t.replace(pos, std::string("drive wheel torque -0.004").size(), std::string("drive wheel torque ") + torque);
         return t;
     };
+    // the shipped file uses friction 0.3; the frictionless numbers below pin it to 0
+    auto variant = [&](const char* torque, const char* mu) {
+        std::string t = withTorque(torque);
+        const std::string key = "friction 0.3";
+        t.replace(t.find(key), key.size(), std::string("friction ") + mu);
+        return t;
+    };
     {
         Model m = buildFromText(ratchetSrc.c_str());
         CHECK(m.profiles.size() == 1 && m.profiles[0].curve->pieces() == 48);   // 24 edges + 24 fillets
+        CHECK_APPROX(m.touches[0].friction, 0.3, 1e-15);
         std::vector<double> q0;
         m.assemble(q0);
         CHECK(!m.touches[0].engaged);                                           // placed just above the root
     }
 
-    // forward: one click per tooth, and every joule accounted for
+    // forward (frictionless): one click per tooth, and every joule accounted for
     {
-        Model m = buildFromText(ratchetSrc.c_str());
+        Model m = buildFromText(variant("-0.004", "0").c_str());
         ConstraintSystem sys(m);
         DynamicsSystem dyn(m, sys);
         std::vector<double> q, qd((size_t)m.nq(), 0.0);
@@ -5018,7 +5032,7 @@ void testPolygonRatchet() {
     //   I dw/dt = tau - N cross(footArm, n),
     // integrated over a window:  integral of N cross dt = tau T - I (w_end - w_start).
     {
-        Model m = buildFromText(withTorque("0.004").c_str());
+        Model m = buildFromText(variant("0.004", "0").c_str());
         ConstraintSystem sys(m);
         DynamicsSystem dyn(m, sys);
         std::vector<double> q, qd((size_t)m.nq(), 0.0);
@@ -5062,6 +5076,69 @@ void testPolygonRatchet() {
         CHECK(sys.maxResidual(q, k1 * h) < 1e-8);
     }
 
+    // with friction the locked wheel comes to REST (it rang forever without), held by exactly
+    // the normal force that balances the torque: tau = N cross(footArm, n)
+    {
+        Model m = buildFromText(variant("0.004", "0.3").c_str());
+        ConstraintSystem sys(m);
+        DynamicsSystem dyn(m, sys);
+        std::vector<double> q, qd((size_t)m.nq(), 0.0);
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        dyn.projectVelocities(q, qd);
+        const int iw = m.bodyIndex("wheel");
+        const double h = m.world.step;
+        for (long k = 0; k < 3000; ++k) dyn.step(q, qd, k * h);          // 1.5 s
+        const double th1 = q[(size_t)m.bodies[iw].qOffset];
+        for (long k = 3000; k < 4000; ++k) dyn.step(q, qd, k * h);       // 0.5 s more
+        CHECK(m.touches[0].engaged);
+        CHECK(std::fabs(qd[(size_t)m.bodies[iw].qOffset]) < 1e-6);       // at rest
+        CHECK(std::fabs(q[(size_t)m.bodies[iw].qOffset] - th1) < deg2rad(1e-3));   // and staying there
+        CHECK(std::fabs(th1) < deg2rad(5.0));                            // held within a few degrees
+        const ContactState cs = m.touchState(m.touches[0], q);
+        std::vector<double> qdd;
+        dyn.accelerations(q, qd, qdd);
+        const double N = dyn.contactForces()[0];
+        CHECK_APPROX(N * crossz(cs.footArm, cs.normal), 0.004, 1e-5);   // the static balance
+        CHECK(dyn.hybridStats().frictionLoss > 1e-6);                    // and friction did the damping
+    }
+    // forward with friction: still ratchets (slower: the ramps resist), and the ledger,
+    // now with a friction term, still closes
+    {
+        auto turned = [&](const std::string& src, HybridStats* hsOut, double* ledgerOut) {
+            Model m = buildFromText(src.c_str());
+            ConstraintSystem sys(m);
+            DynamicsSystem dyn(m, sys);
+            std::vector<double> q, qd((size_t)m.nq(), 0.0);
+            m.assemble(q);
+            int iters = 0;
+            double res = 0.0;
+            sys.solve(q, 0.0, iters, &res);
+            dyn.projectVelocities(q, qd);
+            const double E0 = dyn.kinetic(q, qd) + dyn.potential(q);
+            const int iw = m.bodyIndex("wheel");
+            const double th0 = q[(size_t)m.bodies[iw].qOffset];
+            for (long k = 0; k < 3000; ++k) dyn.step(q, qd, k * m.world.step);
+            const HybridStats& hs = dyn.hybridStats();
+            const double dE = dyn.kinetic(q, qd) + dyn.potential(q) - E0;
+            *ledgerOut = dE - (hs.driveWork - hs.impactLoss - hs.frictionLoss);
+            *hsOut = hs;
+            return th0 - q[(size_t)m.bodies[iw].qOffset];
+        };
+        HybridStats h0, h3;
+        double l0, l3;
+        const double free = turned(variant("-0.004", "0"), &h0, &l0);
+        const double rough = turned(variant("-0.004", "0.3"), &h3, &l3);
+        CHECK(h0.frictionLoss == 0.0);
+        CHECK(h3.frictionLoss > 1e-3);
+        CHECK(rough > deg2rad(120.0) && rough < free);                   // slower, but it turns
+        CHECK(std::fabs((double)h3.liftoffs - std::floor(rough / deg2rad(30.0))) <= 1.0);   // still one click per tooth
+        CHECK(std::fabs(l0) < 2e-6);
+        CHECK(std::fabs(l3) < 2e-6);                                     // the ledger closes with friction
+    }
+
     // determinism
     {
         auto run = [&](std::vector<double>& qOut, HybridStats& stOut) {
@@ -5084,6 +5161,778 @@ void testPolygonRatchet() {
         run(qb, sb);
         CHECK(qa == qb);
         CHECK(sa.liftoffs == sb.liftoffs && sa.impacts == sb.impacts && sa.impactLoss == sb.impactLoss);
+    }
+}
+
+
+// ---- M6f: friction ---------------------------------------------------------------------
+
+// A brake: a wheel (inertia `I`) spins against a shoe on a vertical rail through the
+// top of its rim; a spring sets the normal force N = k (R - rest) = 200 x 0.02 = 4 N,
+// and the rail absorbs the tangential load. Friction torque = mu N R, exactly.
+std::string brakeSrc(double mu, double inertia, double step) {
+    char b[1000];
+    std::snprintf(b, sizeof b,
+        "mechanism brake {\n"
+        "  world { gravity: 0  step: %g }\n"
+        "  ground frame { anchor axle at (0, 0)  anchor rail at (0, 0.05) dir (0, 1) }\n"
+        "  body wheel { anchor axle at (0, 0)  mass: %g  from: 0 deg }\n"
+        "  pin wheel.axle -> frame.axle\n"
+        "  profile rim on wheel.axle { circle: 0.05 }\n"
+        "  body shoe { anchor tip at (0, 0) dir (1, 0)  mass: 0.1 }\n"
+        "  slide shoe.tip -> frame.rail\n"
+        "  spring press shoe.tip -> frame.axle { k: 200  rest: 0.03 }\n"
+        "  touch shoe.tip on rim friction %g\n}\n", step, inertia / 0.01, mu);
+    return std::string(b);
+}
+
+struct BrakeRun {
+    std::vector<double> w;        // wheel speed sampled at t = 0.2, 0.4, ...
+    double N = 0.0, loss = 0.0, ledger = 0.0, ke0 = 0.0, wEnd = 0.0, shoeY = 0.0;
+    double stopT = -1.0;          // first time |w| < 1e-3
+    bool signFlipped = false;
+};
+BrakeRun runBrake(double mu, double w0, double inertia, double step, double T) {
+    BrakeRun r;
+    Model m = buildFromText(brakeSrc(mu, inertia, step).c_str());
+    ConstraintSystem sys(m);
+    DynamicsSystem dyn(m, sys);
+    std::vector<double> q, qd((size_t)m.nq(), 0.0);
+    m.assemble(q);
+    int iters = 0;
+    double res = 0.0;
+    sys.solve(q, 0.0, iters, &res);
+    dyn.projectVelocities(q, qd);
+    const int iw = m.bodyIndex("wheel"), is = m.bodyIndex("shoe");
+    qd[(size_t)m.bodies[iw].qOffset] = w0;
+    const double E0 = dyn.kinetic(q, qd) + dyn.potential(q);
+    r.ke0 = 0.5 * m.mass[(size_t)iw].inertia * w0 * w0;
+    long nextSample = (long)std::llround(0.2 / step);
+    bool stopped = false;
+    for (long k = 0; k * step < T; ++k) {
+        dyn.step(q, qd, k * step);
+        const double w = qd[(size_t)m.bodies[iw].qOffset];
+        const double t = (k + 1) * step;
+        if (k + 1 == nextSample) { r.w.push_back(w); nextSample += (long)std::llround(0.2 / step); }
+        if (!stopped && std::fabs(w) < 1e-3) { stopped = true; r.stopT = t; }
+        if (stopped && w * w0 < -1e-3 * std::fabs(w0)) r.signFlipped = true;   // overshoot through zero
+    }
+    const HybridStats& hs = dyn.hybridStats();
+    const double dE = dyn.kinetic(q, qd) + dyn.potential(q) - E0;
+    r.loss = hs.frictionLoss;
+    r.ledger = dE - (hs.driveWork - hs.impactLoss - hs.frictionLoss);
+    r.wEnd = qd[(size_t)m.bodies[iw].qOffset];
+    r.shoeY = q[(size_t)m.bodies[is].qOffset + 2];
+    std::vector<double> qdd;
+    dyn.accelerations(q, qd, qdd);
+    r.N = dyn.contactForces()[0];
+    return r;
+}
+
+void testFriction() {
+    std::printf("[friction M6f]\n");
+
+    // ---- grammar and diagnostics --------------------------------------------------------------
+    {
+        const Program p = parseText("mechanism m { ground g { anchor a at (0,0) } shaft s at g.a "
+                                    "profile p on s { circle: 0.03 } "
+                                    "touch g.a on p friction 0.4 restitution 0.2 roller 0.001 world { gravity: 1 } }");
+        const TouchDecl& t = p.mechanisms[0].touches[0];
+        CHECK(t.hasFriction && std::fabs(t.friction - 0.4) < 1e-15);
+        CHECK(t.hasRestitution && t.hasRoller);                 // any order
+    }
+    auto expectModelError = [&](const std::string& tail, const char* needle) {
+        bool threw = false;
+        try {
+            buildFromText(("mechanism m { ground g { anchor a at (0,0) } shaft s at g.a "
+                           "profile p on s { circle: 0.03 } touch g.a on p " + tail + " }").c_str());
+        } catch (const SemanticError& e) {
+            threw = true;
+            CHECK(std::string(e.msg).find(needle) != std::string::npos);
+        }
+        CHECK(threw);
+    };
+    expectModelError("friction 0.3", "no effect in a kinematic");            // nothing slides under a force
+    expectModelError("friction -0.1 world { gravity: 9.81 }", "cannot be negative");
+    {
+        Model m = buildFromText("mechanism m { ground g { anchor a at (0,0) } shaft s at g.a "
+                                "profile p on s { circle: 0.03 } touch g.a on p friction 0 "
+                                "world { gravity: 9.81 } }");
+        CHECK(m.touches[0].friction == 0.0);                    // zero is legal: frictionless
+    }
+
+    // ---- the brake, in closed form ------------------------------------------------------------------
+    // friction torque mu N R = 0.25 x 4 x 0.05 = 0.05 N m on I = 0.01: a constant 5 rad/s^2
+    {
+        const BrakeRun r = runBrake(0.25, 5.0, 0.01, 0.0005, 1.4);
+        CHECK(r.w.size() >= 6);
+        for (int i = 0; i < 4; ++i)                            // t = 0.2 .. 0.8, still sliding
+            CHECK_APPROX(r.w[(size_t)i], 5.0 - 5.0 * 0.2 * (i + 1), 1e-4);
+        CHECK(r.stopT > 0.99 && r.stopT < 1.03);              // 1 s, plus the creep tail
+        CHECK(std::fabs(r.wEnd) < 1e-4);                       // and it stays stopped
+        CHECK(!r.signFlipped);                                 // no overshoot through zero
+        CHECK_APPROX(r.N, 4.0, 1e-5);                          // the spring's force, undisturbed
+        CHECK_APPROX(r.shoeY, 0.05, 1e-9);                     // the shoe never moved
+        CHECK_APPROX(r.loss, r.ke0, 1e-4);                     // all of (1/2) I w^2 went to friction: 0.125 J
+        CHECK(std::fabs(r.ledger) < 1e-6);                     // and the ledger closes
+
+        // doubling mu doubles the deceleration; zero friction does not decelerate at all
+        const BrakeRun r2 = runBrake(0.5, 5.0, 0.01, 0.0005, 0.7);
+        CHECK_APPROX(r2.w[0], 5.0 - 10.0 * 0.2, 1e-4);
+        CHECK(r2.stopT > 0.49 && r2.stopT < 0.53);
+        const BrakeRun r0 = runBrake(0.0, 5.0, 0.01, 0.0005, 0.6);
+        CHECK_APPROX(r0.w[2], 5.0, 1e-9);
+        CHECK(r0.loss == 0.0);
+        // spinning the other way, friction opposes it just the same
+        const BrakeRun rn = runBrake(0.25, -5.0, 0.01, 0.0005, 1.2);
+        CHECK_APPROX(rn.w[1], -5.0 + 5.0 * 0.4, 1e-4);
+        CHECK_APPROX(rn.loss, rn.ke0, 1e-4);
+    }
+
+    // ---- stiffness: a light wheel, strong friction, a coarse step ---------------------------------------
+    // mu N / eps over the effective inertia would be ~1e5 /s: an explicit integrator with a
+    // fixed friction width would blow up. The width adapts, so it must not.
+    {
+        const BrakeRun r = runBrake(0.5, 40.0, 0.0001, 0.002, 1.0);
+        CHECK(std::isfinite(r.wEnd) && std::isfinite(r.loss));
+        CHECK(r.stopT > 0.035 && r.stopT < 0.06);              // mu N R / I = 1000 rad/s^2: 0.04 s
+        CHECK(std::fabs(r.wEnd) < 1e-3);
+        CHECK(!r.signFlipped);
+        CHECK_APPROX(r.loss, r.ke0, 2e-4);                     // 0.08 J
+    }
+
+    // ---- determinism ----------------------------------------------------------------------------------------
+    {
+        const BrakeRun a = runBrake(0.25, 5.0, 0.01, 0.0005, 0.6);
+        const BrakeRun b = runBrake(0.25, 5.0, 0.01, 0.0005, 0.6);
+        CHECK(a.w == b.w && a.loss == b.loss && a.wEnd == b.wEnd);
+    }
+}
+
+
+// ---- M7: time-series export ---------------------------------------------------------------
+
+std::vector<std::string> splitCsv(const std::string& line) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (char c : line) {
+        if (c == ',') { out.push_back(cur); cur.clear(); } else cur += c;
+    }
+    out.push_back(cur);
+    return out;
+}
+
+int colIndex(const std::vector<std::string>& cols, const std::string& name) {
+    for (size_t i = 0; i < cols.size(); ++i)
+        if (cols[i] == name) return (int)i;
+    return -1;
+}
+
+void testRecorder() {
+    std::printf("[record M7]\n");
+
+    // ---- kinematic: the eccentric disc through the Recorder ------------------------------
+    {
+        Model m = buildFromText(eccentricSrc("profile disc on cam.rim { circle: 0.03 }", "roller 0.006").c_str());
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        const int ifol = m.bodyIndex("follower");
+        const int itip = m.anchorIndex(ifol, "tip");
+        Recorder rec(m, nullptr, {Probe{ifol, itip}});
+        const std::vector<std::string>& cols = rec.columns();
+        CHECK(cols[0] == "t[s]");
+        for (const char* n : {"cam.theta[rad]", "follower.y[m]", "follower.tip.x[m]", "follower.tip.y[m]",
+                              "maxRes", "follower.tip@disc.gap[m]", "follower.tip@disc.foot.x[m]",
+                              "follower.tip@disc.normal[rad]"})
+            CHECK(colIndex(cols, n) >= 0);
+        CHECK(colIndex(cols, "KE[J]") < 0);                       // no energies in a kinematic run
+        CHECK(colIndex(cols, "follower.vx[m/s]") < 0);
+        CHECK(rec.headerLine().find('\n') == std::string::npos);
+        {   // names are unique and the header has exactly one cell per column
+            CHECK(splitCsv(rec.headerLine()).size() == cols.size());
+            for (size_t i = 0; i < cols.size(); ++i)
+                for (size_t j = i + 1; j < cols.size(); ++j) CHECK(cols[i] != cols[j]);
+        }
+        const int iy = colIndex(cols, "follower.y[m]"), ipy = colIndex(cols, "follower.tip.y[m]");
+        const int igap = colIndex(cols, "follower.tip@disc.gap[m]");
+        const int ith = colIndex(cols, "cam.theta[rad]"), inorm = colIndex(cols, "follower.tip@disc.normal[rad]");
+        const int ifx = colIndex(cols, "follower.tip@disc.foot.x[m]");
+        double worstY = 0.0, worstProbe = 0.0, worstGap = 0.0, worstRound = 0.0;
+        for (int k = 0; k <= 72; ++k) {                           // one turn, 5 degrees a step
+            const double t = k / 6.0;
+            sys.solve(q, t, iters, &res);
+            const std::vector<double> row = rec.sample(t, q, {}, sys.maxResidual(q, t));
+            CHECK(row.size() == cols.size());
+            worstY = std::max(worstY, std::fabs(row[(size_t)iy] - eccentricY(row[(size_t)ith], 0.006)));
+            worstProbe = std::max(worstProbe, std::fabs(row[(size_t)ipy] - row[(size_t)iy]));   // tip at the origin
+            worstGap = std::max(worstGap, std::fabs(row[(size_t)igap]));                        // in contact throughout
+            // the foot lies on the disc: |foot - rim centre| = R, the rim centre being e off the axle
+            const double th = row[(size_t)ith];
+            const Vec2 centre{0.010 * std::cos(th), 0.010 * std::sin(th)};
+            const Vec2 foot{row[(size_t)ifx], row[(size_t)ifx + 1]};
+            CHECK_APPROX(vlen(foot - centre), 0.030, 1e-9);
+            // and the normal points from the disc centre through the foot
+            const Vec2 n = normalize(foot - centre);
+            CHECK_APPROX(std::atan2(n.y, n.x), row[(size_t)inorm], 1e-9);
+            // the CSV text round-trips every value to 12 significant digits
+            const std::vector<std::string> cells = splitCsv(Recorder::csvLine(row));
+            CHECK(cells.size() == row.size());
+            for (size_t i = 0; i < row.size(); ++i)
+                worstRound = std::max(worstRound, std::fabs(std::strtod(cells[i].c_str(), nullptr) - row[i]) /
+                                                      std::max(1e-300, std::max(1e-9, std::fabs(row[i]))));
+        }
+        CHECK(worstY < 1e-9);          // the exported follower height IS the closed form
+        CHECK(worstProbe < 1e-12);
+        CHECK(worstGap < 1e-9);
+        CHECK(worstRound < 1e-10);
+    }
+
+    // ---- two independent routes to the same number ----------------------------------------------
+    // The cam synthesizer's design pressure angle comes from a FORMULA (tan a = s'/r); the
+    // Recorder's contact normal comes from the SOLVED geometry. They must agree.
+    {
+        Model m = buildFromText(plateCamSrc(kCamBody, "30").c_str());
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        Recorder rec(m, nullptr, {});
+        const int inorm = colIndex(rec.columns(), "follower.tip@lobe.normal[rad]");
+        const int ith = colIndex(rec.columns(), "cam.theta[rad]");
+        CHECK(inorm >= 0 && ith >= 0);
+        double maxAlpha = 0.0, atTheta = 0.0;
+        for (int k = 0; k <= 360; ++k) {                          // one turn, 1 degree a step
+            const double t = k / 30.0;
+            sys.solve(q, t, iters, &res);
+            const std::vector<double> row = rec.sample(t, q, {}, 0.0);
+            const double alpha = std::fabs(row[(size_t)inorm] - kPi / 2.0);   // vertical rail
+            if (alpha > maxAlpha) { maxAlpha = alpha; atTheta = std::fmod(row[(size_t)ith], 2.0 * kPi); }
+        }
+        CHECK_APPROX(rad2deg(maxAlpha), rad2deg(m.cams[0].maxPressure), 0.05);     // 20.59 deg, both ways
+        // and at the same cam angle, to the 1 degree grid (46.7 designed, 46.6 measured)
+        CHECK_APPROX(rad2deg(atTheta), rad2deg(m.cams[0].maxPressureAt), 1.0);
+    }
+
+    // ---- dynamic: the brake's energy, force and ledger as time series ----------------------------
+    {
+        Model m = buildFromText(brakeSrc(0.25, 0.01, 0.0005).c_str());
+        ConstraintSystem sys(m);
+        DynamicsSystem dyn(m, sys);
+        std::vector<double> q, qd((size_t)m.nq(), 0.0);
+        m.assemble(q);
+        int iters = 0;
+        double res = 0.0;
+        sys.solve(q, 0.0, iters, &res);
+        dyn.projectVelocities(q, qd);
+        const int iw = m.bodyIndex("wheel");
+        qd[(size_t)m.bodies[iw].qOffset] = 5.0;
+        const double E0 = dyn.kinetic(q, qd) + dyn.potential(q);
+        Recorder rec(m, &dyn, {});
+        rec.setBaseline(E0);
+        const std::vector<std::string>& cols = rec.columns();
+        for (const char* n : {"wheel.omega[rad/s]", "shoe.tip@rim.N[N]", "shoe.tip@rim.engaged", "KE[J]", "PE[J]",
+                              "E[J]", "ledger.friction[J]", "ledger.residual[J]"})
+            CHECK(colIndex(cols, n) >= 0);
+        CHECK(colIndex(cols, "drive.wheel[N*m]") < 0);            // no rate drive here
+        const int iw_ = colIndex(cols, "wheel.omega[rad/s]"), iN = colIndex(cols, "shoe.tip@rim.N[N]");
+        const int ie = colIndex(cols, "shoe.tip@rim.engaged"), iKE = colIndex(cols, "KE[J]");
+        const int iPE = colIndex(cols, "PE[J]"), iE = colIndex(cols, "E[J]");
+        const int iFr = colIndex(cols, "ledger.friction[J]"), iRes = colIndex(cols, "ledger.residual[J]");
+        double worstRes = 0.0, worstN = 0.0, worstE = 0.0, worstDecel = 0.0, prevKE = 1e9;
+        bool monotone = true, always = true;
+        std::vector<double> last;
+        for (long k = 0; k <= 1600; ++k) {                        // 0.8 s
+            if (k > 0) dyn.step(q, qd, (k - 1) * m.world.step);
+            if (k % 100 != 0) continue;
+            const double t = k * m.world.step;
+            const std::vector<double> row = rec.sample(t, q, qd, sys.maxResidual(q, t));
+            CHECK(row.size() == cols.size());
+            worstRes = std::max(worstRes, std::fabs(row[(size_t)iRes]));
+            worstN = std::max(worstN, std::fabs(row[(size_t)iN] - 4.0));
+            worstE = std::max(worstE, std::fabs(row[(size_t)iE] - (row[(size_t)iKE] + row[(size_t)iPE])));
+            always = always && row[(size_t)ie] == 1.0;
+            if (row[(size_t)iKE] > prevKE + 1e-12) monotone = false;
+            prevKE = row[(size_t)iKE];
+            if (t > 0.0) worstDecel = std::max(worstDecel, std::fabs(row[(size_t)iw_] - (5.0 - 5.0 * t)));
+            last = row;
+        }
+        CHECK(worstRes < 1e-6);        // the ledger closes at every sample, not just at the end
+        CHECK(worstN < 1e-5);          // the spring's 4 N, as a column
+        CHECK(worstE < 1e-12);
+        CHECK(worstDecel < 1e-3);      // the wheel decelerates at 5 rad/s^2 (and is still sliding at 0.8 s)
+        CHECK(always && monotone);     // always on the curve; kinetic energy only ever falls
+        CHECK_APPROX(last[(size_t)iFr], 0.5 * 0.01 * (25.0 - 1.0), 1e-3);   // friction so far: (1/2) I (w0^2 - w^2)
+    }
+
+    // ---- the command line, end to end -------------------------------------------------------------
+    if (std::ifstream("./mech")) {
+        auto run = [&](const std::string& args) {
+            const int st = std::system(("./mech run " + args + " >/dev/null 2>&1").c_str());
+            return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+        };
+        char tmpl[] = "/tmp/mech_csv_XXXXXX";
+        const int fd = mkstemp(tmpl);
+        if (fd >= 0) close(fd);
+        const std::string out = tmpl;
+
+        CHECK(run("examples/eccentric.mech --headless 1 --csv " + out + " --every 6 --probe follower.tip") == 0);
+        {
+            std::ifstream in(out);
+            std::string line;
+            std::getline(in, line);
+            const std::vector<std::string> head = splitCsv(line);
+            CHECK(colIndex(head, "follower.tip.y[m]") >= 0);
+            const int iy = colIndex(head, "follower.y[m]"), it = colIndex(head, "t[s]");
+            int rows = 0;
+            double lastT = 0.0, worst = 0.0;
+            while (std::getline(in, line)) {
+                const std::vector<std::string> cells = splitCsv(line);
+                CHECK(cells.size() == head.size());
+                const double th = deg2rad(360.0) * std::strtod(cells[(size_t)it].c_str(), nullptr);   // 60 rpm
+                worst = std::max(worst, std::fabs(std::strtod(cells[(size_t)iy].c_str(), nullptr) - eccentricY(th, 0.006)));
+                lastT = std::strtod(cells[(size_t)it].c_str(), nullptr);
+                ++rows;
+            }
+            CHECK(rows == 11);                          // t = 0 plus every 6th of 60 frames
+            CHECK_APPROX(lastT, 1.0, 1e-9);
+            CHECK(worst < 1e-8);                        // the file holds the closed form
+        }
+        CHECK(run("examples/jumpcam.mech --headless 0.05 --csv " + out + " --every 10") == 0);
+        {
+            std::ifstream in(out);
+            std::string line;
+            std::getline(in, line);
+            CHECK(colIndex(splitCsv(line), "ledger.residual[J]") >= 0);   // dynamic files carry the ledger
+        }
+        // misuse is refused with a nonzero status, not silently ignored
+        CHECK(run("examples/eccentric.mech --headless 1 --probe nope.tip") != 0);
+        CHECK(run("examples/eccentric.mech --headless 1 --probe frame.rail") != 0);     // ground never moves
+        CHECK(run("examples/eccentric.mech --csv " + out) != 0);                         // needs --headless
+        CHECK(run("examples/eccentric.mech --headless 1 --every 0") != 0);
+        CHECK(run("examples/jumpcam.mech --headless 0.1 --dt 0.01") != 0);               // dynamic: world step rules
+        CHECK(run("examples/eccentric.mech --headless 1 --dt 0.1 --csv " + out) == 0);   // kinematic: dt is fine
+        unlink(tmpl);
+    } else {
+        std::fprintf(stderr, "note: ./mech not found (cwd?); skipping the command-line checks\n");
+    }
+}
+
+
+// ---- M8: parameters, expressions and sweeps --------------------------------------------------
+
+Program parseWith(const std::string& src, const ParamOverrides& ov = {}) {
+    return parse(lex(src), ov);
+}
+
+// the value of `rod a { length: <expr> }` in a one-rod mechanism
+double evalExpr(const std::string& expr, const std::string& params = "") {
+    const Program p = parseWith("mechanism m { " + params + " ground g { anchor p at (0, 0) } "
+                                "rod a { length: " + expr + " } }");
+    return p.mechanisms[0].bodies[1].props.at("length");
+}
+
+bool parseFails(const std::string& src, const char* needle, const ParamOverrides& ov = {}) {
+    try {
+        parseWith(src, ov);
+    } catch (const ParseError& e) {
+        return std::string(e.msg).find(needle) != std::string::npos;
+    }
+    return false;
+}
+
+void testParams() {
+    std::printf("[params M8]\n");
+
+    // ---- tokens: the new operators, and the old ones undisturbed -----------------------------
+    {
+        const std::vector<Token> t = lex("a = 2*3/4 + 1 // a comment");
+        std::vector<std::string> syms;
+        for (const Token& k : t) if (k.type == Tok::Sym) syms.push_back(k.text);
+        CHECK((syms == std::vector<std::string>{"=", "*", "/", "+"}));          // "//" was a comment
+        const std::vector<Token> u = lex("drive x at 30 deg/s");
+        bool sawUnit = false;
+        for (const Token& k : u) if (k.type == Tok::UnitDegPerSec) sawUnit = true;
+        CHECK(sawUnit);                                                          // "deg/s" is still one unit
+    }
+
+    // ---- expression evaluation ------------------------------------------------------------------
+    CHECK_APPROX(evalExpr("2 + 3 * 4"), 14.0, 1e-15);                            // precedence
+    CHECK_APPROX(evalExpr("(2 + 3) * 4"), 20.0, 1e-15);
+    CHECK_APPROX(evalExpr("10 - 4 - 3"), 3.0, 1e-15);                            // left-associative
+    CHECK_APPROX(evalExpr("100 / 10 / 5"), 2.0, 1e-15);
+    CHECK_APPROX(evalExpr("2 * -3 + 10"), 4.0, 1e-15);                           // unary minus
+    CHECK_APPROX(evalExpr("-(2 + 3) + 8"), 3.0, 1e-15);
+    CHECK_APPROX(evalExpr("+4"), 4.0, 1e-15);
+    CHECK_APPROX(evalExpr("pi"), kPi, 1e-15);
+    CHECK_APPROX(evalExpr("2 * pi * 0.5"), kPi, 1e-15);
+    CHECK_APPROX(evalExpr("sqrt(16)"), 4.0, 1e-15);
+    CHECK_APPROX(evalExpr("sqrt(3*3 + 4*4)"), 5.0, 1e-15);
+    CHECK_APPROX(evalExpr("sin(pi / 2)"), 1.0, 1e-15);
+    CHECK_APPROX(evalExpr("cos(0) + tan(0) + atan(0)"), 1.0, 1e-15);
+    CHECK_APPROX(evalExpr("abs(-7.5)"), 7.5, 1e-15);
+    CHECK_APPROX(evalExpr("min(3, 8) + max(3, 8)"), 11.0, 1e-15);
+    CHECK_APPROX(evalExpr("pow(2, 10)"), 1024.0, 1e-12);
+    CHECK_APPROX(evalExpr("L * 2 + k", "param L = 0.25  param k = 1 / 4"), 0.75, 1e-15);   // params, and params of params
+    CHECK_APPROX(evalExpr("b", "param a = 3 param b = a * a + 1"), 10.0, 1e-15);
+
+    // a unit word after a number ends the expression exactly as before
+    {
+        const Program p = parseWith("mechanism m { ground g { anchor p at (0,0) } rod a { length: 1 } "
+                                    "drive a at 30 + 6 deg/s from 90 - 30 deg }");
+        const DriveDecl& d = p.mechanisms[0].drives[0];
+        CHECK_APPROX(d.omegaRad, deg2rad(36.0), 1e-12);                          // (30 + 6) deg/s
+        CHECK_APPROX(d.theta0Rad, deg2rad(60.0), 1e-12);                         // (90 - 30) deg
+    }
+
+    // ---- diagnostics ----------------------------------------------------------------------------------
+    CHECK(parseFails("mechanism m { ground g { anchor p at (0,0) } rod a { length: 1 / 0 } }", "division by zero"));
+    CHECK(parseFails("mechanism m { ground g { anchor p at (0,0) } rod a { length: foo } }", "declare it with 'param foo"));
+    CHECK(parseFails("mechanism m { ground g { anchor p at (0,0) } rod a { length: sqrt(-1) } }", "negative"));
+    CHECK(parseFails("mechanism m { ground g { anchor p at (0,0) } rod a { length: min(1) } }", "two arguments"));
+    CHECK(parseFails("mechanism m { ground g { anchor p at (0,0) } rod a { length: sqrt(1, 2) } }", "one argument"));
+    CHECK(parseFails("mechanism m { ground g { anchor p at (0,0) } rod a { length: (1 + 2 } }", "expected ')'"));
+    CHECK(parseFails("mechanism m { param a = 1 param a = 2 }", "already declared"));
+    CHECK(parseFails("mechanism m { param sqrt = 2 }", "cannot be a parameter name"));
+    CHECK(parseFails("mechanism m { param base = 2 }", "cannot be a parameter name"));
+    CHECK(parseFails("mechanism m { param pi = 3 }", "cannot be a parameter name"));
+    CHECK(parseFails("mechanism m { param a = }", "expected number"));
+    CHECK(parseFails("mechanism m { param a 3 }", "expected '='"));
+    // a parameter is not visible before it is declared, nor in another mechanism
+    CHECK(parseFails("mechanism m { ground g { anchor p at (0,0) } rod a { length: late } param late = 2 }", "not a number"));
+    CHECK(parseFails("mechanism a { param x = 1 } mechanism b { ground g { anchor p at (x, 0) } }", "not a number"));
+
+    // ---- overrides -------------------------------------------------------------------------------------
+    {
+        const std::string src = "mechanism m { param L = 0.25 param twice = L * 2 "
+                                "ground g { anchor p at (0,0) } rod a { length: twice } }";
+        const Program d = parseWith(src);
+        CHECK_APPROX(d.mechanisms[0].bodies[1].props.at("length"), 0.5, 1e-15);
+        CHECK(d.mechanisms[0].params.size() == 2 && !d.mechanisms[0].params[0].overridden);
+        const Program o = parseWith(src, {{"L", 1.0}});
+        CHECK_APPROX(o.mechanisms[0].bodies[1].props.at("length"), 2.0, 1e-15);   // dependents recompute
+        CHECK(o.mechanisms[0].params[0].overridden);
+        CHECK_APPROX(o.mechanisms[0].params[0].declared, 0.25, 1e-15);            // the file's own value is kept
+        CHECK_APPROX(o.mechanisms[0].params[0].value, 1.0, 1e-15);
+        const Program both = parseWith(src, {{"twice", 7.0}});                    // overriding the derived one wins
+        CHECK_APPROX(both.mechanisms[0].bodies[1].props.at("length"), 7.0, 1e-15);
+        // a name the file does not declare is an error that lists what it does
+        CHECK(parseFails(src, "no such parameter", {{"M", 1.0}}));
+        CHECK(parseFails(src, "it declares: L, twice", {{"M", 1.0}}));
+        CHECK(parseFails("mechanism m { ground g { anchor p at (0,0) } }", "it declares none", {{"x", 1.0}}));
+    }
+
+    // ---- a parameter works wherever a number does: defaults equal the literal file ---------------------
+    {
+        const std::string lit =
+            "mechanism m { world { gravity: 9.81 step: 0.001 } ground g { anchor a at (0, 0) anchor b at (0.1, 0) } "
+            "shaft s at g.a  body w { anchor c at (0, 0) mass: 0.5 from: 20 deg } pin w.c -> g.b "
+            "profile pg on w.c { polygon: (0.03, 0) (0, 0.03) (-0.03, 0) (0, -0.03) fillet 0.004 } "
+            "profile pe on s { ellipse: 0.05 0.04 focus } profile pp on s { polar: (0 deg, 0.03) (120 deg, 0.04) (240 deg, 0.035) } "
+            "cam lobe on s { base 0.025 roller 0.006 start 80 deg rise 0.012 over 100 deg harmonic dwell 60 deg "
+            "return over 140 deg dwell } "
+            "touch s.A on pg restitution 0.3 friction 0.2 roller 0.002 "
+            "drive s at 30 rpm from 10 deg }";
+        const std::string par =
+            "mechanism m { param gv = 9.81 param stp = 0.001 param span = 0.1 param ms = 0.5 param a0 = 20 "
+            "param r4 = 0.03 param fil = 0.004 param ea = 0.05 param eb = 0.04 param base_r = 0.025 param ro = 0.006 "
+            "param st = 80 param lift = 0.012 param rise_deg = 100 param dw = 60 param ret = 140 "
+            "param rest = 0.3 param mu = 0.2 param spd = 30 param ph = 10 "
+            "world { gravity: gv step: stp } ground g { anchor a at (0, 0) anchor b at (span, 0) } "
+            "shaft s at g.a  body w { anchor c at (0, 0) mass: ms from: a0 deg } pin w.c -> g.b "
+            "profile pg on w.c { polygon: (r4, 0) (0, r4) (-r4, 0) (0, -r4) fillet fil } "
+            "profile pe on s { ellipse: ea eb focus } profile pp on s { polar: (0 deg, r4) (120 deg, r4 + 0.01) (240 deg, 0.035) } "
+            "cam lobe on s { base base_r roller ro start st deg rise lift over rise_deg deg harmonic dwell dw deg "
+            "return over ret deg dwell } "
+            "touch s.A on pg restitution rest friction mu roller 0.002 "
+            "drive s at spd rpm from ph deg }";
+        Model ml = buildFromText(lit.c_str()), mp = buildFromText(par.c_str());
+        CHECK(mp.bodies.size() == ml.bodies.size() && mp.profiles.size() == ml.profiles.size());
+        CHECK(mp.world.gravity == ml.world.gravity && mp.world.step == ml.world.step);
+        CHECK(mp.cams.size() == 1 && mp.cams[0].maxLift == ml.cams[0].maxLift);
+        CHECK(mp.profiles[1].curve->ellipseA() == ml.profiles[1].curve->ellipseA());
+        CHECK(mp.touches[0].friction == ml.touches[0].friction && mp.touches[0].restitution == 0.3);
+        CHECK(mp.drives[0].omegaRad == ml.drives[0].omegaRad && mp.drives[0].theta0Rad == ml.drives[0].theta0Rad);
+        // `dwell` takes an expression too, and a bare `dwell` is still "the rest of the turn"
+        CHECK(mp.cams[0].spec.segments.size() == 4 && mp.cams[0].spec.segments[3].restOfTurn);
+        CHECK_APPROX(mp.cams[0].spec.segments[1].angle, deg2rad(60.0), 1e-15);
+        std::vector<double> ql, qp;
+        ml.assemble(ql);
+        mp.assemble(qp);
+        CHECK(ql == qp);                                                            // bit for bit
+    }
+
+    // ---- sweep axes ----------------------------------------------------------------------------------------
+    {
+        SweepAxis a;
+        std::string err;
+        CHECK(parseAxis("x=0:1:0.25", a, err) && a.name == "x" && a.values.size() == 5);
+        CHECK_APPROX(a.values[4], 1.0, 1e-12);                                      // the end is included
+        CHECK(parseAxis("x=0:1:0.1", a, err) && a.values.size() == 11);              // no float drift past 1
+        CHECK(parseAxis("x=10:0:-5", a, err) && a.values.size() == 3 && a.values[2] == 0.0);   // descending
+        CHECK(parseAxis("x=1,2.5,7", a, err) && a.values.size() == 3 && a.values[1] == 2.5);
+        CHECK(parseAxis("x=3", a, err) && a.values.size() == 1);
+        CHECK(!parseAxis("x", a, err));
+        CHECK(!parseAxis("=3", a, err));
+        CHECK(!parseAxis("x=abc", a, err) && err.find("not a number") != std::string::npos);
+        CHECK(!parseAxis("x=0:1:0", a, err));
+        CHECK(!parseAxis("x=0:1:-0.1", a, err) && err.find("never reaches") != std::string::npos);
+        CHECK(!parseAxis("x=0:1", a, err));
+        CHECK(!parseAxis("x=0:1:1e-9", a, err) && err.find("values") != std::string::npos);   // too many
+        // 0.3 / 0.1 is 2.9999999999999996 in doubles: the endpoint must still be counted
+        CHECK(parseAxis("x=0:0.3:0.1", a, err) && a.values.size() == 4);
+        CHECK_APPROX(a.values[3], 0.3, 1e-12);
+    }
+
+    // ---- sweeps: a kinematic file against its closed form ---------------------------------------------------
+    {
+        // `final:arm.theta` after 1 s at w deg/s is exactly w degrees, for every cell of a grid
+        const std::string src = "mechanism spin { param w = 30  param len = 0.2 "
+                                "ground frame { anchor axle at (0, 0) } rod arm on frame.axle { length: len } "
+                                "drive arm at w deg/s }";
+        SweepAxis aw, al;
+        std::string err;
+        CHECK(parseAxis("w=30:90:30", aw, err));
+        CHECK(parseAxis("len=0.1,0.3", al, err));
+        SweepOptions opt;
+        opt.seconds = 1.0;
+        opt.reports = {"final:arm.theta", "maxres", "max:arm.B.x"};
+        opt.probes = {"arm.B"};
+        const SweepResult r = runSweep(src, {aw, al}, opt);
+        CHECK(r.rows.size() == 6 && !r.dynamic);
+        CHECK(r.axisNames.size() == 2 && r.axisNames[0] == "w" && r.metricLabels.size() == 3);
+        for (size_t i = 0; i < r.rows.size(); ++i) {
+            const SweepRow& row = r.rows[i];
+            CHECK(row.error.empty());
+            CHECK_APPROX(row.params[0], 30.0 + 30.0 * (double)(i / 2), 1e-12);     // first axis slowest
+            CHECK_APPROX(row.params[1], i % 2 ? 0.3 : 0.1, 1e-12);
+            CHECK_APPROX(row.metrics[0], deg2rad(row.params[0]), 1e-9);              // theta = w t
+            CHECK(row.metrics[1] < 1e-9);
+            CHECK(row.metrics[2] <= row.params[1] + 1e-9 && row.metrics[2] > 0.0);   // the tip stays within the rod's reach
+        }
+    }
+    {   // the eccentric's highest and lowest point are R + rho -/+ e
+        std::ifstream in("examples/eccentric.mech");
+        if (in) {
+            std::stringstream ss;
+            ss << in.rdbuf();
+            SweepAxis ae;
+            std::string err;
+            CHECK(parseAxis("e=0.005:0.02:0.005", ae, err));
+            SweepOptions opt;
+            opt.seconds = 1.0;
+            opt.reports = {"max:follower.y", "min:follower.y"};      // unit omitted: resolves to follower.y[m]
+            const SweepResult r = runSweep(ss.str(), {ae}, opt);
+            CHECK(r.rows.size() == 4);
+            for (const SweepRow& row : r.rows) {
+                CHECK(row.error.empty());
+                CHECK_APPROX(row.metrics[0], 0.036 + row.params[0], 1e-9);
+                CHECK_APPROX(row.metrics[1], 0.036 - row.params[0], 1e-9);
+            }
+        }
+    }
+
+    // ---- sweeps: a dynamic file against Newton's law ---------------------------------------------------------
+    // The jump-cam's follower lets go once the contact force would have to go negative:
+    //   N cos(alpha) = m (w^2 s'' + g) + k (y - rest) = 0  at  w^2 = (g + k (y - rest)/m) / (-s'')
+    // The critical speed is the smallest such w over the cycle.
+    {
+        std::ifstream in("examples/jumpcam.mech");
+        if (in) {
+            std::stringstream ss;
+            ss << in.rdbuf();
+            const std::string src = ss.str();
+            Model m = buildModel(parseWith(src).mechanisms[0]);
+            CamDiagram dia;
+            CamError ce;
+            CHECK(dia.build(m.cams[0].spec, ce));
+            double w2min = 1e300;
+            for (int k = 0; k < 360000; ++k) {
+                double sv, ds, dds;
+                dia.eval(2.0 * kPi * k / 360000.0, sv, ds, dds);
+                if (dds < -1e-9) w2min = std::min(w2min, (9.81 + 200.0 * (0.031 + sv - 0.020) / 0.1) / (-dds));
+            }
+            const double rpmCrit = std::sqrt(w2min) * 30.0 / kPi;               // 443.9 rpm
+            CHECK_APPROX(rpmCrit, 443.9, 0.1);
+
+            SweepAxis as;
+            std::string err;
+            CHECK(parseAxis("speed=420:470:2", as, err));
+            SweepOptions opt;
+            opt.seconds = 0.25;
+            opt.reports = {"liftoffs", "ledger"};
+            const SweepResult r = runSweep(src, {as}, opt);
+            CHECK(r.dynamic && r.rows.size() == 26);
+            double first = -1.0;
+            bool monotone = true, ledgerOk = true;
+            for (size_t i = 0; i < r.rows.size(); ++i) {
+                CHECK(r.rows[i].error.empty());
+                if (r.rows[i].metrics[0] > 0.0 && first < 0.0) first = r.rows[i].params[0];
+                if (first >= 0.0 && r.rows[i].metrics[0] == 0.0) monotone = false;   // once it jumps it keeps jumping
+                ledgerOk = ledgerOk && r.rows[i].metrics[1] < 1e-5;
+            }
+            CHECK(first > 0.0);
+            // never early (the force cannot vanish below the critical speed), and within one step of it
+            CHECK(first >= rpmCrit - 0.5);
+            CHECK(first <= rpmCrit + 2.0);
+            CHECK(monotone);
+            CHECK(ledgerOk);               // the books close in every run of the sweep
+        }
+    }
+
+    // ---- metric reductions against their definitions ------------------------------------------------------------
+    {
+        // theta = w t is an arithmetic progression over the samples, so its mean is (first + last) / 2
+        const std::string src = "mechanism spin { param w = 30 "
+                                "ground frame { anchor axle at (0, 0) } rod arm on frame.axle { length: 0.2 } "
+                                "drive arm at w deg/s }";
+        SweepAxis aw;
+        std::string err;
+        CHECK(parseAxis("w=30,90", aw, err));
+        SweepOptions opt;
+        opt.seconds = 1.0;
+        opt.reports = {"mean:arm.theta", "min:arm.theta", "max:arm.theta", "final:arm.theta"};
+        const SweepResult r = runSweep(src, {aw}, opt);
+        CHECK(r.rows.size() == 2 && r.rows[0].error.empty());
+        for (const SweepRow& row : r.rows) {
+            CHECK_APPROX(row.metrics[0], deg2rad(row.params[0]) / 2.0, 1e-9);
+            CHECK_APPROX(row.metrics[1], 0.0, 1e-12);
+            CHECK_APPROX(row.metrics[2], deg2rad(row.params[0]), 1e-9);
+            CHECK_APPROX(row.metrics[3], row.metrics[2], 1e-12);
+        }
+    }
+    {
+        // the ledger metric is the worst |residual|, and the residual of this pendulum swings both ways
+        // with the negative side the larger (-4.0e-10 against +3.3e-11)
+        const std::string src = "mechanism p { param a0 = 60 world { gravity: 9.81 } "
+                                "ground frame { anchor pivot at (0, 0) } rod arm { length: 1.0, from: a0 deg } on frame.pivot }";
+        SweepAxis aa;
+        std::string err;
+        CHECK(parseAxis("a0=60", aa, err));
+        SweepOptions opt;
+        opt.seconds = 2.0;
+        opt.reports = {"ledger"};
+        const SweepResult r = runSweep(src, {aa}, opt);
+        CHECK(r.rows.size() == 1 && r.rows[0].error.empty());
+        const Model m = buildFromText(src.c_str());
+        const SimSeries s = simulate(m, opt.seconds, opt.dt, {}, 1);
+        int c = -1;
+        for (size_t i = 0; i < s.columns.size(); ++i) if (s.columns[i] == "ledger.residual[J]") c = (int)i;
+        CHECK(c >= 0);
+        double lo = 0.0, hi = 0.0, worst = 0.0;
+        for (const auto& row : s.rows) {
+            lo = std::min(lo, row[(size_t)c]);
+            hi = std::max(hi, row[(size_t)c]);
+            worst = std::max(worst, std::fabs(row[(size_t)c]));
+        }
+        CHECK(lo < 0.0 && -lo > hi);                                  // so dropping fabs would change the answer
+        CHECK(r.rows[0].metrics[0] == worst);
+    }
+
+    // ---- a design that becomes invalid partway reports it in its own row -------------------------------------
+    {
+        const std::string src =
+            "mechanism c { param span = 100 "
+            "ground frame { anchor axle at (0, 0)  anchor rail at (0, 0.09) dir (0, 1) } shaft cam at frame.axle "
+            "cam lobe on cam.A { base 0.025 roller 0.006 rise 0.012 over span deg cycloidal dwell 60 deg "
+            "return over 140 deg modtrap dwell } "
+            "body follower { anchor tip at (0, 0) dir (1, 0) } slide follower.tip -> frame.rail "
+            "touch follower.tip on lobe drive cam at 30 deg/s }";
+        SweepAxis a;
+        std::string err;
+        CHECK(parseAxis("span=100,30,10,60", a, err));
+        SweepOptions opt;
+        opt.seconds = 12.0;                  // one full turn at 30 deg/s
+        opt.reports = {"max:follower.y"};
+        const SweepResult r = runSweep(src, {a}, opt);
+        CHECK(r.rows.size() == 4);
+        CHECK(r.rows[0].error.empty() && r.rows[1].error.empty());
+        CHECK(r.rows[2].error.find("undercut") != std::string::npos);            // the compiler's own message
+        CHECK(std::isnan(r.rows[2].metrics[0]));
+        CHECK(r.rows[3].error.empty());                                          // and the sweep carried on past it
+        CHECK_APPROX(r.rows[3].metrics[0], 0.043, 1e-6);
+    }
+
+    // ---- refusals that make the whole sweep meaningless ------------------------------------------------------
+    {
+        const std::string src = "mechanism spin { param w = 30 ground frame { anchor axle at (0, 0) } "
+                                "rod arm on frame.axle { length: 0.2 } drive arm at w deg/s }";
+        SweepAxis a;
+        std::string err;
+        parseAxis("w=30,60", a, err);
+        auto throwsWith = [&](const SweepAxis& ax, const SweepOptions& o, const char* needle) {
+            try {
+                runSweep(src, {ax}, o);
+            } catch (const std::runtime_error& e) {
+                return std::string(e.what()).find(needle) != std::string::npos;
+            }
+            return false;
+        };
+        SweepOptions ok;
+        CHECK(!throwsWith(a, ok, "x"));                                          // sanity: the plain sweep runs
+        SweepAxis typo;
+        parseAxis("ww=1,2", typo, err);
+        CHECK(throwsWith(typo, ok, "no such parameter"));
+        SweepOptions bad;
+        bad.reports = {"max:nope"};
+        CHECK(throwsWith(a, bad, "no recorded column"));
+        bad.reports = {"liftoffs"};
+        CHECK(throwsWith(a, bad, "needs a dynamic file"));
+        bad.reports = {"median:arm.theta"};
+        CHECK(throwsWith(a, bad, "unknown report kind"));
+        bad.reports = {};
+        bad.probes = {"frame.axle"};
+        CHECK(throwsWith(a, bad, "moving body.anchor"));
+        SweepAxis huge;
+        parseAxis("w=0:4999:1", huge, err);
+        SweepAxis huge2;
+        parseAxis("w=0:2:1", huge2, err);
+        // a grid of 5000 x 3 is refused up front rather than run for an hour
+        try {
+            runSweep(src, {huge, huge2}, ok);
+            CHECK(false);
+        } catch (const std::runtime_error& e) {
+            CHECK(std::string(e.what()).find("5000") != std::string::npos);
+        }
+    }
+
+    // ---- the command line, end to end ---------------------------------------------------------------------------
+    if (std::ifstream("./mech")) {
+        auto sh = [&](const std::string& cmd) {
+            const int st = std::system((cmd + " >/dev/null 2>&1").c_str());
+            return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+        };
+        char tmpl[] = "/tmp/mech_sweep_XXXXXX";
+        const int fd = mkstemp(tmpl);
+        if (fd >= 0) close(fd);
+        const std::string out = tmpl;
+        CHECK(sh("./mech sweep examples/jumpcam.mech --set speed=300,600 --time 0.1 --report liftoffs --csv " + out) == 0);
+        {
+            std::ifstream in(out);
+            std::string line;
+            std::getline(in, line);
+            CHECK(line == "speed,liftoffs,error");
+            std::getline(in, line);
+            CHECK(line.rfind("300,0,", 0) == 0);                                  // 300 rpm: never lets go
+            std::getline(in, line);
+            CHECK(line.rfind("600,", 0) == 0 && line != "600,0,");                // 600 rpm: it does
+        }
+        CHECK(sh("./mech check examples/jumpcam.mech --set speed=300") == 0);
+        CHECK(sh("./mech check examples/jumpcam.mech --set sped=300") != 0);      // a typo is an error
+        CHECK(sh("./mech check examples/jumpcam.mech --set speed=fast") != 0);
+        CHECK(sh("./mech run examples/jumpcam.mech --headless 0.1 --set speed=300") == 0);
+        CHECK(sh("./mech sweep examples/jumpcam.mech") != 0);                      // nothing to sweep
+        CHECK(sh("./mech sweep examples/jumpcam.mech --set speed=1:2") != 0);      // bad range
+        CHECK(sh("./mech sweep examples/jumpcam.mech --set sped=1,2") != 0);
+        CHECK(sh("./mech sweep examples/jumpcam.mech --set speed=300 --report max:nope") != 0);
+        unlink(tmpl);
+    } else {
+        std::fprintf(stderr, "note: ./mech not found (cwd?); skipping the command-line checks\n");
     }
 }
 
@@ -5121,6 +5970,9 @@ int runAllTests() {
     testContactDynamics();
     testNonCircularMesh();
     testPolygonRatchet();
+    testFriction();
+    testRecorder();
+    testParams();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

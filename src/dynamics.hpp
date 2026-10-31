@@ -29,6 +29,7 @@ struct HybridStats {
                                   // and by contact impacts (M6c)
     long liftoffs = 0;            // M6c: contacts that separated
     long impacts = 0;             // M6c: contacts that touched down again
+    double frictionLoss = 0.0;    // M6f: J dissipated by contact friction (integral of F_t |slip|)
     double driveWork = 0.0;       // M6c: J delivered by rate drives (reaction x rate) and
                                   // torque drives (torque x angular velocity)
 };
@@ -127,6 +128,8 @@ private:
     mutable std::vector<double> lastReaction_;
     mutable std::vector<double> lastContact_;
     mutable double lastDriveWork_ = 0.0;   // J of the last integrate() call
+    mutable double lastFrictionLoss_ = 0.0; // J dissipated by friction in the last integrate()
+    mutable double lastFrictionPower_ = 0.0; // W dissipated at the last acceleration solve
     mutable HybridStats stats_;
 };
 

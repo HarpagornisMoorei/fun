@@ -1,6 +1,7 @@
 # Design note: contact and higher pairs (M6)
 
-Status: **6a, 6b, 6c and 6d implemented, plus 6e (polygons and the ratchet)** (profiles `circle`/`polar`/`points`,
+Status: **6a, 6b, 6c and 6d implemented, plus 6e (polygons and the ratchet) and 6f
+(friction)** (profiles `circle`/`polar`/`points`,
 bilateral kinematic `touch`, `cam` displacement-diagram synthesis with
 pressure-angle and undercut reports; the eccentric, lobe-cam and plate-cam
 examples; unilateral contact in the dynamics with `jumpcam`; non-circular
@@ -225,6 +226,23 @@ rest"; (3) a pawl spring strong enough to matter *stalls* the forward direction
 (its normal force on the ramp cancels the drive torque), which is correct physics.
 The Geneva drive remains open: it needs two-sided slot contact and a locking arc
 (curve-against-curve contact, not point-on-curve).
+
+**6f: friction.** `touch ... friction mu` is regularized Coulomb: `F_t = mu N
+tanh(s/eps)` through the slip Jacobian, with `N` iterated against the same solve. The
+interesting problems were not the force but its consequences: an explicit integrator
+cannot take a stiff friction law on a light body (so the width is widened to keep
+`h (mu N/eps) mobility` below 1, using the *constrained* mobility), and the energy
+ledger needed a friction term to keep closing. It is regularized, not stuck: a contact
+creeps at ~2 mm/s instead of holding, which is invisible for a brake or a ratchet
+(geometry holds the ratchet) but would show on a block meant to rest on a slope. A
+true stick branch is the natural refinement.
+
+What the ratchet taught in 6e is exactly what 6f fixes: with `friction 0.3` the
+reverse-locked wheel comes to rest (angle constant to 1e-3 degree, contact force
+steady at the value that balances the torque) where the frictionless one rang
+forever. The brake is the clean oracle: the friction torque is exactly `mu N R`,
+so the deceleration, the stopping time and the dissipated energy are all closed
+form, and the tests hold them to 4-5 digits.
 
 Acceptance examples to add under `examples/`: `eccentric`, `platecam`,
 `geneva`, `ratchet`, `ellipgears`.

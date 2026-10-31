@@ -23,6 +23,10 @@
 //   modtrap              peak velocity 2.00, peak acceleration 4.89 (the lowest of
 //                        the laws that ease in and out)
 mechanism platecam {
+  param lift = 0.012         // how far the follower rises, m
+  param base_r = 0.025       // base circle radius, m
+  param rise_deg = 100       // cam angle the rise takes, degrees
+
   ground frame {
     anchor axle at (0, 0)
     anchor rail at (0, 0.09) dir (0, 1)     // follower line of travel, through the axle
@@ -30,9 +34,9 @@ mechanism platecam {
 
   shaft cam at frame.axle
   cam lobe on cam.A {
-    base   0.025
+    base   base_r
     roller 0.006
-    rise 0.012 over 100 deg cycloidal
+    rise lift over rise_deg deg cycloidal
     dwell 60 deg
     return over 140 deg modtrap
     dwell

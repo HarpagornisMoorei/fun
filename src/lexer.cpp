@@ -109,8 +109,10 @@ std::vector<Token> lex(const std::string& src) {
             continue;
         }
 
-        // single-character punctuation ('<' and '>' are M5 guard comparators)
-        if (std::string("{}(),:;.-<>").find((char)c) != std::string::npos) {
+        // single-character punctuation ('<' and '>' are M5 guard comparators;
+        // '+' '*' '/' '=' are the M7 expression operators and `param name = ...`;
+        // a '/' that starts "//" was taken as a comment above, and "deg/s" as a unit)
+        if (std::string("{}(),:;.-<>+*/=").find((char)c) != std::string::npos) {
             Token t; t.type = Tok::Sym; t.text = std::string(1, (char)c);
             t.line = tl; t.col = tc;
             out.push_back(t); advance();

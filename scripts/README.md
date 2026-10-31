@@ -1,4 +1,10 @@
-# scripts — offscreen (headless-display) testing harnesses
+# scripts
+
+`summarize_run.py` — summarizes a CSV from `mech run --headless --csv` (standard library
+only): min/max/mean/final of any column, how often each contact lifted off, and the
+energy ledger's worst residual. See `docs/EXPORT.md`.
+
+## offscreen (headless-display) testing harnesses
 
 These are NOT part of the shipped `mech` binary; they let the real
 `src/viewer.cpp` run on a machine with no display, so screenshots can be
@@ -11,7 +17,7 @@ screenshot-capable binary with:
 
     g++ -std=c++17 -O2 -Isrc -DHAVE_VIEWER=1 \
         src/main.cpp src/viewer.cpp tests/tests.cpp \
-        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp \
+        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/sweep.cpp \
         src/kinematics.cpp src/dynamics.cpp \
         scripts/glfw_shim.cpp -o mech-shot -lOSMesa -lGL
 
@@ -24,7 +30,7 @@ GL/gl.h:
 
     g++ -std=c++17 -O2 -Isrc -Iscripts/glfw3Stub -DHAVE_VIEWER=1 \
         src/main.cpp src/viewer.cpp tests/tests.cpp \
-        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp \
+        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/sweep.cpp \
         src/kinematics.cpp src/dynamics.cpp \
         scripts/glfw_shim_softgl.cpp -o mech-shot
 
