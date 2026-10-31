@@ -1,5 +1,6 @@
 // mech — render.cpp: SVG drawings of a mechanism (M13)
 #include "render.hpp"
+#include "scene.hpp"
 #include "dynamics.hpp"
 #include "kinematics.hpp"
 #include "geom.hpp"
@@ -12,27 +13,6 @@
 namespace mech {
 
 namespace {
-
-struct Rgb { double r, g, b; };
-
-struct Theme {
-    Rgb bg, ground, hub, bore, trace, spring, dial, dialMajor, hand, outline;
-    Rgb palette[5];
-};
-
-Theme lightTheme() {
-    return {{1.00, 1.00, 1.00}, {0.35, 0.38, 0.42}, {1.00, 1.00, 1.00}, {0.12, 0.13, 0.16},
-            {0.20, 0.62, 0.40}, {0.86, 0.42, 0.20}, {0.55, 0.58, 0.62}, {0.30, 0.33, 0.38},
-            {0.16, 0.17, 0.20}, {0.14, 0.15, 0.18},
-            {{0.85, 0.55, 0.12}, {0.20, 0.50, 0.70}, {0.72, 0.28, 0.28}, {0.35, 0.62, 0.30}, {0.55, 0.42, 0.78}}};
-}
-
-Theme darkTheme() {   // the viewer's colours
-    return {{0.055, 0.065, 0.080}, {0.60, 0.64, 0.68}, {1.00, 1.00, 1.00}, {0.05, 0.06, 0.08},
-            {0.42, 0.85, 0.62}, {0.92, 0.55, 0.36}, {0.72, 0.75, 0.78}, {0.85, 0.88, 0.90},
-            {0.96, 0.93, 0.84}, {0.02, 0.03, 0.04},
-            {{0.91, 0.69, 0.29}, {0.44, 0.70, 0.81}, {0.79, 0.44, 0.44}, {0.62, 0.82, 0.54}, {0.70, 0.62, 0.86}}};
-}
 
 std::string num(double v) {
     char b[32];
@@ -58,306 +38,61 @@ std::string xml(const std::string& s) {
     return o;
 }
 
-struct View {
-    double minx, miny, maxx, maxy;
-};
-
-// How far a slide's guide travels along its rail over everything drawn, so the rail can be shown
-// where the follower goes.
-struct RailSpan {
-    Vec2 pos, dir;
-    double t0 = 1e30, t1 = -1e30;
-};
-
-// Everything that depends on the pose, for one frame.
-class Drawer {
-public:
-    Drawer(const Model& m, const Theme& th, double pxWorld, double extent, std::vector<RailSpan> rails,
-           std::vector<RailSpan> movingRails)
-        : m_(m), th_(th), px_(pxWorld), extent_(extent), rails_(std::move(rails)), moving_(std::move(movingRails)) {}
-
-    std::string line(Vec2 a, Vec2 b, Rgb c, double wPx, const char* cls = "", const std::string& extra = "",
-                     double opacity = 1.0, bool round = false) const {
-        std::string s = "<line";
-        if (*cls) s += std::string(" class=\"") + cls + "\"";
-        s += extra + " x1=\"" + num(a.x) + "\" y1=\"" + num(a.y) + "\" x2=\"" + num(b.x) + "\" y2=\"" + num(b.y) +
-             "\" stroke=\"" + hex(c) + "\" stroke-width=\"" + num(wPx * px_) + "\"";
-        if (opacity < 1.0) s += " stroke-opacity=\"" + num(opacity) + "\"";
-        if (round) s += " stroke-linecap=\"round\"";
-        return s + "/>\n";
-    }
-
-    std::string circle(Vec2 c, double rWorld, const char* fill, Rgb stroke, double wPx, const char* cls = "",
-                       const std::string& extra = "", double strokeOpacity = 1.0) const {
-        std::string s = "<circle";
-        if (*cls) s += std::string(" class=\"") + cls + "\"";
-        s += extra + " cx=\"" + num(c.x) + "\" cy=\"" + num(c.y) + "\" r=\"" + num(rWorld) + "\" fill=\"" + fill + "\"";
-        if (wPx > 0.0) {
-            s += " stroke=\"" + hex(stroke) + "\" stroke-width=\"" + num(wPx * px_) + "\"";
-            if (strokeOpacity < 1.0) s += " stroke-opacity=\"" + num(strokeOpacity) + "\"";
-        }
-        return s + "/>\n";
-    }
-
-    std::string disc(Vec2 c, double rPx, Rgb fill, const char* cls = "", const std::string& extra = "") const {
-        std::string s = "<circle";
-        if (*cls) s += std::string(" class=\"") + cls + "\"";
-        return s + extra + " cx=\"" + num(c.x) + "\" cy=\"" + num(c.y) + "\" r=\"" + num(rPx * px_) + "\" fill=\"" + hex(fill) + "\"/>\n";
-    }
-
-    std::string polygon(const std::vector<Vec2>& pts, const char* fill, double fillOpacity, Rgb stroke, double wPx,
-                        const char* cls, const std::string& extra) const {
-        std::string s = std::string("<polygon class=\"") + cls + "\"" + extra + " points=\"";
+// The scene as SVG. The attributes and their order are the file's format (docs/RENDER.md): a test reads them back.
+std::string toSvg(const std::vector<SceneItem>& items, double px) {
+    std::string o;
+    auto pointsOf = [](const std::vector<Vec2>& pts) {
+        std::string s;
         for (size_t i = 0; i < pts.size(); ++i) s += (i ? " " : "") + num(pts[i].x) + "," + num(pts[i].y);
-        s += "\" fill=\"" + std::string(fill) + "\"";
-        if (fillOpacity < 1.0 && std::string(fill) != "none") s += " fill-opacity=\"" + num(fillOpacity) + "\"";
-        if (wPx > 0.0) s += " stroke=\"" + hex(stroke) + "\" stroke-width=\"" + num(wPx * px_) + "\" stroke-linejoin=\"round\"";
-        return s + "/>\n";
+        return s;
+    };
+    for (const SceneItem& it : items) {
+        switch (it.kind) {
+        case SceneItem::Kind::GroupOpen:
+            o += "<g class=\"" + it.cls + "\"" + it.attrs + ">\n";
+            break;
+        case SceneItem::Kind::GroupClose:
+            o += "</g>\n";
+            break;
+        case SceneItem::Kind::Line: {
+            o += "<line";
+            if (!it.cls.empty()) o += " class=\"" + it.cls + "\"";
+            o += it.attrs + " x1=\"" + num(it.pts[0].x) + "\" y1=\"" + num(it.pts[0].y) + "\" x2=\"" + num(it.pts[1].x) +
+                 "\" y2=\"" + num(it.pts[1].y) + "\" stroke=\"" + hex(it.stroke) + "\" stroke-width=\"" + num(it.strokePx * px) + "\"";
+            if (it.strokeOpacity < 1.0) o += " stroke-opacity=\"" + num(it.strokeOpacity) + "\"";
+            if (it.round) o += " stroke-linecap=\"round\"";
+            o += "/>\n";
+            break;
+        }
+        case SceneItem::Kind::Circle: {
+            o += "<circle";
+            if (!it.cls.empty()) o += " class=\"" + it.cls + "\"";
+            o += it.attrs + " cx=\"" + num(it.pts[0].x) + "\" cy=\"" + num(it.pts[0].y) + "\" r=\"" + num(it.r) + "\" fill=\"" +
+                 (it.hasFill ? hex(it.fill) : std::string("none")) + "\"";
+            if (it.hasStroke) {
+                o += " stroke=\"" + hex(it.stroke) + "\" stroke-width=\"" + num(it.strokePx * px) + "\"";
+                if (it.strokeOpacity < 1.0) o += " stroke-opacity=\"" + num(it.strokeOpacity) + "\"";
+            }
+            o += "/>\n";
+            break;
+        }
+        case SceneItem::Kind::Polygon:
+            o += "<polygon class=\"" + it.cls + "\"" + it.attrs + " points=\"" + pointsOf(it.pts) + "\" fill=\"" +
+                 (it.hasFill ? hex(it.fill) : std::string("none")) + "\"";
+            if (it.fillOpacity < 1.0 && it.hasFill) o += " fill-opacity=\"" + num(it.fillOpacity) + "\"";
+            if (it.hasStroke) o += " stroke=\"" + hex(it.stroke) + "\" stroke-width=\"" + num(it.strokePx * px) + "\" stroke-linejoin=\"round\"";
+            o += "/>\n";
+            break;
+        case SceneItem::Kind::Polyline:
+            o += "<polyline class=\"" + it.cls + "\"" + it.attrs + " points=\"" + pointsOf(it.pts) + "\" fill=\"none\" stroke=\"" +
+                 hex(it.stroke) + "\" stroke-width=\"" + num(it.strokePx * px) + "\" stroke-linejoin=\"round\"";
+            if (it.strokeOpacity < 1.0) o += " stroke-opacity=\"" + num(it.strokeOpacity) + "\"";
+            o += "/>\n";
+            break;
+        }
     }
-
-    std::string polyline(const std::vector<Vec2>& pts, Rgb stroke, double wPx, double opacity, const char* cls,
-                         const std::string& extra = "") const {
-        std::string s = std::string("<polyline class=\"") + cls + "\"" + extra + " points=\"";
-        for (size_t i = 0; i < pts.size(); ++i) s += (i ? " " : "") + num(pts[i].x) + "," + num(pts[i].y);
-        s += "\" fill=\"none\" stroke=\"" + hex(stroke) + "\" stroke-width=\"" + num(wPx * px_) + "\" stroke-linejoin=\"round\"";
-        if (opacity < 1.0) s += " stroke-opacity=\"" + num(opacity) + "\"";
-        return s + "/>\n";
-    }
-
-    // hatched fixed segment: a capsule with tick marks on one side
-    std::string hatched(Vec2 a, Vec2 b, double halfSpan, const char* cls) const {
-        const Vec2 d = b - a;
-        const double L = vlen(d);
-        if (L < 1e-9) return "";
-        const Vec2 u = (1.0 / L) * d, n = perp(u);
-        const Vec2 aa = a - u * (halfSpan - 0.5 * L), bb = b + u * (halfSpan - 0.5 * L);
-        std::string s = line(aa, bb, th_.ground, 3.0, cls, "", 1.0, true);
-        const double step = 12.0 * px_;
-        const Vec2 tick = normalize(n - u) * (9.0 * px_);
-        std::string ticks = "<g class=\"ticks\">\n";
-        for (double t = 0; t <= vlen(bb - aa); t += step) {
-            const Vec2 p = aa + u * t;
-            ticks += line(p, p + tick, th_.ground, 1.5);
-        }
-        return s + ticks + "</g>\n";
-    }
-
-    std::string spring(Vec2 a, Vec2 b) const {
-        const Vec2 d = b - a;
-        const double L = vlen(d);
-        if (L < 1e-9) return "";
-        const Vec2 u = (1.0 / L) * d, n = perp(u);
-        const double amp = std::min(0.045 * L + 4.0 * px_, 0.09 * L + 12.0 * px_);
-        const double lead = std::min(0.12 * L, 0.35);
-        const int coils = std::max(6, (int)(L / (6.0 * amp + 1e-9)));
-        std::vector<Vec2> pts;
-        pts.push_back(a);
-        pts.push_back(a + u * lead);
-        for (int i = 0; i < coils; ++i) {
-            const double s1 = lead + (L - 2.0 * lead) * (i + 0.5) / coils;
-            pts.push_back(a + u * s1 + n * ((i % 2 == 0) ? amp : -amp));
-        }
-        pts.push_back(b - u * lead);
-        pts.push_back(b);
-        return polyline(pts, th_.spring, 1.8, 0.95, "spring");
-    }
-
-    // the whole pose
-    std::string pose(const std::vector<double>& q) const {
-        std::ostringstream o;
-        // gears
-        for (size_t gi = 0; gi < m_.gears.size(); ++gi) {
-            const Gear& g = m_.gears[gi];
-            const Body& b = m_.bodies[(size_t)g.body];
-            const double th = b.qOffset >= 0 ? q[(size_t)b.qOffset] : 0.0;
-            const Vec2 c = m_.worldAnchor(g.body, g.hostAnchor, q);
-            const Rgb col = th_.palette[(size_t)(g.body > 0 ? g.body - 1 : 0) % 5];
-            // a ring gear: the larger of the two in an internal mesh (the planet inside it is an ordinary gear)
-            bool internal = false;
-            for (const MeshJoint& mm : m_.meshes) {
-                if (mm.sgn >= 0 || (mm.gearA != (int)gi && mm.gearB != (int)gi)) continue;
-                const Gear& other = m_.gears[(size_t)(mm.gearA == (int)gi ? mm.gearB : mm.gearA)];
-                if (g.radius > other.radius) internal = true;
-            }
-            const double tooth = g.module > 0.0 ? g.module : std::max(0.08 * g.radius, 3.0 * px_);
-            const std::string tag = " data-name=\"" + xml(g.name) + "\"";
-            o << "<g class=\"gear\"" << tag << ">\n";
-            if (internal) {
-                const double r0 = g.radius + 1.1 * tooth, r1 = g.radius + 3.2 * tooth;
-                o << circle(c, 0.5 * (r0 + r1), "none", col, (r1 - r0) / px_, "", "", 1.0);
-                const double q0 = g.radius - 1.05 * tooth, q1 = g.radius + 1.1 * tooth;
-                o << circle(c, 0.5 * (q0 + q1), "none", col, (q1 - q0) / px_, "", "", 0.28);
-            }
-            o << circle(c, g.radius, "none", col, 2.0, "pitch", "", internal ? 0.6 : 0.45);
-            const int N = g.teeth > 0 ? g.teeth : 16;
-            for (int i = 0; i < N; ++i) {
-                const double ang = th + 2.0 * kPi * (double)i / N;
-                const Vec2 u{std::cos(ang), std::sin(ang)};
-                const double r0 = internal ? g.radius + 1.1 * tooth : 0.88 * g.radius;
-                const double r1 = internal ? g.radius - 1.05 * tooth : 1.10 * g.radius;
-                o << line(c + u * r0, c + u * r1, col, 1.5, "tooth", "", 0.9);
-            }
-            o << "</g>\n";
-        }
-        // profiles (cams, ratchet wheels, ...): the curve rides its host
-        for (const Profile& pr : m_.profiles) {
-            const Body& hb = m_.bodies[(size_t)pr.body];
-            const double th = hb.qOffset >= 0 ? q[(size_t)hb.qOffset] : 0.0;
-            const Vec2 tr = hb.qOffset >= 0 ? Vec2{q[(size_t)hb.qOffset + 1], q[(size_t)hb.qOffset + 2]} : Vec2{0.0, 0.0};
-            const Vec2 origin = hb.anchors[(size_t)pr.hostAnchor].local;
-            const Rgb col = th_.palette[(size_t)(pr.body > 0 ? pr.body - 1 : 0) % 5];
-            std::vector<Vec2> pts;
-            for (const Vec2& p : pr.curve->outline(240)) pts.push_back(rotate(origin + p, th) + tr);
-            o << polygon(pts, hex(col).c_str(), 0.16, col, 2.5, "profile", " data-name=\"" + xml(pr.name) + "\"");
-        }
-        // moving bodies: rods as capsules, shafts as hubs with an index line
-        for (size_t bi = 1; bi < m_.bodies.size(); ++bi) {
-            const Body& b = m_.bodies[bi];
-            const Rgb col = th_.palette[(bi - 1) % 5];
-            const std::string tag = " data-body=\"" + xml(b.name) + "\"";
-            if (b.anchors.size() >= 2) {
-                const Vec2 pa = m_.worldAnchor((int)bi, 0, q), pb = m_.worldAnchor((int)bi, 1, q);
-                o << "<g class=\"rod\"" << tag << ">\n";
-                o << line(pa, pb, th_.outline, 9.0, "", "", 1.0, true);
-                o << line(pa, pb, col, 7.0, "bar", "", 1.0, true);
-                // a body with more anchors (a boom with a pivot, an attachment and a tip) is a chain through them
-                for (size_t ai = 2; ai < b.anchors.size(); ++ai) {
-                    const Vec2 p0 = m_.worldAnchor((int)bi, (int)ai - 1, q), p1 = m_.worldAnchor((int)bi, (int)ai, q);
-                    o << line(p0, p1, th_.outline, 9.0, "", "", 1.0, true);
-                    o << line(p0, p1, col, 7.0, "link", "", 1.0, true);
-                }
-                o << "</g>\n";
-            } else if (b.anchors.size() == 1) {
-                const Vec2 c = m_.worldAnchor((int)bi, 0, q);
-                const double th = q[(size_t)b.qOffset];
-                o << "<g class=\"shaft\"" << tag << ">\n";
-                o << circle(c, 6.5 * px_, hex(col).c_str(), th_.outline, 1.2, "hub");
-                o << disc(c, 2.4, th_.bore);
-                o << line(c, c + Vec2{std::cos(th), std::sin(th)} * (11.0 * px_), th_.hub, 2.0, "index");
-                o << "</g>\n";
-            }
-        }
-        // M14: a rail that rides a moving body is drawn with it, as a line through its anchor that reaches
-        // a little past the guide's travel (t0, t1 are measured from the rail anchor, over every frame)
-        for (size_t k = 0; k < m_.slides.size() && k < moving_.size(); ++k) {
-            const SlideJoint& sj = m_.slides[k];
-            if (sj.railBody == 0 || moving_[k].t1 < moving_[k].t0) continue;
-            const SlideGeom g = slideGeom(m_, sj, q);
-            const double margin = 0.03 * extent_;
-            // from the rail's own anchor (so the body it belongs to shows) to a little past the guide's farthest reach
-            double t0 = std::min(moving_[k].t0 - margin, 0.0), t1 = std::max(moving_[k].t1 + margin, 0.0);
-            if (t1 - t0 < 0.12 * extent_) { const double c = 0.5 * (t0 + t1); t0 = c - 0.06 * extent_; t1 = c + 0.06 * extent_; }
-            const Rgb col = th_.palette[(size_t)(sj.railBody - 1) % 5];
-            const std::string tag = " data-body=\"" + xml(m_.bodies[(size_t)sj.railBody].name) + "\" data-guide=\"" +
-                                    xml(m_.bodies[(size_t)sj.guideBody].name) + "\"";
-            o << line(g.pB + g.u * t0, g.pB + g.u * t1, th_.outline, 7.0, "", "", 1.0, true);
-            o << line(g.pB + g.u * t0, g.pB + g.u * t1, th_.hub, 4.5, sj.lockDir ? "slide" : "slot", tag, 1.0, true);
-            o << line(g.pB + g.u * t0, g.pB + g.u * t1, col, 4.5, "", "", 0.45, true);
-        }
-        // springs
-        for (const SpringJoint& sp : m_.springs)
-            o << spring(m_.worldAnchor(sp.bodyA, sp.anchA, q), m_.worldAnchor(sp.bodyB, sp.anchB, q));
-        // touches: the roller (if any) and the contact point on the curve
-        for (const TouchJoint& tj : m_.touches) {
-            const Vec2 tip = m_.worldAnchor(tj.body, tj.anchor, q);
-            const ContactState cs = m_.touchState(tj, q);
-            if (tj.roller > 0.0) o << circle(tip, tj.roller, "none", th_.outline, 2.0, "roller");
-            o << disc(cs.foot, 3.2, th_.spring, "foot");
-        }
-        // pins
-        for (const PinJoint& p : m_.pins) {
-            const Vec2 pos = m_.worldAnchor(p.bodyA, p.anchA, q);
-            o << "<g class=\"pin\">\n" << circle(pos, 5.0 * px_, hex(th_.hub).c_str(), th_.outline, 1.2, "hub")
-              << disc(pos, 2.2, th_.bore) << "</g>\n";
-        }
-        // hands on top
-        for (const Hand& h : m_.hands) {
-            const Body& b = m_.bodies[(size_t)h.body];
-            const double th = b.qOffset >= 0 ? q[(size_t)b.qOffset] : 0.0;
-            const Vec2 mount = m_.worldAnchor(h.body, h.mountAnchor, q);
-            const double L = h.length, w1 = 4.0 * px_, w2 = 1.6 * px_;
-            auto local = [&](double lx, double ly) { return rotate(Vec2{lx, ly}, th) + mount; };
-            const std::vector<Vec2> pts = {local(-0.22 * L, 0), local(-0.10 * L, w1), local(0.72 * L, w2), local(L, 0),
-                                           local(0.72 * L, -w2), local(-0.10 * L, -w1)};
-            o << polygon(pts, hex(th_.hand).c_str(), 0.96, th_.outline, 0.8, "hand", " data-name=\"" + xml(h.name) + "\"");
-            o << disc(mount, 5.5, th_.hub) << disc(mount, 2.3, th_.bore);
-        }
-        return o.str();
-    }
-
-    // what does not move: dials and the ground
-    std::string fixed() const {
-        std::ostringstream o;
-        for (const Dial& d : m_.dials) {
-            if (d.radius <= 0.0) continue;
-            const double R = d.radius;
-            o << "<g class=\"dial\">\n";
-            o << circle(d.center, R - 1.25 * px_, "none", th_.dial, 2.5, "ring", "", 0.9);
-            for (int i = 0; i < d.minor; ++i) {
-                const double ang = -0.5 * kPi + 2.0 * kPi * (double)i / d.minor;
-                const Vec2 u{std::cos(ang), std::sin(ang)};
-                o << line(d.center + u * (R - 8.0 * px_), d.center + u * (R - 2.5 * px_), th_.dial, 1.2);
-            }
-            for (int i = 0; i < d.major; ++i) {
-                const double ang = -0.5 * kPi + 2.0 * kPi * (double)i / d.major;
-                const Vec2 u{std::cos(ang), std::sin(ang)};
-                o << line(d.center + u * (R - 16.0 * px_), d.center + u * (R - 2.5 * px_), th_.dialMajor, 2.2);
-            }
-            o << "</g>\n";
-        }
-        const Body& g = m_.bodies[0];
-        o << "<g class=\"ground\">\n";
-        // The frame: one hatched bar if the (rail-free) anchors lie on a line, a small mark under
-        // each one otherwise — a bar through scattered points means nothing.
-        std::vector<Vec2> pts;
-        for (const Anchor& a : g.anchors) if (!a.hasDir) pts.push_back(a.local);
-        bool bar = false;
-        Vec2 pmin{1e30, 1e30}, pmax{-1e30, -1e30};
-        if (pts.size() >= 2) {
-            Vec2 lo = pts[0], hi = pts[0];
-            for (const Vec2& p : pts) {
-                if (p.x < lo.x || (p.x == lo.x && p.y < lo.y)) lo = p;
-                if (p.x > hi.x || (p.x == hi.x && p.y > hi.y)) hi = p;
-            }
-            if (vlen(hi - lo) < 1e-9) {           // a vertical column: order by y instead
-                for (const Vec2& p : pts) { if (p.y < lo.y) lo = p; if (p.y > hi.y) hi = p; }
-            }
-            const double L = vlen(hi - lo);
-            bar = L > 1e-9;
-            for (const Vec2& p : pts)
-                if (bar && std::fabs(crossz(hi - lo, p - lo)) / L > 0.01 * L) bar = false;
-            pmin = lo; pmax = hi;
-        }
-        if (bar) {
-            o << hatched(pmin, pmax, 0.30 + 0.5 * vlen(pmax - pmin), "base");
-        } else {
-            for (const Vec2& p : pts) o << hatched(p - Vec2{12.0 * px_, 0.0}, p + Vec2{12.0 * px_, 0.0}, 12.0 * px_, "mount");
-        }
-        for (const Anchor& a : g.anchors) {
-            if (!a.hasDir) continue;
-            double t0 = -0.06 * extent_, t1 = 0.06 * extent_;          // no slide uses it: a short stub
-            for (const RailSpan& r : rails_) {
-                if (vlen(r.pos - a.local) > 1e-9 || vlen(r.dir - a.dirLocal) > 1e-9 || r.t1 < r.t0) continue;
-                const double margin = 0.03 * extent_;
-                t0 = std::min(r.t0 - margin, -0.0);
-                t1 = std::max(r.t1 + margin, 0.0);
-                if (t1 - t0 < 0.12 * extent_) { const double c = 0.5 * (t0 + t1); t0 = c - 0.06 * extent_; t1 = c + 0.06 * extent_; }
-            }
-            // a rail is drawn from the anchor's own line: positions t along the direction through the anchor
-            const Vec2 a0 = a.local + a.dirLocal * t0, a1 = a.local + a.dirLocal * t1;
-            o << hatched(a0, a1, 0.5 * (t1 - t0), "rail");
-        }
-        o << "</g>\n";
-        return o.str();
-    }
-
-private:
-    const Model& m_;
-    const Theme& th_;
-    double px_, extent_;
-    std::vector<RailSpan> rails_;
-    std::vector<RailSpan> moving_;     // per slide: the guide's travel along a rail on a moving body
-};
+    return o;
+}
 
 } // namespace
 
@@ -511,7 +246,12 @@ RenderResult renderSvg(const Model& m, const RenderOptions& opt) {
     }
 
     const Theme th = opt.dark ? darkTheme() : lightTheme();
-    const Drawer dr(m, th, pxWorld, std::max(ex, ey), rails, movingRails);
+    const SceneBuilder sb(m, th, pxWorld, std::max(ex, ey), rails, movingRails);
+    auto scene = [&](const std::vector<double>& q) {
+        std::vector<SceneItem> items;
+        sb.pose(q, items);
+        return toSvg(items, pxWorld);
+    };
 
     std::ostringstream o;
     o << "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"" << num(Wpx)
@@ -522,15 +262,30 @@ RenderResult renderSvg(const Model& m, const RenderOptions& opt) {
     // world coordinates (metres, y up) -> pixels
     o << "<g id=\"world\" transform=\"matrix(" << num(scale) << " 0 0 " << num(-scale) << " " << num(Wpx / 2 - cx * scale)
       << " " << num(Hpx / 2 + cy * scale) << ")\">\n";
-    o << dr.fixed();
-    if (!trail.empty()) o << dr.polyline(trail, th.trace, 2.0, 0.75, "trace", " data-anchor=\"" + xml(opt.trace) + "\"");
+    {
+        std::vector<SceneItem> fixedItems;
+        sb.fixed(fixedItems);
+        if (!trail.empty()) {
+            SceneItem tr;
+            tr.kind = SceneItem::Kind::Polyline;
+            tr.cls = "trace";
+            tr.attrs = " data-anchor=\"" + xml(opt.trace) + "\"";
+            tr.pts = trail;
+            tr.hasStroke = true;
+            tr.stroke = th.trace;
+            tr.strokePx = 2.0;
+            tr.strokeOpacity = 0.75;
+            fixedItems.push_back(tr);
+        }
+        o << toSvg(fixedItems, pxWorld);
+    }
     if (frames == 1) {
-        o << "<g class=\"pose\" data-t=\"" << num(times[0]) << "\">\n" << dr.pose(poses[0]) << "</g>\n";
+        o << "<g class=\"pose\" data-t=\"" << num(times[0]) << "\">\n" << scene(poses[0]) << "</g>\n";
     } else {
         o << "<defs>\n";
         for (int k = 0; k < frames; ++k)
             o << "<g id=\"f" << k << "\" class=\"pose\" data-t=\"" << num(times[(size_t)k]) << "\">\n"
-              << dr.pose(poses[(size_t)k]) << "</g>\n";
+              << scene(poses[(size_t)k]) << "</g>\n";
         o << "</defs>\n";
         const double dur = std::max(0.2, (opt.span > 0.0 ? opt.span : 1.0) / std::max(1e-9, opt.speed));
         std::string values;

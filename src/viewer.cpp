@@ -18,7 +18,9 @@
 #include "dynamics.hpp"
 #include "kinematics.hpp"
 #include "geom.hpp"
+#include "scene.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -38,22 +40,8 @@ struct Cam {
 
 const float kBg[4]     = {0.055f, 0.065f, 0.080f, 1.0f};
 const float kGrid[4]   = {1.0f, 1.0f, 1.0f, 0.045f};
-const float kGround[4] = {0.60f, 0.64f, 0.68f, 1.0f};
-const float kWhite[4]  = {1.0f, 1.0f, 1.0f, 0.92f};
-const float kDark[4]   = {0.05f, 0.06f, 0.08f, 1.0f};
 const float kTrace[4]  = {0.42f, 0.85f, 0.62f, 0.55f};
-const float kSpring[4] = {0.92f, 0.55f, 0.36f, 0.95f};
-const float kDial[4]   = {0.72f, 0.75f, 0.78f, 0.55f};
-const float kDialMaj[4]= {0.85f, 0.88f, 0.90f, 0.95f};
-const float kHand[4]   = {0.96f, 0.93f, 0.84f, 0.96f};
 
-const float kPalette[][4] = {
-    {0.91f, 0.69f, 0.29f, 1.0f},   // amber
-    {0.44f, 0.70f, 0.81f, 1.0f},   // steel blue
-    {0.79f, 0.44f, 0.44f, 1.0f},   // brick
-    {0.62f, 0.82f, 0.54f, 1.0f},   // sage
-    {0.70f, 0.62f, 0.86f, 1.0f},   // lilac
-};
 
 void setColor(const float c[4]) { glColor4f(c[0], c[1], c[2], c[3]); }
 
@@ -84,17 +72,129 @@ void drawRing(Vec2 p, double r0, double r1, int seg = 48) {
     glEnd();
 }
 
-// rounded thick segment: rectangle + two end caps
-void drawCapsule(Vec2 a, Vec2 b, double w, const float col[4]) {
-    setColor(col);
-    Vec2 d = b - a;
-    double L = vlen(d);
-    if (L < 1e-9) { drawCircle(a, w / 2); return; }
-    Vec2 u = (1.0 / L) * d;
-    Vec2 n = perp(u) * (w / 2);
-    drawQuad(a + n, b + n, b - n, a - n);
-    drawCircle(a, w / 2);
-    drawCircle(b, w / 2);
+// ---- the scene (scene.hpp) in OpenGL ---------------------------------------------------------------
+// The same items `mech render` writes as SVG, drawn with the legacy immediate-mode calls this file already uses.
+
+void colorRgb(Rgb c, double a) { glColor4f((float)c.r, (float)c.g, (float)c.b, (float)a); }
+
+int circleSegments(double r, double px) {
+    return std::max(16, std::min(128, (int)(2.0 * kPi * r / (4.0 * px))));
+}
+
+// Ear-clipping triangulation of a simple polygon, either winding (a cam or a ratchet wheel is not convex).
+std::vector<int> earClip(const std::vector<Vec2>& p) {
+    const int n = (int)p.size();
+    std::vector<int> tri;
+    if (n < 3) return tri;
+    double area = 0.0;
+    for (int i = 0; i < n; ++i) area += crossz(p[(size_t)i], p[(size_t)((i + 1) % n)]);
+    const double sgn = area >= 0.0 ? 1.0 : -1.0;
+    std::vector<int> idx((size_t)n);
+    for (int i = 0; i < n; ++i) idx[(size_t)i] = i;
+    auto inside = [&](Vec2 a, Vec2 b, Vec2 c, Vec2 q) {
+        return sgn * crossz(b - a, q - a) >= 0.0 && sgn * crossz(c - b, q - b) >= 0.0 && sgn * crossz(a - c, q - c) >= 0.0;
+    };
+    int guard = 0;
+    while (idx.size() > 3 && guard++ < 4 * n) {
+        bool clipped = false;
+        const size_t m = idx.size();
+        for (size_t i = 0; i < m; ++i) {
+            const int ia = idx[(i + m - 1) % m], ib = idx[i], ic = idx[(i + 1) % m];
+            const Vec2 a = p[(size_t)ia], b = p[(size_t)ib], c = p[(size_t)ic];
+            if (sgn * crossz(b - a, c - b) <= 0.0) continue;            // a reflex (or flat) corner is not an ear
+            bool empty = true;
+            for (size_t k = 0; k < m && empty; ++k) {
+                const int ik = idx[k];
+                if (ik == ia || ik == ib || ik == ic) continue;
+                if (inside(a, b, c, p[(size_t)ik])) empty = false;
+            }
+            if (!empty) continue;
+            tri.push_back(ia); tri.push_back(ib); tri.push_back(ic);
+            idx.erase(idx.begin() + (long)i);
+            clipped = true;
+            break;
+        }
+        if (!clipped) break;                                           // a degenerate outline: fan what is left
+    }
+    for (size_t i = 1; i + 1 < idx.size(); ++i) { tri.push_back(idx[0]); tri.push_back(idx[i]); tri.push_back(idx[i + 1]); }
+    return tri;
+}
+
+void drawItems(const std::vector<SceneItem>& items, double px) {
+    for (const SceneItem& it : items) {
+        switch (it.kind) {
+        case SceneItem::Kind::GroupOpen:
+        case SceneItem::Kind::GroupClose:
+            break;
+        case SceneItem::Kind::Line: {
+            const double w = it.strokePx * px;
+            colorRgb(it.stroke, it.strokeOpacity);
+            if (it.round && it.strokePx > 2.5) {                      // a bar: a rectangle and two round ends
+                const Vec2 d = it.pts[1] - it.pts[0];
+                const double L = vlen(d);
+                if (L < 1e-12) { drawCircle(it.pts[0], 0.5 * w, 12); break; }
+                const Vec2 n = perp((1.0 / L) * d) * (0.5 * w);
+                drawQuad(it.pts[0] + n, it.pts[1] + n, it.pts[1] - n, it.pts[0] - n);
+                drawCircle(it.pts[0], 0.5 * w, 12);
+                drawCircle(it.pts[1], 0.5 * w, 12);
+            } else {
+                glLineWidth((float)it.strokePx);
+                glBegin(GL_LINES);
+                glVertex2d(it.pts[0].x, it.pts[0].y);
+                glVertex2d(it.pts[1].x, it.pts[1].y);
+                glEnd();
+            }
+            break;
+        }
+        case SceneItem::Kind::Circle: {
+            const Vec2 c = it.pts[0];
+            const int seg = circleSegments(it.r, px);
+            if (it.hasFill) { colorRgb(it.fill, 1.0); drawCircle(c, it.r, seg); }
+            if (it.hasStroke) {
+                const double w = it.strokePx * px;
+                colorRgb(it.stroke, it.strokeOpacity);
+                if (it.strokePx > 3.0) {                                // a thick ring (a ring gear's rim): an annulus
+                    drawRing(c, std::max(0.0, it.r - 0.5 * w), it.r + 0.5 * w, seg);
+                } else {
+                    glLineWidth((float)it.strokePx);
+                    glBegin(GL_LINE_LOOP);
+                    for (int i = 0; i < seg; ++i) {
+                        const double a = 2.0 * kPi * (double)i / seg;
+                        glVertex2d(c.x + it.r * std::cos(a), c.y + it.r * std::sin(a));
+                    }
+                    glEnd();
+                }
+            }
+            break;
+        }
+        case SceneItem::Kind::Polygon: {
+            if (it.hasFill) {
+                colorRgb(it.fill, it.fillOpacity);
+                const std::vector<int> tri = earClip(it.pts);
+                for (size_t i = 0; i + 2 < tri.size(); i += 3) {
+                    glBegin(GL_TRIANGLE_FAN);
+                    for (int k = 0; k < 3; ++k) glVertex2d(it.pts[(size_t)tri[i + (size_t)k]].x, it.pts[(size_t)tri[i + (size_t)k]].y);
+                    glEnd();
+                }
+            }
+            if (it.hasStroke) {
+                colorRgb(it.stroke, it.strokeOpacity);
+                glLineWidth((float)it.strokePx);
+                glBegin(GL_LINE_LOOP);
+                for (const Vec2& v : it.pts) glVertex2d(v.x, v.y);
+                glEnd();
+            }
+            break;
+        }
+        case SceneItem::Kind::Polyline:
+            colorRgb(it.stroke, it.strokeOpacity);
+            glLineWidth((float)it.strokePx);
+            glBegin(GL_LINE_STRIP);
+            for (const Vec2& v : it.pts) glVertex2d(v.x, v.y);
+            glEnd();
+            break;
+        }
+    }
 }
 
 double niceStep(double raw) {
@@ -118,127 +218,6 @@ void drawGrid(const Cam& cam, double aspect) {
         glVertex2d(l, y); glVertex2d(r, y);
     }
     glEnd();
-}
-
-// hatched fixed segment: a capsule with tick marks on one side
-void drawHatched(const Vec2& a, const Vec2& b, double pxWorld, double halfSpan) {
-    Vec2 d = b - a;
-    const double L = vlen(d);
-    if (L < 1e-9) return;
-    const Vec2 u = (1.0 / L) * d;
-    const Vec2 n = perp(u);
-    const Vec2 aa = a - u * (halfSpan - 0.5 * L);
-    const Vec2 bb = b + u * (halfSpan - 0.5 * L);
-    drawCapsule(aa, bb, 3.0 * pxWorld, kGround);
-    setColor(kGround);
-    glLineWidth(1.5f);
-    glBegin(GL_LINES);
-    const double step = 12.0 * pxWorld;
-    const Vec2 tick = normalize(n - u) * (9.0 * pxWorld);
-    for (double s = 0; s <= vlen(bb - aa); s += step) {
-        Vec2 p = aa + u * s;
-        glVertex2d(p.x, p.y);
-        glVertex2d(p.x + tick.x, p.y + tick.y);
-    }
-    glEnd();
-}
-
-// coil-style spring between two world points
-void drawSpring(Vec2 a, Vec2 b, double pxWorld) {
-    const Vec2 d = b - a;
-    const double L = vlen(d);
-    if (L < 1e-9) return;
-    const Vec2 u = (1.0 / L) * d;
-    const Vec2 n = perp(u);
-    const double amp = std::min(0.045 * L + 4.0 * pxWorld, 0.09 * L + 12.0 * pxWorld);
-    const double lead = std::min(0.12 * L, 0.35);
-    const int coils = std::max(6, (int)(L / (6.0 * amp + 1e-9)));
-    setColor(kSpring);
-    glLineWidth(1.8f);
-    glBegin(GL_LINE_STRIP);
-    glVertex2d(a.x, a.y);
-    Vec2 p = a + u * lead;
-    glVertex2d(p.x, p.y);
-    for (int i = 0; i < coils; ++i) {
-        const double s1 = lead + (L - 2.0 * lead) * (i + 0.5) / coils;
-        const Vec2 q1 = a + u * s1 + n * ((i % 2 == 0) ? amp : -amp);
-        glVertex2d(q1.x, q1.y);
-    }
-    p = b - u * lead;
-    glVertex2d(p.x, p.y);
-    glVertex2d(b.x, b.y);
-    glEnd();
-}
-
-// M4: a dial — a thin ring plus minor/major tick marks, static in the world.
-// 12 o'clock is up; ticks run clockwise (the natural reading of a clock).
-void drawDial(const Dial& d, double pxWorld) {
-    if (d.radius <= 0.0) return;
-    const double R = d.radius;
-    // ring
-    setColor(kDial);
-    drawRing(d.center, R - 2.5 * pxWorld, R, 96);
-    // minor ticks
-    if (d.minor > 0) {
-        setColor(kDial);
-        glLineWidth(1.2f);
-        glBegin(GL_LINES);
-        for (int i = 0; i < d.minor; ++i) {
-            const double ang = -0.5 * kPi + 2.0 * kPi * (double)i / d.minor;
-            const Vec2 u{std::cos(ang), std::sin(ang)};
-            const Vec2 p0 = d.center + u * (R - 8.0 * pxWorld);
-            const Vec2 p1 = d.center + u * (R - 2.5 * pxWorld);
-            glVertex2d(p0.x, p0.y);
-            glVertex2d(p1.x, p1.y);
-        }
-        glEnd();
-    }
-    // major ticks: longer and brighter
-    if (d.major > 0) {
-        setColor(kDialMaj);
-        glLineWidth(2.2f);
-        glBegin(GL_LINES);
-        for (int i = 0; i < d.major; ++i) {
-            const double ang = -0.5 * kPi + 2.0 * kPi * (double)i / d.major;
-            const Vec2 u{std::cos(ang), std::sin(ang)};
-            const Vec2 p0 = d.center + u * (R - 16.0 * pxWorld);
-            const Vec2 p1 = d.center + u * (R - 2.5 * pxWorld);
-            glVertex2d(p0.x, p0.y);
-            glVertex2d(p1.x, p1.y);
-        }
-        glEnd();
-    }
-}
-
-// M4: a clock hand — a tapered needle with a counterweight tail, mounted at
-// a world point and rotated by the host's angle. Local +x is the pointing
-// direction; 12 o'clock reading is whatever 'from:'/'drive' the author chose.
-void drawHand(const Model& m, const Hand& h, const std::vector<double>& q,
-              double pxWorld) {
-    const Body& b = m.bodies[(size_t)h.body];
-    const double th = b.qOffset >= 0 ? q[(size_t)b.qOffset + 0] : 0.0;
-    const Vec2 mount = m.worldAnchor(h.body, h.mountAnchor, q);
-    const double L = h.length;
-    const double w1 = 4.0 * pxWorld;   // base half-width
-    const double w2 = 1.6 * pxWorld;   // tip half-width
-    auto local = [&](double lx, double ly) {
-        const Vec2 v = rotate(Vec2{lx, ly}, th) + mount;
-        return v;
-    };
-    setColor(kHand);
-    glBegin(GL_POLYGON);
-    Vec2 p = local(-0.22 * L, 0.0);                 glVertex2d(p.x, p.y);
-    p = local(-0.10 * L,  w1);                      glVertex2d(p.x, p.y);
-    p = local( 0.72 * L,  w2);                      glVertex2d(p.x, p.y);
-    p = local( L,          0.0);                    glVertex2d(p.x, p.y);
-    p = local( 0.72 * L, -w2);                      glVertex2d(p.x, p.y);
-    p = local(-0.10 * L, -w1);                      glVertex2d(p.x, p.y);
-    glEnd();
-    // hub
-    setColor(kWhite);
-    drawCircle(mount, 5.5 * pxWorld);
-    setColor(kDark);
-    drawCircle(mount, 2.3 * pxWorld);
 }
 
 } // namespace
@@ -295,6 +274,23 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
     }
 
     std::vector<Vec2> trail;
+
+    // How far each slide's guide has travelled along its rail so far, so a rail is drawn where the follower
+    // goes (a live view cannot know the whole motion in advance). One entry per slide.
+    std::vector<RailSpan> spans(m.slides.size());
+    for (size_t si = 0; si < m.slides.size(); ++si) {
+        spans[si].pos = m.slides[si].railPos;
+        spans[si].dir = m.slides[si].railDir;
+    }
+    auto updateSpans = [&]() {
+        for (size_t si = 0; si < m.slides.size(); ++si) {
+            const SlideGeom g = slideGeom(m, m.slides[si], q);
+            const double t = m.slides[si].railBody == 0 ? dot(g.u, g.pA - m.slides[si].railPos) : dot(g.u, g.pA - g.pB);
+            spans[si].t0 = std::min(spans[si].t0, t);
+            spans[si].t1 = std::max(spans[si].t1, t);
+        }
+    };
+    updateSpans();
 
     // camera fit over all anchor positions, gear circles, dials and hands
     Cam cam;
@@ -403,6 +399,8 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
             if (dynamic) dyn.projectVelocities(q, qd);
             dyn.resetHybrid();   // M5: rewind the discrete state and its ledger
             simT = 0.0; accum = 0.0; trail.clear();
+            for (RailSpan& sp : spans) { sp.t0 = 1e30; sp.t1 = -1e30; }
+            updateSpans();
             std::printf("reset\n");
         }
         if (edge(GLFW_KEY_F, prevF)) fitCamera();
@@ -447,6 +445,7 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
             if (traceBody >= 0 && (long)trail.size() < 20000) {
                 trail.push_back(m.worldAnchor(traceBody, traceAnchor, q));
             }
+            updateSpans();
             titleClock += dt;
             if (dynamic && titleClock > 0.25) {
                 titleClock = 0.0;
@@ -473,183 +472,27 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
 
         drawGrid(cam, aspect);
 
-        // M4: dials live just above the grid, under the mechanism
-        for (const Dial& d : m.dials) drawDial(d, pxWorld);
-
-        // trail (coupler curve etc.)
-        if (trail.size() > 1) {
-            setColor(kTrace);
-            glLineWidth(2.0f);
-            glBegin(GL_LINE_STRIP);
-            for (const Vec2& p : trail) glVertex2d(p.x, p.y);
-            glEnd();
-        }
-
-        // ground: hatched segment through its outermost anchors
-        if (m.bodies[0].anchors.size() >= 2) {
-            const Body& g = m.bodies[0];
-            Vec2 pmin{1e30, 1e30}, pmax{-1e30, -1e30};
-            for (const Anchor& a : g.anchors) {
-                pmin.x = std::min(pmin.x, a.local.x); pmin.y = std::min(pmin.y, a.local.y);
-                pmax.x = std::max(pmax.x, a.local.x); pmax.y = std::max(pmax.y, a.local.y);
-            }
-            if (vlen(pmax - pmin) > 1e-9) {
-                drawHatched(pmin, pmax, pxWorld, 0.30 + 0.5 * vlen(pmax - pmin));
-            }
-        }
-        // directional ground anchors render as rails
-        for (const Anchor& a : m.bodies[0].anchors) {
-            if (!a.hasDir) continue;
-            const double half = std::min(0.45, 0.9 * cam.halfH);   // rail fits small views
-            const Vec2 d = a.dirLocal * half;
-            drawHatched(a.local - d, a.local + d, pxWorld, half);
-        }
-
-        // gears: pitch circles + teeth ticks (under the rods). Internal gears
-        // (rings) draw as annuli with inward teeth; ground-hosted gears are
-        // fixed and drawn at their anchor.
-        for (size_t gi = 0; gi < m.gears.size(); ++gi) {
-            const Gear& g = m.gears[gi];
-            const Body& b = m.bodies[g.body];
-            const double th = b.qOffset >= 0 ? q[b.qOffset + 0] : 0.0;
-            const Vec2 c = m.worldAnchor(g.body, g.hostAnchor, q);
-            const float* col = kPalette[(size_t)(g.body > 0 ? g.body - 1 : 0) % 5];
-            bool internal = false;
-            for (const MeshJoint& mm : m.meshes)
-                if ((mm.gearA == (int)gi || mm.gearB == (int)gi) && mm.sgn < 0)
-                    internal = true;
-            const double tooth =
-                g.module > 0.0 ? g.module : std::max(0.08 * g.radius, 3.0 * pxWorld);
-
-            if (internal) {
-                // ring gear: rim annulus + faint inner band + inward teeth
-                setColor(col);
-                drawRing(c, g.radius + 1.1 * tooth, g.radius + 3.2 * tooth, 64);
-                glColor4f(col[0], col[1], col[2], 0.28f);
-                drawRing(c, g.radius - 1.05 * tooth, g.radius + 1.1 * tooth, 64);
-            }
-            // pitch circle
-            glColor4f(col[0], col[1], col[2], internal ? 0.6f : 0.45f);
-            glLineWidth(2.0f);
-            glBegin(GL_LINE_LOOP);
-            for (int i = 0; i < 64; ++i) {
-                double ang = 2.0 * kPi * (double)i / 64.0;
-                glVertex2d(c.x + g.radius * std::cos(ang),
-                           c.y + g.radius * std::sin(ang));
-            }
-            glEnd();
-            // teeth ticks: outward for external gears, inward for rings
-            const int N = g.teeth > 0 ? g.teeth : 16;
-            glColor4f(col[0], col[1], col[2], 0.9f);
-            glLineWidth(1.5f);
-            glBegin(GL_LINES);
-            for (int i = 0; i < N; ++i) {
-                const double ang = th + 2.0 * kPi * (double)i / N;
-                const Vec2 u{std::cos(ang), std::sin(ang)};
-                const double r0 = internal ? g.radius + 1.1 * tooth : 0.88 * g.radius;
-                const double r1 = internal ? g.radius - 1.05 * tooth : 1.10 * g.radius;
-                const Vec2 p0 = c + u * r0;
-                const Vec2 p1 = c + u * r1;
-                glVertex2d(p0.x, p0.y);
-                glVertex2d(p1.x, p1.y);
-            }
-            glEnd();
-        }
-
-        // M6: contact profiles (under the rods): a faint fill for star-shaped
-        // kinds, the outline in the host's colour. The curve rides its host.
-        for (const Profile& pr : m.profiles) {
-            const Body& hb = m.bodies[(size_t)pr.body];
-            const double th = hb.qOffset >= 0 ? q[hb.qOffset + 0] : 0.0;
-            const Vec2 tr = hb.qOffset >= 0 ? Vec2{q[hb.qOffset + 1], q[hb.qOffset + 2]}
-                                            : Vec2{0.0, 0.0};
-            const Vec2 origin = hb.anchors[(size_t)pr.hostAnchor].local;
-            const float* col = kPalette[(size_t)(pr.body > 0 ? pr.body - 1 : 0) % 5];
-            const std::vector<Vec2> pts = pr.curve->outline(240);
-            auto toWorld = [&](Vec2 p) { return rotate(origin + p, th) + tr; };
-            if (pr.curve->starShaped()) {   // star-shaped: fan from the origin
-                glColor4f(col[0], col[1], col[2], 0.16f);
-                glBegin(GL_TRIANGLE_FAN);
-                const Vec2 c = toWorld(Vec2{0.0, 0.0});
-                glVertex2d(c.x, c.y);
-                for (size_t i = 0; i <= pts.size(); ++i) {
-                    const Vec2 w = toWorld(pts[i % pts.size()]);
-                    glVertex2d(w.x, w.y);
-                }
-                glEnd();
-            }
-            glColor4f(col[0], col[1], col[2], 0.95f);
-            glLineWidth(2.5f);
-            glBegin(GL_LINE_LOOP);
-            for (const Vec2& p : pts) {
-                const Vec2 w = toWorld(p);
-                glVertex2d(w.x, w.y);
-            }
-            glEnd();
-        }
-
-        // moving bodies: rods as capsules, shafts as hubs with index line
-        for (size_t bi = 1; bi < m.bodies.size(); ++bi) {
-            const Body& b = m.bodies[bi];
-            const float* col = kPalette[(bi - 1) % 5];
-            if (b.anchors.size() >= 2) {
-                Vec2 pa = m.worldAnchor((int)bi, 0, q);
-                Vec2 pb = m.worldAnchor((int)bi, 1, q);
-                drawCapsule(pa, pb, 7.0 * pxWorld, col);
-            } else if (b.anchors.size() == 1) {
-                Vec2 c = m.worldAnchor((int)bi, 0, q);
-                setColor(col);
-                drawCircle(c, 5.5 * pxWorld);
-                setColor(kDark);
-                drawCircle(c, 2.4 * pxWorld);
-                // rotation index line
-                setColor(kWhite);
+        // The picture is the scene (scene.hpp): the same items `mech render` writes as SVG. The ground and
+        // dials first, then the trace, then the mechanism on top.
+        {
+            std::vector<RailSpan> groundSpans;
+            for (size_t si = 0; si < m.slides.size(); ++si)
+                if (m.slides[si].railBody == 0) groundSpans.push_back(spans[si]);
+            const SceneBuilder scene(m, darkTheme(), pxWorld, 2.0 * cam.halfH * std::max(aspect, 1.0), groundSpans, spans);
+            std::vector<SceneItem> items;
+            scene.fixed(items);
+            drawItems(items, pxWorld);
+            if (trail.size() > 1) {
+                setColor(kTrace);
                 glLineWidth(2.0f);
-                glBegin(GL_LINES);
-                const double th = q[b.qOffset + 0];
-                glVertex2d(c.x, c.y);
-                glVertex2d(c.x + 11.0 * pxWorld * std::cos(th),
-                           c.y + 11.0 * pxWorld * std::sin(th));
+                glBegin(GL_LINE_STRIP);
+                for (const Vec2& p : trail) glVertex2d(p.x, p.y);
                 glEnd();
             }
+            items.clear();
+            scene.pose(q, items);
+            drawItems(items, pxWorld);
         }
-
-        // springs (over the bodies, under the pins)
-        for (const SpringJoint& sp : m.springs) {
-            Vec2 pa = m.worldAnchor(sp.bodyA, sp.anchA, q);
-            Vec2 pb = m.worldAnchor(sp.bodyB, sp.anchB, q);
-            drawSpring(pa, pb, pxWorld);
-        }
-
-        // M6: touches — the roller (if any) and the contact point on the curve
-        for (const TouchJoint& tj : m.touches) {
-            const Vec2 tip = m.worldAnchor(tj.body, tj.anchor, q);
-            const ContactState cs = m.touchState(tj, q);
-            if (tj.roller > 0.0) {
-                setColor(kWhite);
-                glLineWidth(2.0f);
-                glBegin(GL_LINE_LOOP);
-                for (int i = 0; i < 40; ++i) {
-                    const double a = 2.0 * kPi * (double)i / 40.0;
-                    glVertex2d(tip.x + tj.roller * std::cos(a), tip.y + tj.roller * std::sin(a));
-                }
-                glEnd();
-            }
-            setColor(kSpring);
-            drawCircle(cs.foot, 3.2 * pxWorld);
-        }
-
-        // pin joints: white hub with dark bore
-        for (const PinJoint& p : m.pins) {
-            Vec2 pos = m.worldAnchor(p.bodyA, p.anchA, q);
-            setColor(kWhite);
-            drawCircle(pos, 5.0 * pxWorld);
-            setColor(kDark);
-            drawCircle(pos, 2.2 * pxWorld);
-        }
-
-        // M4: hands on top of everything
-        for (const Hand& h : m.hands) drawHand(m, h, q, pxWorld);
 
         glfwSwapBuffers(win);
         glfwPollEvents();

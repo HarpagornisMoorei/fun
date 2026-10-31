@@ -1103,7 +1103,7 @@ resistance, more than one contact point per `touch`, and compliant
 
 ## 8. Test matrix
 
-`mech test` (15529 checks) covers: lexer tokens/units/keywords/comments/errors;
+`mech test` (15560 checks) covers: lexer tokens/units/keywords/comments/errors;
 parser AST shapes for all M3 and M4 forms and all error classes; model checks,
 desugaring, gear radius arithmetic, module rules, mass derivation (rods,
 discs, compound assemblies, overrides), DOF arithmetic including tangent
@@ -1428,6 +1428,9 @@ compared by running many of it. Reusable parts and composition remain open.
 M9 added reusable parts: `part` with parameters and `use ... as name on ground at (x, y)`
 (see `docs/PARTS.md`), expanded at parse time so the solver, dynamics and tooling are
 unchanged, and an instanced file runs bit for bit like the flat one.
+
+M15 moved the drawing logic into one shared scene (`src/scene.*`) drawn by both `mech render` (SVG) and the OpenGL viewer, which
+gained the M14 drawing and lost its own ground-bar and ring-gear mistakes (`docs/VIEWER.md`).
 
 M14 added prismatic joints between any two bodies, `slot`, and linear drives (rate and force), `com`/`inertia` on free
 bodies, and two CSV columns per slide (see `docs/JOINTS.md`); it also replaced a damping in the multiplier solve that skewed

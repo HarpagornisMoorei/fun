@@ -1,5 +1,10 @@
 # scripts
 
+`ppm2png.py` — converts the viewer harness's PPM dumps to PNG (standard library only).
+`viewer_shots.sh` — builds the software-GL viewer and writes screenshots of the examples to `docs/img/viewer/`
+(see `docs/VIEWER.md` for what that does and does not show).
+`svg2png.js` / `make_gallery.sh` — rasterize and regenerate the SVG drawings (`docs/RENDER.md`).
+
 `summarize_run.py` — summarizes a CSV from `mech run --headless --csv` (standard library
 only): min/max/mean/final of any column, how often each contact lifted off, and the
 energy ledger's worst residual. See `docs/EXPORT.md`.
@@ -17,20 +22,20 @@ screenshot-capable binary with:
 
     g++ -std=c++17 -O2 -Isrc -DHAVE_VIEWER=1 \
         src/main.cpp src/viewer.cpp tests/tests.cpp \
-        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/render.cpp src/loader.cpp src/sweep.cpp \
+        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/render.cpp src/scene.cpp src/loader.cpp src/sweep.cpp \
         src/kinematics.cpp src/dynamics.cpp \
         scripts/glfw_shim.cpp -o mech-shot -lOSMesa -lGL
 
 ## glfw_shim_softgl.cpp (no GL at all)
 
 The same GLFW subset over a tiny built-in software rasterizer of the
-legacy-GL calls the viewer makes (lines, quads, polygons, ortho). Needs no
+legacy-GL calls the viewer makes (lines, quads, polygons, ortho, and source-alpha blending). Needs no
 GL library — the stub headers in glfw3Stub/ provide GLFW/glfw3.h and
 GL/gl.h:
 
     g++ -std=c++17 -O2 -Isrc -Iscripts/glfw3Stub -DHAVE_VIEWER=1 \
         src/main.cpp src/viewer.cpp tests/tests.cpp \
-        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/render.cpp src/loader.cpp src/sweep.cpp \
+        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/render.cpp src/scene.cpp src/loader.cpp src/sweep.cpp \
         src/kinematics.cpp src/dynamics.cpp \
         scripts/glfw_shim_softgl.cpp -o mech-shot
 

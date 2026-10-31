@@ -12,6 +12,7 @@
 #include "../src/profile.hpp"
 #include "../src/record.hpp"
 #include "../src/render.hpp"
+#include "../src/scene.hpp"
 #include "../src/sweep.hpp"
 
 #include <algorithm>
@@ -7969,6 +7970,43 @@ void testRender() {
             if (m.world.dynamic) ++dynamicFiles;
         }
         CHECK(files >= 20 && dynamicFiles >= 6);
+    }
+
+    // ---- the scene both outputs draw from: well-formed for every example --------------------------------------------------------------------------
+    // (`mech render` writes these items as SVG and the OpenGL viewer draws them with GL, so a malformed item would break both)
+    {
+        size_t files = 0;
+        for (const auto& entry : std::filesystem::directory_iterator("examples")) {
+            if (entry.path().extension() != ".mech") continue;
+            const std::string path = entry.path().string();
+            Program prog;
+            try { prog = parse(loadSource(readFile(path.c_str()), path).tokens); } catch (...) { continue; }
+            if (prog.mechanisms.empty()) continue;
+            const Model m = buildModel(prog.mechanisms[0]);
+            std::string err;
+            const auto poses = samplePoses(m, {0.0, 0.7}, err);
+            if (poses.empty()) continue;
+            std::vector<RailSpan> ground, moving(m.slides.size());
+            const SceneBuilder sb(m, darkTheme(), 0.001, 0.5, ground, moving);
+            std::vector<SceneItem> items;
+            sb.fixed(items);
+            sb.pose(poses[1], items);
+            int depth = 0;
+            bool wellFormed = !items.empty();
+            for (const SceneItem& it : items) {
+                if (it.kind == SceneItem::Kind::GroupOpen) ++depth;
+                if (it.kind == SceneItem::Kind::GroupClose && --depth < 0) wellFormed = false;
+                for (const Vec2& v : it.pts) wellFormed = wellFormed && std::isfinite(v.x) && std::isfinite(v.y);
+                if (it.kind == SceneItem::Kind::Line) wellFormed = wellFormed && it.pts.size() == 2 && it.strokePx > 0.0;
+                if (it.kind == SceneItem::Kind::Circle) wellFormed = wellFormed && it.pts.size() == 1 && it.r >= 0.0 && (it.hasFill || it.hasStroke);
+                if (it.kind == SceneItem::Kind::Polygon || it.kind == SceneItem::Kind::Polyline) wellFormed = wellFormed && it.pts.size() >= 2;
+            }
+            CHECK(wellFormed && depth == 0);
+            ++files;
+        }
+        CHECK(files >= 20);
+        // the viewer's theme and the SVG's dark theme are one and the same
+        CHECK(darkTheme().bg.r == 0.055 && darkTheme().palette[0].r == 0.91 && lightTheme().bg.r == 1.0);
     }
 
     // ---- the command line ---------------------------------------------------------------------------------------------------------------
