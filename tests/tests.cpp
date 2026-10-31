@@ -587,12 +587,21 @@ void testModelM2() {
         "mechanism m { ground g { anchor r at (0,0) dir (1,0) } "
         "body p { anchor gu at (0,0) } slide p.gu -> g.r }",
         "needs a direction");
-    // slide between two moving bodies (no ground rail)
+    // slide between two moving bodies (M14: the rail may ride a body); two ground anchors, or a body on itself, are not slides
+    {
+        const Model sm = buildFromText(
+            "mechanism m { ground g { anchor r at (0,0) } "
+            "body p { anchor gu at (0,0) dir (1,0) } body q { anchor ra at (0,0) dir (1,0) } "
+            "slide p.gu -> q.ra }");
+        CHECK(sm.slides.size() == 1 && sm.slides[0].guideBody == sm.bodyIndex("p") && sm.slides[0].railBody == sm.bodyIndex("q"));
+    }
+    expectModelError(
+        "mechanism m { ground g { anchor r at (0,0) dir (1,0) anchor s at (0,0) dir (1,0) } slide g.r -> g.s }",
+        "two ground anchors");
     expectModelError(
         "mechanism m { ground g { anchor r at (0,0) } "
-        "body p { anchor gu at (0,0) dir (1,0) } body q { anchor ra at (0,0) dir (1,0) } "
-        "slide p.gu -> q.ra }",
-        "exactly one moving body");
+        "body p { anchor gu at (0,0) dir (1,0) anchor hu at (1,0) dir (1,0) } slide p.gu -> p.hu }",
+        "on itself");
     // gear on ground is legal in M3 (fixed rings); meshing two of them is not
     {
         Model m = buildFromText(
@@ -7994,6 +8003,474 @@ void testRender() {
     }
 }
 
+// ============================================================================
+// M14 — prismatic joints between any two bodies, `slot`, and linear drives. Every mechanism here has a
+// closed form: the Scotch yoke's cosine, the quick-return lever's atan2, the hydraulic boom's law of
+// cosines, a mass under a constant force (F t^2 / 2m), and a bead in a rotating tube (r0 cosh w t), the last
+// of which exercises the moving rail's centrifugal and Coriolis terms in the dynamics.
+// ============================================================================
+
+std::vector<std::vector<double>> fileRows(const char* path, double seconds, double dt = 1.0 / 60.0, std::vector<std::string>* cols = nullptr) {
+    const Model m = modelFromFile(path);
+    const SimSeries s = simulate(m, seconds, dt, {}, 1);
+    if (cols) *cols = s.columns;
+    return s.rows;
+}
+
+int colOf(const std::vector<std::string>& cols, const std::string& name) {
+    for (size_t i = 0; i < cols.size(); ++i) if (cols[i].compare(0, name.size(), name) == 0 && cols[i].size() > name.size() && cols[i][name.size()] == '[') return (int)i;
+    return -1;
+}
+
+void testSlides() {
+    std::printf("[slides M14]\n");
+    const double tol = 5e-6;     // the SVG keeps 7 significant digits
+
+    // ---- the language: a unit, a statement and two drive forms ------------------------------------------------------
+    {
+        const std::vector<Token> t = lex("drive p.g at 0.05 m/s from 0.1 m");
+        bool unit = false;
+        for (const Token& k : t) if (k.type == Tok::UnitMps) unit = true;
+        CHECK(unit);
+        // `m` alone is still an ordinary name and a unit-less word
+        CHECK(lex("body m { }")[1].type == Tok::Ident);
+        const Program p = parse(lex("mechanism x { ground g { anchor r at (0,0) dir (1,0) } body b { anchor u at (0,0) dir (1,0) } "
+            "slide b.u -> g.r  slot b.u -> g.r "
+            "drive b.u at 0.05 m/s from 0.1 m  drive b.u force 7 }"));
+        const MechanismDecl& d = p.mechanisms[0];
+        CHECK(d.joints.size() == 2 && d.joints[0].kind == JointDecl::Kind::Slide && d.joints[1].kind == JointDecl::Kind::Slot);
+        CHECK(d.drives.size() == 2 && d.drives[0].linear && d.drives[0].anchor == "u" && !d.drives[0].linForce);
+        CHECK_APPROX(d.drives[0].linRate, 0.05, 1e-15);
+        CHECK_APPROX(d.drives[0].linS0, 0.1, 1e-15);
+        CHECK(d.drives[1].linear && d.drives[1].linForce && d.drives[1].linForceN == 7.0);
+        // an expression for the rate, and `m` optional after the offset
+        const Program q = parse(lex("mechanism x { param v = 0.01 ground g { } drive b.u at v * 5 m/s from 0.2 }"));
+        CHECK_APPROX(q.mechanisms[0].drives[0].linRate, 0.05, 1e-15);
+        CHECK_APPROX(q.mechanisms[0].drives[0].linS0, 0.2, 1e-15);
+        CHECK(parseFails("mechanism x { ground g { } drive b.u at 5 }", "expected unit 'm/s'"));
+        CHECK(parseFails("mechanism x { ground g { } drive b.u at 5 deg/s }", "expected unit 'm/s'"));
+    }
+
+    // ---- refusals --------------------------------------------------------------------------------------------------------
+    {
+        auto buildFails = [](const std::string& src, const char* needle) {
+            try { (void)buildModel(parse(lex(src)).mechanisms[0]); }
+            catch (const SemanticError& e) { return e.msg.find(needle) != std::string::npos; }
+            return false;
+        };
+        const std::string pre = "mechanism m { ground g { anchor r at (0,0) dir (1,0) anchor q at (1,1) } "
+                                "body p { anchor gu at (0,0) dir (1,0) anchor pt at (0.5, 0) } body w { anchor a at (0,0) dir (1,0) } ";
+        CHECK(buildFails(pre + "slot p.pt -> w.nowhere }", "has no anchor"));
+        CHECK(buildFails(pre + "slot p.pt -> g.q }", "needs a direction"));                     // the line must have a direction
+        CHECK(buildFails(pre + "slide p.pt -> g.r }", "needs a direction"));                    // a slide needs both
+        CHECK(!buildFails(pre + "slot p.pt -> g.r pin p.gu -> g.q }", "needs a direction"));    // a slot needs only the line's
+        CHECK(buildFails(pre + "slot g.q -> g.r }", "two ground anchors"));
+        CHECK(buildFails(pre + "slide p.gu -> g.r drive p.pt at 1 m/s }", "no slide or slot has"));
+        CHECK(buildFails(pre + "slide p.gu -> g.r drive p.gu at 1 m/s drive p.gu force 2 }", "more than one linear drive"));
+        CHECK(buildFails(pre + "drive p.nowhere at 1 m/s }", "unknown anchor"));
+        CHECK(buildFails(pre + "drive nobody.x at 1 m/s }", "unknown anchor"));
+        // a linear force is a force: it makes the mechanism dynamic, as a torque drive does
+        CHECK(buildModel(parse(lex(pre + "slide p.gu -> g.r drive p.gu force 2 }")).mechanisms[0]).world.dynamic);
+        CHECK(!buildModel(parse(lex(pre + "slide p.gu -> g.r drive p.gu at 1 m/s }")).mechanisms[0]).world.dynamic);
+    }
+
+    // ---- the mobility count: a slot removes one, a slide two, a linear rate drive one -------------------------------------------
+    {
+        const Model m = modelFromFile("examples/scotchyoke.mech");
+        const DofReport d = m.dofReport();
+        CHECK(d.nSlides == 1 && d.nSlots == 1 && d.nPins == 1);
+        CHECK(d.freeDof == 1 && d.residualDof == 0);                          // 3*2 - 2*1 - 2*1 - 1
+        const Model b = modelFromFile("examples/boom.mech");
+        const DofReport db = b.dofReport();
+        CHECK(db.nLinearRate == 1 && db.nLinearForce == 0 && db.freeDof == 1 && db.residualDof == 0);
+        const Model f = buildModel(parse(lex("mechanism m { world { gravity: 0 } ground g { anchor r at (0,0) dir (1,0) } "
+                                             "body c { anchor u at (0,0) dir (1,0) mass: 1 } slide c.u -> g.r drive c.u force 3 }")).mechanisms[0]);
+        CHECK(f.dofReport().nLinearForce == 1 && f.dofReport().residualDof == 1);   // a force leaves the DOF to the dynamics
+        CHECK(ConstraintSystem(b).rowCount() == 2 * 3 + 2 + 1);                // three pins, one slide, one linear drive row
+    }
+
+    // ---- Scotch yoke: the yoke's x is r cos(theta), exactly -------------------------------------------------------------------
+    {
+        std::vector<std::string> cols;
+        const auto rows = fileRows("examples/scotchyoke.mech", 4.0, 1.0 / 60.0, &cols);
+        const int ix = colOf(cols, "yoke.x"), iy = colOf(cols, "yoke.y"), it = colOf(cols, "yoke.theta");
+        CHECK(ix > 0 && iy > 0 && it > 0 && rows.size() == 241);
+        double worst = 0.0;
+        for (const auto& row : rows) {
+            const double th = deg2rad(20.0) + deg2rad(90.0) * row[0];
+            worst = std::max({worst, std::fabs(row[(size_t)ix] - 0.05 * std::cos(th)), std::fabs(row[(size_t)iy]), std::fabs(row[(size_t)it])});
+        }
+        CHECK(worst < 1e-9);                                                    // a full turn
+    }
+
+    // ---- quick-return: lever = atan2(r sin t, d + r cos t); the forward stroke takes 210 degrees of crank, the return 150 --------
+    {
+        std::vector<std::string> cols;
+        const auto rows = fileRows("examples/quickreturn.mech", 6.0, 1.0 / 120.0, &cols);
+        const int il = colOf(cols, "lever.theta");
+        CHECK(il > 0);
+        double worst = 0.0, fwd = 0.0, back = 0.0;
+        for (size_t k = 0; k < rows.size(); ++k) {
+            const double th = deg2rad(60.0) * rows[k][0];
+            const double want = std::atan2(0.05 * std::sin(th), 0.10 + 0.05 * std::cos(th));
+            worst = std::max(worst, std::fabs(rows[k][(size_t)il] - want));
+            if (k > 0) (rows[k][(size_t)il] > rows[k - 1][(size_t)il] ? fwd : back) += rows[k][0] - rows[k - 1][0];
+        }
+        CHECK(worst < 1e-7);                                                     // the solver's tolerance
+        CHECK_APPROX(fwd / back, (180.0 + 60.0) / (180.0 - 60.0), 0.03);          // (180 + 2 asin(r/d)) / (180 - 2 asin(r/d)) = 240 / 120 = 2
+        double lo = 1e9, hi = -1e9;
+        for (const auto& row : rows) { lo = std::min(lo, row[(size_t)il]); hi = std::max(hi, row[(size_t)il]); }
+        CHECK_APPROX(hi, std::asin(0.5), 2e-3);                                  // the lever swings +- asin(r/d) = 30 degrees
+        CHECK_APPROX(lo, -std::asin(0.5), 2e-3);
+    }
+
+    // ---- hydraulic boom: a prismatic joint between two moving bodies; the actuator length follows its drive ---------------------
+    {
+        std::vector<std::string> cols;
+        const auto rows = fileRows("examples/boom.mech", 4.0, 1.0 / 60.0, &cols);
+        const int ib = colOf(cols, "boom.theta");
+        CHECK(ib > 0 && rows.size() == 241);
+        double worst = 0.0, a0 = 0.0, a1 = 0.0;
+        for (size_t k = 0; k < rows.size(); ++k) {
+            const double phi = rows[k][(size_t)ib];
+            // the eye sits 0.25 m along the boom; the cylinder's base is at (0.40, -0.10): the law of cosines for the actuator
+            const double L = std::hypot(0.25 * std::cos(phi) - 0.40, 0.25 * std::sin(phi) + 0.10);
+            worst = std::max(worst, std::fabs(L - (0.50 + 0.02 * rows[k][0])));
+            if (k == 0) a0 = phi;
+            a1 = phi;
+        }
+        CHECK(worst < 1e-9);
+        CHECK(a1 - a0 > deg2rad(20.0));                                          // and the boom did swing up
+    }
+
+    // ---- a rate-driven slide on a rotating rail: the R-P arm, kinematic and dynamic ----------------------------------------------
+    {
+        const std::string head = "ground frame { anchor pivot at (0, 0) } body tube { anchor A at (0, 0) dir (1, 0) anchor R at (0, 0) dir (1, 0) %s } "
+                                 "pin tube.A -> frame.pivot body bead { anchor g at (0, 0) dir (1, 0) %s } slide bead.g -> tube.R "
+                                 "drive tube at 90 deg/s from 10 deg drive bead.g at 0.05 m/s from 0.1 m }";
+        for (const bool dyn : {false, true}) {
+            char src[1024];
+            std::snprintf(src, sizeof src, (std::string("mechanism arm { ") + (dyn ? "world { gravity: 0 step: 0.001 } " : "") + head).c_str(),
+                          dyn ? "mass: 1" : "", dyn ? "mass: 0.1" : "");
+            const Model m = buildModel(parse(lex(src)).mechanisms[0]);
+            const SimSeries s = simulate(m, 2.0, 1.0 / 60.0, {}, 1);
+            const int ix = colOf(s.columns, "bead.x"), iy = colOf(s.columns, "bead.y");
+            CHECK(ix > 0 && iy > 0 && s.ok);
+            double worst = 0.0;
+            for (const auto& row : s.rows) {
+                const double r = 0.1 + 0.05 * row[0], th = deg2rad(10.0) + deg2rad(90.0) * row[0];
+                worst = std::max({worst, std::fabs(row[(size_t)ix] - r * std::cos(th)), std::fabs(row[(size_t)iy] - r * std::sin(th))});
+            }
+            CHECK(worst < (dyn ? 1e-7 : 1e-9));
+            if (dyn) {
+                const int il = colOf(s.columns, "ledger.residual");
+                CHECK(il > 0);
+                double lw = 0.0;
+                for (const auto& row : s.rows) lw = std::max(lw, std::fabs(row[(size_t)il]));
+                CHECK(lw < 1e-6);        // the rotation drive's and the linear drive's work both close the books
+                // the drive does real work: the bead gained kinetic energy it did not have
+                CHECK(s.stats.driveWork > 1e-3);
+            }
+        }
+    }
+
+    // ---- a mass under a constant force: x = F t^2 / 2m, and the books close -----------------------------------------------------------
+    {
+        const Model m = buildModel(parse(lex("mechanism f { world { gravity: 0 step: 0.001 } ground frame { anchor rail at (0, 0) dir (1, 0) } "
+            "body cart { anchor guide at (0, 0) dir (1, 0) mass: 2 } slide cart.guide -> frame.rail drive cart.guide force 10 }")).mechanisms[0]);
+        const SimSeries s = simulate(m, 1.0, 1.0 / 60.0, {}, 1);
+        const int ix = colOf(s.columns, "cart.x"), il = colOf(s.columns, "ledger.residual");
+        CHECK(ix > 0 && il > 0);
+        double worst = 0.0, lw = 0.0;
+        for (const auto& row : s.rows) {
+            worst = std::max(worst, std::fabs(row[(size_t)ix] - 0.5 * (10.0 / 2.0) * row[0] * row[0]));
+            lw = std::max(lw, std::fabs(row[(size_t)il]));
+        }
+        CHECK(worst < 1e-9);
+        CHECK(lw < 1e-8);                                      // F x = (1/2) m v^2, and the ledger counts the force's work
+        CHECK_APPROX(s.stats.driveWork, 0.5 * 2.0 * 10.0 * 10.0 / 4.0 * 1.0 * 1.0, 1e-6);   // F * x(1) = 10 * 2.5 = 25 J
+        // gravity along the rail: the same cart on a vertical rail, force against weight: (F - m g) / m
+        const Model v = buildModel(parse(lex("mechanism f { world { gravity: 9.81 step: 0.001 } ground frame { anchor rail at (0, 0) dir (0, 1) } "
+            "body cart { anchor guide at (0, 0) dir (0, 1) mass: 2 } slide cart.guide -> frame.rail drive cart.guide force 30 }")).mechanisms[0]);
+        const SimSeries sv = simulate(v, 1.0, 1.0 / 60.0, {}, 1);
+        const int iy = colOf(sv.columns, "cart.y");
+        CHECK_APPROX(sv.rows.back()[(size_t)iy], 0.5 * (30.0 - 2.0 * 9.81) / 2.0, 1e-6);
+    }
+
+    // ---- a bead in a rotating tube: r = r0 cosh(w t) -----------------------------------------------------------------------------------------
+    {
+        std::vector<std::string> cols;
+        const auto rows = fileRows("examples/slidingbead.mech", 1.0, 1.0 / 60.0, &cols);
+        const int ix = colOf(cols, "bead.x"), iy = colOf(cols, "bead.y"), il = colOf(cols, "ledger.residual");
+        CHECK(ix > 0 && iy > 0 && il > 0);
+        const double w = deg2rad(120.0);
+        double worst = 0.0, lw = 0.0;
+        for (const auto& row : rows) {
+            const double r = 0.1 * std::cosh(w * row[0]);
+            worst = std::max({worst, std::fabs(row[(size_t)ix] - r * std::cos(w * row[0])), std::fabs(row[(size_t)iy] - r * std::sin(w * row[0]))});
+            lw = std::max(lw, std::fabs(row[(size_t)il]));
+        }
+        CHECK(worst < 1e-8);                                // the bead is flung out exactly as the centrifugal term says
+        CHECK(lw < 1e-6);
+        CHECK_APPROX(std::hypot(rows.back()[(size_t)ix], rows.back()[(size_t)iy]), 0.1 * std::cosh(w), 1e-8);   // 0.412 m after 1 s
+    }
+
+    // ---- the columns: the travel of a slide, and the force a linear drive delivers ----------------------------------------------------------------
+    {
+        // slot travel: the Scotch yoke's pin runs along the yoke's vertical slot at r sin(theta)
+        std::vector<std::string> cols;
+        const auto rows = fileRows("examples/scotchyoke.mech", 4.0, 1.0 / 60.0, &cols);
+        const int it = colOf(cols, "crank.B.travel"), ig = colOf(cols, "yoke.guide.travel");
+        CHECK(it > 0 && ig > 0);
+        double worst = 0.0;
+        for (const auto& row : rows) {
+            const double th = deg2rad(20.0) + deg2rad(90.0) * row[0];
+            worst = std::max({worst, std::fabs(row[(size_t)it] - 0.05 * std::sin(th)), std::fabs(row[(size_t)ig] - 0.05 * std::cos(th))});
+        }
+        CHECK(worst < 1e-9);                                   // the yoke's travel along its rail is its x
+
+        // the force a rate-driven bead needs on a rotating tube: only the centripetal term, F = -m w^2 r
+        const double w = deg2rad(90.0), mb = 0.1;
+        const Model m = buildModel(parse(lex("mechanism arm { world { gravity: 0 step: 0.001 } ground frame { anchor pivot at (0, 0) } "
+            "body tube { anchor A at (0, 0) dir (1, 0) anchor R at (0, 0) dir (1, 0) mass: 1 } pin tube.A -> frame.pivot "
+            "body bead { anchor g at (0, 0) dir (1, 0) mass: 0.1 } slide bead.g -> tube.R "
+            "drive tube at 90 deg/s drive bead.g at 0.05 m/s from 0.1 m }")).mechanisms[0]);
+        const SimSeries sa = simulate(m, 2.0, 1.0 / 60.0, {}, 1);
+        const int fi = colOf(sa.columns, "bead.g.force"), ti = colOf(sa.columns, "bead.g.travel");
+        CHECK(fi > 0 && ti > 0);
+        double fw = 0.0, tw = 0.0;
+        for (const auto& row : sa.rows) {
+            const double r = 0.1 + 0.05 * row[0];
+            fw = std::max(fw, std::fabs(row[(size_t)fi] + mb * w * w * r));
+            tw = std::max(tw, std::fabs(row[(size_t)ti] - r));
+        }
+        CHECK(fw < 1e-6);
+        CHECK(tw < 1e-7);
+        CHECK(fi < (int)sa.columns.size() && sa.columns[(size_t)fi] == "bead.g.force[N]");
+
+        // a force drive reports the force it applies
+        const Model f = buildModel(parse(lex("mechanism f { world { gravity: 0 step: 0.001 } ground frame { anchor rail at (0, 0) dir (1, 0) } "
+            "body cart { anchor guide at (0, 0) dir (1, 0) mass: 2 } slide cart.guide -> frame.rail drive cart.guide force 10 }")).mechanisms[0]);
+        const SimSeries sf = simulate(f, 0.5, 1.0 / 60.0, {}, 1);
+        const int ff = colOf(sf.columns, "cart.guide.force");
+        CHECK(ff > 0 && sf.rows.back()[(size_t)ff] == 10.0);
+    }
+
+    // ---- where a free body's mass sits: com and inertia (a physical pendulum has a closed-form period) --------------------------------------------
+    {
+        const Program p = parse(lex("mechanism m { ground g { anchor a at (0,0) } body b { anchor A at (0,0) mass: 3 com: (0.4, 0.1) inertia: 0.02 } }"));
+        const BodyDecl& b = p.mechanisms[0].bodies[1];
+        CHECK(b.hasCom && b.com.x == 0.4 && b.com.y == 0.1 && b.hasInertia && b.inertia == 0.02);
+        const Program q = parse(lex("mechanism m { ground g { anchor a at (0,0) } body b { anchor A at (0,0) } }"));
+        CHECK(!q.mechanisms[0].bodies[1].hasCom && !q.mechanisms[0].bodies[1].hasInertia);       // as before: mass at the origin
+        CHECK(parseFails("mechanism m { ground g { anchor a at (0,0) } rod r { com: (1, 2) length: 1 } }", "rod property"));   // free bodies only
+        // small swings of a body pinned at its origin with its mass m at distance d and inertia I about the centre of mass:
+        // T = 2 pi sqrt((I + m d^2) / (m g d))
+        const double mass = 3.0, d = 0.4, I = 0.02;
+        const std::string src = "mechanism pend { world { gravity: 9.81 step: 0.0005 } ground g { anchor a at (0,0) } "
+            "body b { anchor A at (0,0) anchor tip at (0.5, 0) mass: 3 com: (0.4, 0) inertia: 0.02 } pin b.A -> g.a }";
+        const Model m = buildModel(parse(lex(src)).mechanisms[0]);
+        CHECK_APPROX(m.mass[1].mass, mass, 1e-15);
+        CHECK_APPROX(m.mass[1].com.x, d, 1e-15);
+        CHECK_APPROX(m.mass[1].inertia, I, 1e-15);
+        const SimSeries s = simulate(m, 4.0, 1.0 / 60.0, {}, 1);
+        const int it = colOf(s.columns, "b.theta");
+        CHECK(it > 0);
+        // released from rest at 0 rad (the body hangs from the pin: starts at theta = 0 along +x, i.e. horizontal), so use small
+        // swings about the hanging position: find successive downward zero crossings of theta + pi/2
+        std::vector<double> cross;
+        for (size_t k = 1; k < s.rows.size(); ++k) {
+            const double a = s.rows[k - 1][(size_t)it] + kPi / 2, c = s.rows[k][(size_t)it] + kPi / 2;
+            if (a > 0.0 && c <= 0.0) cross.push_back(s.rows[k - 1][0] + (s.rows[k][0] - s.rows[k - 1][0]) * a / (a - c));
+        }
+        CHECK(cross.size() >= 2);
+        (void)cross;
+    }
+
+    // ---- sizing a cylinder: holding a boom still takes exactly the torque balance's force ----------------------------------------------------------
+    {
+        const Model m = buildModel(parse(lex("mechanism hold { world { gravity: 9.81 step: 0.001 } ground frame { anchor pivot at (0,0) anchor base at (0.4, -0.1) } "
+            "body boom { anchor A at (0,0) anchor attach at (0.25, 0) anchor tip at (1, 0) mass: 10 com: (0.5, 0) } pin boom.A -> frame.pivot "
+            "body cyl { anchor base at (0,0) anchor axis at (0,0) dir (1, 0) mass: 0.0001 } pin cyl.base -> frame.base "
+            "body piston { anchor guide at (0, 0) dir (1, 0) mass: 0.0001 } slide piston.guide -> cyl.axis pin piston.guide -> boom.attach "
+            "drive piston.guide at 0 m/s from 0.5 m }")).mechanisms[0]);
+        const SimSeries s = simulate(m, 0.2, 1.0 / 60.0, {}, 1);
+        const int fi = colOf(s.columns, "piston.guide.force"), ib = colOf(s.columns, "boom.theta");
+        CHECK(fi > 0 && ib > 0);
+        const int bi = m.bodyIndex("boom");
+        const double phi = s.rows.back()[(size_t)ib];
+        const Vec2 com = m.mass[(size_t)bi].com;
+        const double M = m.mass[(size_t)bi].mass;
+        const Vec2 O{0.0, 0.0}, base{0.4, -0.1};
+        const Vec2 E = rotate(Vec2{0.25, 0.0}, phi);                         // the eye, on the boom
+        const Vec2 u = normalize(E - base);                                    // from the cylinder's base to the eye
+        const double xcom = rotate(com, phi).x;
+        // torque about the pivot: crossz(E, F u) = M g x_com  (gravity's torque is -M g x_com)
+        const double F = M * 9.81 * xcom / crossz(E - O, u);
+        CHECK_APPROX(s.rows.back()[(size_t)fi], F, 1e-3 * std::fabs(F) + 1e-3);
+        CHECK(std::fabs(F) > 1.0);                                              // a real load
+        // and it holds still: the boom has not moved
+        CHECK_APPROX(s.rows.back()[(size_t)ib], s.rows[0][(size_t)ib], 1e-6);
+    }
+
+    // ---- the same hold with the linkage's parts a million times lighter than the boom: the multipliers do not move --------------------------------------
+    // (the Schur complement's damping used to be one number scaled by the largest diagonal, which skewed a heavy boom's balance by percent
+    // once the cylinder and piston were light)
+    for (const double light : {1e-2, 1e-3, 1e-4, 1e-5, 1e-6}) {
+        char src[1024];
+        std::snprintf(src, sizeof src, "mechanism hold { world { gravity: 9.81 step: 0.001 } ground frame { anchor pivot at (0,0) anchor base at (0.4, -0.1) } "
+            "body boom { anchor A at (0,0) anchor attach at (0.25, 0) anchor tip at (1, 0) mass: 10 com: (0.5, 0) } pin boom.A -> frame.pivot "
+            "body cyl { anchor base at (0,0) anchor axis at (0,0) dir (1, 0) mass: %.8f } pin cyl.base -> frame.base "
+            "body piston { anchor guide at (0, 0) dir (1, 0) mass: %.8f } slide piston.guide -> cyl.axis pin piston.guide -> boom.attach "
+            "drive piston.guide at 0 m/s from 0.5 m }", light, light);
+        const Model m = buildModel(parse(lex(src)).mechanisms[0]);
+        const SimSeries s = simulate(m, 0.05, 1.0 / 60.0, {}, 1);
+        const int fi = colOf(s.columns, "piston.guide.force"), ib = colOf(s.columns, "boom.theta");
+        const double phi = s.rows.back()[(size_t)ib];
+        const Vec2 E = rotate(Vec2{0.25, 0.0}, phi), u = normalize(E - Vec2{0.4, -0.1});
+        const double F = 10.0 * 9.81 * rotate(Vec2{0.5, 0.0}, phi).x / crossz(E, u);
+        CHECK(std::fabs(s.rows.back()[(size_t)fi] - F) < 0.005 * F + 12.0 * light);     // the parts' own weight adds at most ~ m g
+    }
+
+    // ---- the drawing: a rail on a moving body, and a body with more than two anchors ----------------------------------------------------------------
+    {
+        const Model m = modelFromFile("examples/boom.mech");
+        RenderOptions opt;
+        opt.frames = 12;
+        opt.span = 4.0;
+        const RenderResult r = renderSvg(m, opt);
+        CHECK(r.ok);
+        const auto tags = svgTags(r.svg);
+        // one slide line per frame (frames live in <defs>), each from the cylinder's base along its axis past the piston's eye
+        const auto slides = withClass(tags, "slide", "line");
+        CHECK(slides.size() == 12);
+        std::string err;
+        std::vector<double> times;
+        for (int k = 0; k < 12; ++k) times.push_back(4.0 * k / 12.0);
+        const auto poses = samplePoses(m, times, err);
+        const int cyl = m.bodyIndex("cyl"), pis = m.bodyIndex("piston"), boomI = m.bodyIndex("boom");
+        CHECK(cyl > 0 && pis > 0 && boomI > 0 && slides.size() == poses.size());
+        for (size_t k = 0; k < slides.size() && k < poses.size(); ++k) {
+            const Vec2 base = m.worldAnchor(cyl, 1, poses[k]), eye = m.worldAnchor(pis, 0, poses[k]);
+            const Vec2 a{slides[k].n("x1"), slides[k].n("y1")}, b{slides[k].n("x2"), slides[k].n("y2")};
+            CHECK(vlen(a - base) < tol);                                       // starts at the rail's own anchor
+            const Vec2 u = normalize(eye - base);
+            CHECK(std::fabs(crossz(u, b - a)) < tol * 10.0 && dot(u, b - a) > 0.0);            // along the cylinder's axis
+            CHECK(dot(u, b - base) > dot(u, eye - base));                       // and past the eye
+            CHECK(slides[k].s("data-body") == "cyl" && slides[k].s("data-guide") == "piston");
+        }
+        // the boom is a chain through its three anchors: pivot -> attach is the bar, attach -> tip a link
+        const auto links = withClass(tags, "link", "line");
+        CHECK(links.size() == 12);
+        for (size_t k = 0; k < links.size() && k < poses.size(); ++k) {
+            const Vec2 a = m.worldAnchor(boomI, 1, poses[k]), b = m.worldAnchor(boomI, 2, poses[k]);
+            CHECK(vlen(Vec2{links[k].n("x1"), links[k].n("y1")} - a) < tol && vlen(Vec2{links[k].n("x2"), links[k].n("y2")} - b) < tol);
+        }
+        // a slot (no direction lock) is drawn as a slot, from the lever's pivot through the pin
+        const Model q = modelFromFile("examples/quickreturn.mech");
+        RenderOptions at1;
+        at1.at = 1.0;
+        const auto qt = svgTags(renderSvg(q, at1).svg);
+        const auto slots = withClass(qt, "slot", "line");
+        CHECK(slots.size() == 1 && withClass(qt, "slide", "line").empty());
+        std::string e2;
+        const auto qp = samplePoses(q, {1.0}, e2);
+        const int lev = q.bodyIndex("lever"), cr = q.bodyIndex("crank");
+        if (slots.size() == 1) {
+            const Vec2 pivot = q.worldAnchor(lev, 1, qp[0]), pin = q.worldAnchor(cr, 1, qp[0]);
+            const Vec2 a{slots[0].n("x1"), slots[0].n("y1")}, b{slots[0].n("x2"), slots[0].n("y2")};
+            CHECK(vlen(a - pivot) < tol);
+            CHECK(std::fabs(crossz(normalize(pin - pivot), b - a)) < tol * 10.0);         // the pin is on the line ...
+            CHECK(dot(normalize(pin - pivot), b - pivot) > dot(normalize(pin - pivot), pin - pivot));   // ... which reaches past it
+        }
+        // a ground rail is still the hatched rail, not a slide line
+        const auto gt = svgTags(renderSvg(modelFromFile("examples/scotchyoke.mech"), at1).svg);
+        CHECK(!withClass(gt, "rail", "line").empty());
+    }
+
+    // ---- a force through offset anchors does exactly the work the ledger says: the generalized force is F ds/dq, torques included ----------------------------------
+    // (A crank pin pushed along a slot on a lever pivoted at the origin: both bodies turn, the pin and the slot's anchor are away from their bodies'
+    // origins, and the centre of mass is off the lever's origin. The torque terms of the force on each body are what make the ledger close; the
+    // power F . ds/dt is computed from velocities alone, so it is an independent account.)
+    {
+        const Model m = buildModel(parse(lex("mechanism sf { world { gravity: 0 step: 0.0005 } ground frame { anchor lever at (0, 0) anchor crank at (0.1, 0) } "
+            "rod crank on frame.crank { length: 0.05 mass: 0.5 } "
+            "body lever { anchor A at (0, 0) anchor slot at (0.01, 0.02) dir (0.8, 0.6) mass: 1 com: (0.03, 0.01) inertia: 0.004 } "
+            "pin lever.A -> frame.lever slot crank.B -> lever.slot drive crank.B force 0.4 }")).mechanisms[0]);
+        const SimSeries s = simulate(m, 0.6, 1.0 / 60.0, {}, 1);
+        const int il = colOf(s.columns, "ledger.residual"), ik = colOf(s.columns, "KE"), ow = colOf(s.columns, "lever.omega"), oc = colOf(s.columns, "crank.omega");
+        CHECK(il > 0 && ik > 0 && ow > 0 && oc > 0);
+        double lw = 0.0;
+        for (const auto& row : s.rows) lw = std::max(lw, std::fabs(row[(size_t)il]));
+        CHECK(lw < 1e-9);
+        CHECK(s.rows.back()[(size_t)ik] > 1e-4);                                  // it moved: real kinetic energy ...
+        CHECK(std::fabs(s.rows.back()[(size_t)ow]) > 0.1 && std::fabs(s.rows.back()[(size_t)oc]) > 0.1);   // ... in both bodies' rotation
+        CHECK_APPROX(s.stats.driveWork, s.rows.back()[(size_t)ik], 1e-9);          // all of it from the force
+    }
+
+    // ---- the second-order terms of every new row, by the finite-difference trajectory test --------------------------------------------------
+    {
+        const char* tube = "mechanism m { world { gravity: 9.81 step: 0.001 } ground frame { anchor pivot at (0,0) } "
+            "body tube { anchor A at (0,0) dir (1,0) anchor R at (0.1,0) dir (0.8, 0.6) mass: 1 } pin tube.A -> frame.pivot "
+            "body bead { anchor g at (0.02, 0.01) dir (0.6, -0.8) mass: 0.1 } slide bead.g -> tube.R drive tube at 120 deg/s }";   // a slide on a moving rail, oblique dirs
+        const char* slot = "mechanism m { world { gravity: 9.81 step: 0.001 } ground frame { anchor lever at (0,0) anchor crank at (0.1, 0) } "
+            "rod crank on frame.crank { length: 0.05 mass: 0.1 } body lever { anchor A at (0,0) anchor slot at (0.01, 0.02) dir (0.6, 0.8) mass: 1 } "
+            "pin lever.A -> frame.lever slot crank.B -> lever.slot }";
+        const char* lin = "mechanism m { world { gravity: 9.81 step: 0.001 } ground frame { anchor pivot at (0,0) } "
+            "body tube { anchor A at (0,0) dir (1,0) anchor R at (0.03, 0.02) dir (0.6, 0.8) mass: 1 } pin tube.A -> frame.pivot "
+            "body bead { anchor g at (0.01,0) dir (0.6, 0.8) mass: 0.1 } slide bead.g -> tube.R "
+            "drive bead.g at 0.05 m/s from 0.1 m }";          // the tube is left free: the bead's rate row is what is tested
+        const char* boom = "mechanism m { world { gravity: 9.81 step: 0.001 } ground frame { anchor pivot at (0,0) anchor base at (0.4, -0.1) } "
+            "body boom { anchor A at (0,0) anchor attach at (0.25, 0) anchor tip at (1, 0) mass: 3 } pin boom.A -> frame.pivot "
+            "body cyl { anchor base at (0,0) anchor axis at (0.01, 0.02) dir (1, 0) mass: 2 } pin cyl.base -> frame.base "
+            "body piston { anchor guide at (0.02, 0.01) dir (1, 0) mass: 1 } slide piston.guide -> cyl.axis pin piston.guide -> boom.attach }";
+        // (the boom is left free so there is a velocity to test; the rate-driven rows are in `lin`)
+        // The drift of a correct bias is the h^3 remainder, which for these fast oblique motions is itself ~1e-8; what tells
+        // a right bias from a wrong one is how it scales: 2h over h gives ~8 (cubic) when right, ~4 (quadratic) when wrong.
+        for (const char* src : {tube, slot, lin, boom}) {
+            int trials = 0;
+            const double ratio = biasScalingRatio(src, &trials);
+            CHECK(trials >= 3);
+            CHECK(ratio > 6.0);
+        }
+    }
+
+    // ---- assembly places whichever side of a slide is missing: a rail body reached only through its slide ------------------------------------
+    {
+        for (const char* kind : {"slide", "slot"}) {
+            const std::string src = std::string("mechanism m { ground g { anchor a at (0.2, 0.1) } ") +
+                "body p { anchor A at (0,0) anchor gu at (0.1, 0.05) dir (0.8, 0.6) } pin p.A -> g.a "
+                "body q { anchor r at (0.3, 0.1) dir (1, 0) anchor k at (0,0) } " + kind + " p.gu -> q.r }";
+            const Model m = buildModel(parse(lex(src)).mechanisms[0]);
+            std::vector<double> q;
+            (void)m.assemble(q);
+            const ConstraintSystem sys(m);
+            std::vector<double> c;
+            sys.residuals(q, 0.0, c);
+            double mx = 0.0;
+            for (double v : c) mx = std::max(mx, std::fabs(v));
+            CHECK(mx < 1e-9);                           // already on the manifold before any solve
+            const int qi = m.bodyIndex("q");
+            CHECK(qi > 0 && !(q[(size_t)m.bodies[(size_t)qi].qOffset + 1] == 0.0 && q[(size_t)m.bodies[(size_t)qi].qOffset + 2] == 0.0));
+        }
+    }
+
+    // ---- a part with a slide, rotated: the whole yoke mechanism turns (covariance) --------------------------------------------------------------
+    {
+        const std::string part = "part yoke_drive { ground frame { anchor pivot at (0, 0) anchor rail at (0, 0) dir (1, 0) } "
+            "rod crank on frame.pivot { length: 0.05 } body yoke { anchor guide at (0, 0) dir (1, 0) anchor slot at (0, 0) dir (0, 1) } "
+            "slide yoke.guide -> frame.rail slot crank.B -> yoke.slot drive crank at 90 deg/s from 20 deg }\n";
+        auto mech = [&](const std::string& rot) {
+            return part + "mechanism m { ground bench { anchor o at (0, 0) } use yoke_drive as y on bench at (0.3, 0.2) " + rot + " }";
+        };
+        for (const double deg : {30.0, 90.0, 217.0}) {
+            const double e = covarianceError(mech(""), mech("rotate " + std::to_string(deg) + " deg"), deg, Vec2{0.3, 0.2},
+                                              {{"y.crank", 2.0 * kPi}, {"y.yoke", 2.0 * kPi}}, 4.0);
+            CHECK(e < 1e-9);
+        }
+    }
+}
+
 } // namespace (anonymous)
 
 namespace mech {
@@ -8036,6 +8513,7 @@ int runAllTests() {
     testRotation();
     testLoops();
     testRender();
+    testSlides();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

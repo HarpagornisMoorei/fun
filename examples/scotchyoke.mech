@@ -1,0 +1,25 @@
+// scotchyoke — a crank turns a pin that rides a vertical slot in a yoke; the yoke slides on a
+// horizontal rail. The slot is a line fixed in the *yoke* (a moving body), which is what `slot` is
+// for: it keeps a point (the crank pin) on a line that rides another body.
+//
+//   mech run examples/scotchyoke.mech --headless 4 --csv yoke.csv
+//
+// The yoke's position is exactly the crank pin's x, a pure sinusoid (no connecting-rod distortion):
+//   yoke.x(t) = r cos(theta(t)),   yoke.y = 0,   yoke.theta = 0
+mechanism scotchyoke {
+  ground frame {
+    anchor pivot at (0, 0)
+    anchor rail  at (0, 0) dir (1, 0)         // the yoke slides along x
+  }
+
+  rod crank on frame.pivot { length: 0.05 }
+
+  body yoke {
+    anchor guide at (0, 0) dir (1, 0)         // rides the ground rail
+    anchor slot  at (0, 0) dir (0, 1)         // the vertical slot the crank pin runs in
+  }
+  slide yoke.guide -> frame.rail
+  slot crank.B -> yoke.slot
+
+  drive crank at 90 deg/s from 20 deg
+}

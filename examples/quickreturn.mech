@@ -1,0 +1,30 @@
+// quickreturn — the crank-and-slotted-lever (Whitworth) quick-return. The crank pivots at (d, 0)
+// and its pin runs in a slot along the lever, which pivots at the origin. Turning at constant speed,
+// the lever swings out slowly and back quickly.
+//
+//   mech run examples/quickreturn.mech --headless 4 --csv lever.csv
+//
+// With the crank at angle theta the pin is at (d + r cos theta, r sin theta) and the lever points at it:
+//   lever.theta = atan2(r sin theta, d + r cos theta)
+// The lever swings through +-asin(r/d); the forward stroke takes 180 + 2 asin(r/d) degrees of crank and the
+// return 180 - 2 asin(r/d). Here r/d = 0.5, so 240 and 120 degrees: a quick-return ratio of 2.
+mechanism quickreturn {
+  param d = 0.10                              // distance between the two pivots
+  param r = 0.05                              // crank length
+
+  ground frame {
+    anchor lever at (0, 0)
+    anchor crank at (d, 0)
+  }
+
+  rod crank on frame.crank { length: r }
+
+  body lever {
+    anchor A    at (0, 0)
+    anchor slot at (0, 0) dir (1, 0)          // the slot runs along the lever
+  }
+  pin lever.A -> frame.lever
+  slot crank.B -> lever.slot
+
+  drive crank at 60 deg/s from 0 deg
+}

@@ -38,6 +38,10 @@ struct BodyDecl {
                                           // free body: { mass }
     // attach sugar: "rod crank on base.p1 { ... }" / "shaft a at frame.p1"
     double frameRot = 0.0;                // M11: rotation (rad) of the part it was written in (rods, bodies)
+    bool hasCom = false;                  // M14: a free body's centre of mass (body-local) and inertia about it
+    Vec2 com{0.0, 0.0};
+    bool hasInertia = false;
+    double inertia = 0.0;
     bool hasAttach = false;
     std::string attachBody, attachAnchor;
     int line = 0;
@@ -47,7 +51,7 @@ struct BodyDecl {
 // slide <A>.<a> -> <B>.<b>    prismatic: A's guide anchor rides B's rail
 //                             (B must be ground in M2; both need dirs)
 struct JointDecl {
-    enum class Kind { Pin, Slide };
+    enum class Kind { Pin, Slide, Slot };   // M14: a slot keeps a point on a line fixed in another body
     Kind kind = Kind::Pin;
     std::string bodyA, anchorA, bodyB, anchorB;
     int line = 0;
@@ -98,6 +102,13 @@ struct DriveDecl {
     bool isTorque = false;   // M3: torque drive (a force, not a constraint)
     double torque = 0.0;     // N*m, applied about the body's frame origin
     double frameRot = 0.0;   // M11: rotation (rad) of the part this drive was written in
+    // M14: a linear drive acts on a slide, named by its guide anchor (`drive piston.guide ...`)
+    bool linear = false;
+    std::string anchor;
+    double linRate = 0.0;    // m/s (rate form)
+    double linS0 = 0.0;      // m: offset along the rail at t = 0
+    bool linForce = false;   // force form: a constant force along the rail
+    double linForceN = 0.0;  // N
     bool isWeight = false;   // M5: weight drive (a bounded energy source)
     double weightMass = 0.0; // kg
     int weightSign = 1;      // +1: unwinds ccw (+theta); -1: 'cw'

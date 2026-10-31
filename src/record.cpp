@@ -8,6 +8,11 @@ namespace mech {
 
 namespace {
 
+// M14: "body.anchor" of a slide's guide, which names the slide in the columns
+std::string slideLabel(const Model& m, const SlideJoint& s) {
+    return m.bodies[(size_t)s.guideBody].name + "." + m.bodies[(size_t)s.guideBody].anchors[(size_t)s.guideAnchor].name;
+}
+
 std::string touchLabel(const Model& m, const TouchJoint& tj) {
     const Body& b = m.bodies[(size_t)tj.body];
     return b.name + "." + b.anchors[(size_t)tj.anchor].name + "@" +
@@ -39,6 +44,8 @@ Recorder::Recorder(const Model& m, const DynamicsSystem* dyn, std::vector<Probe>
         cols_.push_back(n + ".foot.y[m]");
         cols_.push_back(n + ".normal[rad]");
     }
+    for (const SlideJoint& s : m.slides)                    // how far each guide has travelled along its rail
+        cols_.push_back(slideLabel(m, s) + ".travel[m]");
     if (dyn_) {
         for (size_t bi = 1; bi < m.bodies.size(); ++bi) {
             const std::string& n = m.bodies[bi].name;
@@ -53,6 +60,8 @@ Recorder::Recorder(const Model& m, const DynamicsSystem* dyn, std::vector<Probe>
         }
         for (const Drive& d : m.drives)
             if (d.enabled) cols_.push_back("drive." + m.bodies[(size_t)d.body].name + "[N*m]");
+        for (const LinearDrive& ld : m.linDrives)           // the force each linear drive delivers along its rail
+            cols_.push_back(slideLabel(m, m.slides[(size_t)ld.slide]) + ".force[N]");
         cols_.push_back("KE[J]");
         cols_.push_back("PE[J]");
         cols_.push_back("E[J]");
@@ -89,6 +98,10 @@ std::vector<double> Recorder::sample(double t, const std::vector<double>& q,
         r.push_back(cs.foot.y);
         r.push_back(std::atan2(cs.normal.y, cs.normal.x));
     }
+    for (const SlideJoint& s : m_.slides) {
+        const SlideGeom g = slideGeom(m_, s, q);
+        r.push_back(dot(g.u, g.pA - g.pB));
+    }
     if (dyn_) {
         for (size_t bi = 1; bi < m_.bodies.size(); ++bi) {
             const int o = m_.bodies[bi].qOffset;
@@ -105,6 +118,8 @@ std::vector<double> Recorder::sample(double t, const std::vector<double>& q,
         }
         for (size_t di = 0; di < m_.drives.size(); ++di)
             if (m_.drives[di].enabled) r.push_back(dyn_->driveReactions()[di]);
+        for (size_t li = 0; li < m_.linDrives.size(); ++li)
+            r.push_back(m_.linDrives[li].isForce ? m_.linDrives[li].force : dyn_->linearReactions()[li]);
         const double KE = dyn_->kinetic(q, qd), PE = dyn_->potential(q);
         const HybridStats& hs = dyn_->hybridStats();
         r.push_back(KE);

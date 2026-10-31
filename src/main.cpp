@@ -215,17 +215,20 @@ int cmdCheck(const std::string& path, const ParamOverrides& overrides = {}) {
         }
         std::printf("\n");
 
-        std::printf("bodies %d (ground 1)  ·  pins %d  ·  slides %d  ·  gears %d  ·  meshes %d",
-                    d.nBodies, d.nPins, d.nSlides, d.nGears, d.nMeshes);
+        std::printf("bodies %d (ground 1)  ·  pins %d  ·  slides %d",
+                    d.nBodies, d.nPins, d.nSlides);
+        if (d.nSlots > 0) std::printf("  ·  slots %d", d.nSlots);
+        std::printf("  ·  gears %d  ·  meshes %d", d.nGears, d.nMeshes);
         if (d.nTangentMeshes > 0) std::printf(" (%d tangent)", d.nTangentMeshes);
         if (d.nTouches > 0) std::printf("  ·  profiles %d  ·  touches %d", d.nProfiles, d.nTouches);
         else if (d.nPolarMeshes > 0) std::printf("  ·  profiles %d  ·  non-circular meshes %d",
                                                   d.nProfiles, d.nPolarMeshes);
-        std::printf("  ·  drives %d", d.nDrives);
+        std::printf("  ·  drives %d", d.nDrives + d.nLinearRate);
         if (d.nHolds > 0) std::printf(" (incl. %d mode hold%s)", d.nHolds,
                                       d.nHolds == 1 ? "" : "s");
         if (d.nTorques > 0) std::printf(" + %d torque", d.nTorques);
         if (d.nWeights > 0) std::printf(" + %d weight", d.nWeights);
+        if (d.nLinearForce > 0) std::printf(" + %d linear force", d.nLinearForce);
         if (d.nSprings > 0) std::printf("  ·  springs %d", d.nSprings);
         if (d.nModes > 0) std::printf("  ·  modes %d", d.nModes);
         std::printf("\n");
@@ -233,7 +236,7 @@ int cmdCheck(const std::string& path, const ParamOverrides& overrides = {}) {
         const int j = d.nPins + d.nSlides;
         std::printf("Grubler-Kutzbach (planar): F = 3(n-1) - 2j - k = 3*%d - 2*%d - %d = %d\n",
                     d.nBodies - 1, j,
-                    d.nMeshes + d.nTangentMeshes + d.nTouches + d.nPolarMeshes, d.freeDof);
+                    d.nSlots + d.nMeshes + d.nTangentMeshes + d.nTouches + d.nPolarMeshes, d.freeDof);   // k counts slots too
         if (d.residualDof == 0) {
             std::printf("residual DOF after drives: 0  ->  fully determined [ok]\n");
         } else if (d.residualDof > 0) {

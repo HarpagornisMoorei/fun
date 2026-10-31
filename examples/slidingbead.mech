@@ -1,0 +1,30 @@
+// slidingbead — a bead on a rotating tube. The tube is driven round at 120 deg/s, and the bead,
+// free to slide along it, is flung outward by its own inertia: a dynamic slide whose rail moves.
+//
+//   mech run examples/slidingbead.mech --headless 1 --csv bead.csv
+//
+// In the tube's frame the bead feels only the centrifugal term, r'' = w^2 r, so it starts at
+// r0 = 0.1 m at rest relative to the tube and
+//   r(t) = r0 cosh(w t),   w = 2 pi / 3 rad/s   (0.412 m after 1 s)
+// The energy ledger closes: what the drive puts in is the bead's kinetic energy. Change `drive tube`
+// to a linear drive on the bead (`drive bead.g at 0.05 m/s`) to prescribe its travel instead.
+mechanism slidingbead {
+  world { gravity: 0  step: 0.0005 }
+
+  ground frame { anchor pivot at (0, 0) }
+
+  body tube {
+    anchor A at (0, 0) dir (1, 0)
+    anchor R at (0.1, 0) dir (1, 0)           // the line the bead rides, starting 0.1 m out
+    mass: 1
+  }
+  pin tube.A -> frame.pivot
+
+  body bead {
+    anchor g at (0, 0) dir (1, 0)
+    mass: 0.1
+  }
+  slide bead.g -> tube.R
+
+  drive tube at 120 deg/s
+}

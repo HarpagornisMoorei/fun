@@ -1,0 +1,38 @@
+// boom — a hydraulic boom: a cylinder pinned to the ground, its piston rod pinned to a boom that pivots
+// on the ground. The piston slides in the cylinder (a prismatic joint between two *moving* bodies) and
+// a linear drive extends it at 20 mm/s from 0.50 m.
+//
+//   mech run examples/boom.mech --headless 4 --csv boom.csv
+//   mech render examples/boom.mech --frames 24 --span 4 --trace boom.tip -o boom.svg
+//
+// The actuator length L runs from the cylinder base to the the piston's eye on the boom, and with the
+// boom at angle phi (the eye at distance b from its pivot, the pivots a apart on the ground):
+//   L^2 = (a_x - b cos phi)^2 + (a_y - b sin phi)^2 ... the law of cosines.
+// `drive piston.guide at 0.02 m/s from 0.50 m` makes L(t) = 0.50 + 0.02 t.
+mechanism boom {
+  ground frame {
+    anchor pivot at (0, 0)                    // the boom's pivot
+    anchor base  at (0.40, -0.10)             // the cylinder's pin
+  }
+
+  body boom {
+    anchor A      at (0, 0)
+    anchor attach at (0.25, 0)                // where the the piston's eye is pinned, 0.25 m along the boom
+    anchor tip    at (1.00, 0)
+  }
+  pin boom.A -> frame.pivot
+
+  body cyl {
+    anchor base at (0, 0)
+    anchor axis at (0, 0) dir (1, 0)          // the cylinder's axis: the piston slides along it
+  }
+  pin cyl.base -> frame.base
+
+  body piston {
+    anchor guide at (0, 0) dir (1, 0)         // the the piston's eye: slides in the cylinder ...
+  }
+  slide piston.guide -> cyl.axis
+  pin piston.guide -> boom.attach                // ... and is pinned to the boom
+
+  drive piston.guide at 0.02 m/s from 0.50 m
+}

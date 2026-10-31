@@ -69,6 +69,7 @@ std::vector<Token> lex(const std::string& src) {
             return true;
         };
         if (tryUnit("deg/s", Tok::UnitDegPerSec)) continue;
+        if (tryUnit("m/s", Tok::UnitMps)) continue;
         if (tryUnit("deg", Tok::UnitDeg)) continue;
         if (tryUnit("rpm", Tok::UnitRpm)) continue;
 

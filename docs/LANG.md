@@ -1,4 +1,4 @@
-# The mech language — M13 specification
+# The mech language — M14 specification
 
 This document pins down the M6f kernel: lexical structure, grammar, static
 semantics, the kinematic solver's mathematical formulation, the
@@ -10,7 +10,8 @@ impact in dynamic ones), plate cams stated as displacement diagrams, and
 non-circular gear pairs (`mesh` between two profiles), and polygon profiles
 with filleted corners (ratchets and anything with teeth), and Coulomb friction at
 contacts, plus (M8) named parameters, numeric expressions and sweeps, and (M9) reusable
-parts, and (M10) `import` with a library of standard parts, (M11) rotated mounts, (M12) loops and indexed names, and (M13) SVG drawings. It is the contract
+parts, and (M10) `import` with a library of standard parts, (M11) rotated mounts, (M12) loops and indexed names, (M13) SVG drawings, and (M14) prismatic joints between any two bodies,
+slots and linear drives. It is the contract
 the implementation is tested against (`mech test`).
 
 ---
@@ -57,7 +58,7 @@ Four principles govern the design:
 * Numbers: non-negative decimals (`3`, `1.5`, `0.8`). Unary minus is a parser
   concern: `-60` lexes as `-` then `60`.
 * Strings: `"text"` on one line, no escapes; used only for the path of an `import` (M10).
-* Units are reserved words: `deg/s`, `rpm`, `deg`.
+* Units are reserved words: `deg/s`, `rpm`, `deg`, `m/s` (M14).
 * Keywords: `mechanism ground rod anchor at pin drive length from body shaft
   gear mesh slide on world spring torque reduce hand dial mode profile touch`.
 * `dir`, `tangent`, `gravity`, `step`, `mass`, `k`, `rest`, `damp`, `ratio`,
@@ -91,6 +92,7 @@ stmt        = groundDecl | bodyDecl | rodDecl | shaftDecl | worldDecl
             | profileDecl | touchDecl                      (* M6 *)
             | camDecl                                     (* M6b *)
             | paramDecl                                   (* M8 *)
+            | slotDecl                                    (* M14 *)
             | useDecl                                     (* M9 *)
             | forStmt ;                                   (* M12 *)
 
@@ -109,6 +111,8 @@ attach      = ( "on" | "at" ) ref ;                    (* pins anchor A *)
 worldDecl   = "world" "{" { ( "gravity" | "step" ) ":" num } "}" ;
 
 paramDecl   = "param" IDENT "=" expr ;                       (* M8 *)
+slotDecl    = "slot" ref "->" ref ;                         (* M14: a point on a line fixed in another body *)
+linearDrive = "drive" ref ( "at" num "m/s" [ "from" num [ "m" ] ] | "force" num ) ;   (* M14: ref names a slide's guide *)
 forStmt     = "for" IDENT "=" expr "to" expr "{" { stmt } "}" ;      (* M12 *)
 (* `for` also stands where a list item does: in the anchors of a ground or body, and among the
    tuples of `polygon:`, `points:` and `polar:` ( `for k = 0 to n - 1 { (x, y) (x, y) }` ). *)
@@ -218,9 +222,10 @@ Checks run at model build time, each error pointing at a source line:
   non-negative (and positive in dynamic mechanisms).
 * Every `pin`/`slide`/`spring` reference must resolve (`body.anchor`); a
   body cannot pin to itself.
-* A `slide` must join one moving body (the guide, whose anchor needs `dir`)
-  and one ground anchor (the rail, which also needs `dir`). M3 restricts
-  rails to ground.
+* A `slide A.a -> B.b` keeps the guide anchor `A.a` on the line through the rail anchor `B.b`
+  and the two directions parallel; both anchors need `dir`. Either body may be ground or moving
+  (M14: M2 to M13 required the rail on ground); a slide written ground-first still means the moving body
+  is the guide. Two ground anchors, or one body on itself, are errors.
 * A `gear` host must exist; the host anchor must resolve (`gear ... on a`
   defaults to anchor `A` — ground bodies have no default and need an
   explicit anchor). Ground hosts are legal: fixed rings and stationary
@@ -246,6 +251,17 @@ Checks run at model build time, each error pointing at a source line:
   the escapement's pair (a wheel driven by a weight and locked by a pallet).
   One hold row exists per held body across the whole mechanism: two modes
   cannot hold the same body.
+
+**M14 slide, slot and linear drive checks:**
+
+* `slide A.a -> B.b` and `slot P.p -> L.l` take either body from any body but not two ground anchors or one body
+  on itself; the rail anchor needs `dir`, and a slide's guide does too (a slot's point does not). A slide written
+  ground-first keeps its meaning (the moving body is the guide). See [`JOINTS.md`](JOINTS.md).
+* `drive body.anchor at v m/s [from s0 m]` prescribes a slide's travel `s = u . (guide - rail anchor)` as `s0 + v t` (one
+  more constraint row); `drive body.anchor force F` applies a constant force along the rail (a force, so it makes the mechanism
+  dynamic). `body.anchor` must be the guide of a slide or slot; a slide has at most one linear drive.
+* A free `body` takes `com: (x, y)` and `inertia: I` (about the centre of mass) beside `mass:`.
+* Mobility: a slide removes 2 degrees of freedom, a slot 1, a linear rate drive 1.
 
 **M13 drawing:** `mech render` is tooling, not language (see [`RENDER.md`](RENDER.md)): it poses the model
 the way `run` does (kinematic files re-solved in steps of at most 1/60 s, dynamic ones integrated) and writes the
@@ -1087,7 +1103,7 @@ resistance, more than one contact point per `touch`, and compliant
 
 ## 8. Test matrix
 
-`mech test` (15338 checks) covers: lexer tokens/units/keywords/comments/errors;
+`mech test` (15529 checks) covers: lexer tokens/units/keywords/comments/errors;
 parser AST shapes for all M3 and M4 forms and all error classes; model checks,
 desugaring, gear radius arithmetic, module rules, mass derivation (rods,
 discs, compound assemblies, overrides), DOF arithmetic including tangent
@@ -1332,6 +1348,18 @@ identical poses. Mutation checks cover the transform, each kind of element, the 
 the trace, the rail span, the assembly and pose checks, the dynamic stepping, the ring rule, the model reset and the
 command-line refusals.
 
+The M14 suite adds: the `m/s` unit and the two drive forms; the refusals (two ground anchors, one body on itself, a rail
+without a direction, a guide that is no slide, two linear drives); the mobility count; closed forms for the Scotch yoke
+(a full turn to 1e-9), the quick-return lever (atan2 and the 2:1 stroke ratio), the hydraulic boom (the actuator length
+from the boom angle), an R-P arm with a rate-driven slide on a rotating rail (kinematic and dynamic, the ledger closing), a
+mass under a constant force (F t^2 / 2m, also against gravity), and a bead in a rotating tube (r0 cosh w t to 1e-8); the
+columns (a slot's travel, the force a rate drive needs against the centripetal term, a force drive's force); a boom held
+still against its torque balance across cylinder masses from 1e-2 to 1e-6; a physical pendulum from `com`/`inertia`;
+the second-order terms of all four new row types by the finite-difference scaling test; assembly placing whichever
+side of a slide is missing; a part holding a slide, rotated (covariance); and the drawing of a rail on a moving body.
+Mutation checks cover each term of every new row's Jacobian and bias, the force and its work, the reactions and the
+velocity projection, the damping, the placement, the checks and the columns.
+
 ## 9. Milestone history & reserved ground
 
 M1 walked the skeleton (lexer/parser/rods/pins/drives); M2 added shafts,
@@ -1400,6 +1428,10 @@ compared by running many of it. Reusable parts and composition remain open.
 M9 added reusable parts: `part` with parameters and `use ... as name on ground at (x, y)`
 (see `docs/PARTS.md`), expanded at parse time so the solver, dynamics and tooling are
 unchanged, and an instanced file runs bit for bit like the flat one.
+
+M14 added prismatic joints between any two bodies, `slot`, and linear drives (rate and force), `com`/`inertia` on free
+bodies, and two CSV columns per slide (see `docs/JOINTS.md`); it also replaced a damping in the multiplier solve that skewed
+forces when masses spanned many decades, and made a slide's first placement start exactly on its rail.
 
 M13 added `mech render` (SVG drawings, `docs/RENDER.md`) and fixed a bug it exposed: assembling a model that had been
 run before began from the angles its mode holds had pinned at the end of that run (the viewer's reset key was affected).

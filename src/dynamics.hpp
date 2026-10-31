@@ -70,6 +70,9 @@ public:
     // Disabled mode holds report 0.
     const std::vector<double>& driveReactions() const { return lastReaction_; }
 
+    // M14: the force (N, along the rail) each linear rate drive transmits into its guide; 0 for a force drive.
+    const std::vector<double>& linearReactions() const { return lastLinReaction_; }
+
     // M6c: the normal force (N) of each touch from the last acceleration
     // solve; 0 for a contact that is not engaged.
     const std::vector<double>& contactForces() const { return lastContact_; }
@@ -126,6 +129,7 @@ private:
                      double tNow) const;
 
     mutable std::vector<double> lastReaction_;
+    mutable std::vector<double> lastLinReaction_;
     mutable std::vector<double> lastContact_;
     mutable double lastDriveWork_ = 0.0;   // J of the last integrate() call
     mutable double lastFrictionLoss_ = 0.0; // J dissipated by friction in the last integrate()

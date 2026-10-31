@@ -80,7 +80,22 @@ struct PinJoint {
 // ground. M2 restricts rails to ground (the rail pose is then constant).
 struct SlideJoint {
     int guideBody, guideAnchor;
-    Vec2 railPos, railDir;      // world constants (rail is on ground)
+    Vec2 railPos, railDir;      // ground rail: world constants
+    // M14: the rail may be on a moving body (railBody > 0), then railAnchor names its anchor (position
+    // and direction ride the body) and railPos/railDir are unused. A slot keeps only the point on the
+    // line (lockDir false); a slide also keeps the guide parallel to it.
+    int railBody = 0, railAnchor = -1;
+    bool lockDir = true;
+    int line = 0;
+};
+
+// M14: a linear drive prescribes how far a slide's guide has travelled along its rail,
+// s = u . (guide - rail anchor), as s0 + rate * t; a force drive pushes with a constant force along u.
+struct LinearDrive {
+    int slide = -1;
+    bool isForce = false;
+    double rate = 0.0, s0 = 0.0;     // rate drive: m/s, m
+    double force = 0.0;              // force drive: N
     int line = 0;
 };
 
@@ -361,6 +376,9 @@ struct DofReport {
     int nBodies = 0;
     int nPins = 0;
     int nSlides = 0;
+    int nSlots = 0;          // M14: point-on-line joints (one row each)
+    int nLinearRate = 0;     // M14: linear rate drives (constraint rows)
+    int nLinearForce = 0;    // M14: linear force drives
     int nMeshes = 0;         // roll rows
     int nTangentMeshes = 0;  // meshes that also carry a tangency row
     int nGears = 0;
@@ -384,6 +402,7 @@ public:
     std::vector<Body> bodies;         // bodies[0] is ground
     std::vector<PinJoint> pins;
     std::vector<SlideJoint> slides;
+    std::vector<LinearDrive> linDrives;          // M14: rate drives (one row each) and force drives
     std::vector<Gear> gears;
     std::vector<MeshJoint> meshes;
     std::vector<Drive> drives;        // rate drives (constraints)
