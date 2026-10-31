@@ -734,6 +734,7 @@ private:
         else if (cur().type == Tok::Ident && cur().text == "cam") { next(); camDecl(m); }
         else if (cur().type == Tok::Ident && cur().text == "param") { next(); paramDecl(m); }
         else if (cur().type == Tok::Ident && cur().text == "use") { next(); useDecl(m); }
+        else if (cur().type == Tok::Ident && cur().text == "slot") { next(); jointDecl(m, JointDecl::Kind::Slot); }
         else if (isFor()) {
             forLoop([&] {
                 while (!acceptSym("}")) {
@@ -745,7 +746,7 @@ private:
         }
         else fail("expected a statement ('ground', 'body', 'rod', 'shaft', 'world', 'gear', "
                   "'mesh', 'spring', 'pin', 'slide', 'drive', 'reduce', 'hand', 'dial', "
-                  "'mode', 'profile', 'touch', 'cam', 'param', 'use' or 'for'), got '" + cur().text + "'");
+                  "'mode', 'profile', 'touch', 'cam', 'param', 'use', 'slot' or 'for'), got '" + cur().text + "'");
     }
 
     void anchorBodyDecl(MechanismDecl& m, BodyDecl::Kind kind) {
@@ -764,6 +765,20 @@ private:
                 next();
                 expectSym(":");
                 b.props["mass"] = parseNum();
+            } else if (kind == BodyDecl::Kind::Free && cur().type == Tok::Ident && cur().text == "com") {
+                next();                                   // M14: com: (x, y) — where the mass sits, in the body's frame
+                expectSym(":");
+                expectSym("(");
+                b.com.x = parseNum();
+                expectSym(",");
+                b.com.y = parseNum();
+                expectSym(")");
+                b.hasCom = true;
+            } else if (kind == BodyDecl::Kind::Free && cur().type == Tok::Ident && cur().text == "inertia") {
+                next();                                   // M14: inertia: I — about the centre of mass, kg m^2
+                expectSym(":");
+                b.inertia = parseNum();
+                b.hasInertia = true;
             } else if (kind == BodyDecl::Kind::Free && cur().type == Tok::Kw &&
                        cur().text == "from") {
                 // release angle, as for a rod: assembly seeds this body at the angle
@@ -1227,6 +1242,30 @@ private:
         const Token name = cur();
         d.body = qref();
         d.line = name.line;
+
+        // M14: `drive piston.guide at 0.05 m/s [from 0.1 m]` or `drive piston.guide force 50` — a linear
+        // drive acts on the slide whose guide anchor this is
+        if (acceptSym(".")) {
+            d.linear = true;
+            d.anchor = expectIdent().text;
+            if (cur().type == Tok::Ident && cur().text == "force") {
+                next();
+                d.linForce = true;
+                d.linForceN = parseNum();
+            } else {
+                expectKw("at");
+                d.linRate = parseNum();
+                if (cur().type != Tok::UnitMps)
+                    fail("expected unit 'm/s' after a linear drive rate, got '" + cur().text + "'");
+                next();
+                if (acceptKw("from")) {
+                    d.linS0 = parseNum();
+                    if (cur().type == Tok::Ident && cur().text == "m") next();
+                }
+            }
+            m.drives.push_back(d);
+            return;
+        }
 
         if (acceptKw("torque")) {
             // energy injection: a pure generalized force, no constraint row

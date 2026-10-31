@@ -123,11 +123,12 @@
 <g class="ticks">
 <line x1="0.5539867" y1="0.3131152" x2="0.5397565" y2="0.3273454" stroke="#59616b" stroke-width="0.003354086"/>
 <line x1="0.5808194" y1="0.3131152" x2="0.5665892" y2="0.3273454" stroke="#59616b" stroke-width="0.003354086"/>
+<line x1="0.607652" y1="0.3131152" x2="0.5934219" y2="0.3273454" stroke="#59616b" stroke-width="0.003354086"/>
 </g>
 </g>
 <g class="pose" data-t="20">
 <g class="gear" data-name="ewheel">
-<circle class="pitch" cx="0.42" cy="-3.836163e-12" r="0.12" fill="none" stroke="#3380b3" stroke-width="0.004472114" stroke-opacity="0.45"/>
+<circle class="pitch" cx="0.42" cy="-1.95966e-11" r="0.12" fill="none" stroke="#3380b3" stroke-width="0.004472114" stroke-opacity="0.45"/>
 <line class="tooth" x1="0.3770478" y1="-0.09647004" x2="0.3663098" y2="-0.1205876" stroke="#3380b3" stroke-width="0.003354086" stroke-opacity="0.9"/>
 <line class="tooth" x1="0.3980437" y1="-0.1032922" x2="0.3925546" y2="-0.1291153" stroke="#3380b3" stroke-width="0.003354086" stroke-opacity="0.9"/>
 <line class="tooth" x1="0.4199991" y1="-0.1056" x2="0.4199989" y2="-0.132" stroke="#3380b3" stroke-width="0.003354086" stroke-opacity="0.9"/>
@@ -252,7 +253,7 @@
 <line class="tooth" x1="1.10352" y1="0.4326986" x2="1.1244" y2="0.4358733" stroke="#599e4d" stroke-width="0.003354086" stroke-opacity="0.9"/>
 </g>
 <g class="gear" data-name="escape_p1">
-<circle class="pitch" cx="0.42" cy="-3.836163e-12" r="0.04" fill="none" stroke="#3380b3" stroke-width="0.004472114" stroke-opacity="0.45"/>
+<circle class="pitch" cx="0.42" cy="-1.95966e-11" r="0.04" fill="none" stroke="#3380b3" stroke-width="0.004472114" stroke-opacity="0.45"/>
 <line class="tooth" x1="0.4056826" y1="-0.03215668" x2="0.4021033" y2="-0.04019585" stroke="#3380b3" stroke-width="0.003354086" stroke-opacity="0.9"/>
 <line class="tooth" x1="0.4273182" y1="-0.03443086" x2="0.4291478" y2="-0.04303857" stroke="#3380b3" stroke-width="0.003354086" stroke-opacity="0.9"/>
 <line class="tooth" x1="0.4461585" y1="-0.02355362" x2="0.4526981" y2="-0.02944202" stroke="#3380b3" stroke-width="0.003354086" stroke-opacity="0.9"/>
@@ -320,7 +321,7 @@
 <line class="tooth" x1="0.4126849" y1="0.09605761" x2="0.3706513" y2="0.04179321" stroke="#d98c1f" stroke-width="0.003354086" stroke-opacity="0.9"/>
 <line class="tooth" x1="0.430696" y1="0.08323226" x2="0.3931652" y2="0.02576152" stroke="#d98c1f" stroke-width="0.003354086" stroke-opacity="0.9"/>
 <line class="tooth" x1="0.4496807" y1="0.07189779" x2="0.416896" y2="0.01159343" stroke="#d98c1f" stroke-width="0.003354086" stroke-opacity="0.9"/>
-<line class="tooth" x1="0.4695159" y1="0.0621277" x2="0.44169" y2="-0.0006191756" stroke="#d98c1f" stroke-width="0.003354086" stroke-opacity="0.9"/>
+<line class="tooth" x1="0.4695159" y1="0.0621277" x2="0.44169" y2="-0.0006191757" stroke="#d98c1f" stroke-width="0.003354086" stroke-opacity="0.9"/>
 <line class="tooth" x1="0.4900729" y1="0.05398537" x2="0.4673863" y2="-0.01079709" stroke="#d98c1f" stroke-width="0.003354086" stroke-opacity="0.9"/>
 <line class="tooth" x1="0.5112185" y1="0.04752359" x2="0.4938182" y2="-0.01887431" stroke="#d98c1f" stroke-width="0.003354086" stroke-opacity="0.9"/>
 <line class="tooth" x1="0.5328154" y1="0.04278428" x2="0.5208144" y2="-0.02479846" stroke="#d98c1f" stroke-width="0.003354086" stroke-opacity="0.9"/>
@@ -465,13 +466,13 @@
 <line class="tooth" x1="1.322636" y1="0.2402353" x2="1.398295" y2="0.1952941" stroke="#b84747" stroke-width="0.003354086" stroke-opacity="0.9"/>
 </g>
 <g class="rod" data-body="pend">
-<line x1="4.032631e-13" y1="-1.028377e-11" x2="0.07802532" y2="-1.488898" stroke="#24262e" stroke-width="0.02012451" stroke-linecap="round"/>
-<line class="bar" x1="4.032631e-13" y1="-1.028377e-11" x2="0.07802532" y2="-1.488898" stroke="#d98c1f" stroke-width="0.0156524" stroke-linecap="round"/>
+<line x1="-7.09138e-16" y1="-1.967485e-11" x2="0.07802532" y2="-1.488898" stroke="#24262e" stroke-width="0.02012451" stroke-linecap="round"/>
+<line class="bar" x1="-7.09138e-16" y1="-1.967485e-11" x2="0.07802532" y2="-1.488898" stroke="#d98c1f" stroke-width="0.0156524" stroke-linecap="round"/>
 </g>
 <g class="shaft" data-body="escape">
-<circle class="hub" cx="0.42" cy="-3.836163e-12" r="0.01453437" fill="#3380b3" stroke="#24262e" stroke-width="0.002683269"/>
-<circle cx="0.42" cy="-3.836163e-12" r="0.005366537" fill="#1f2129"/>
-<line class="index" x1="0.42" y1="-3.836163e-12" x2="0.4099955" y2="-0.02247006" stroke="#ffffff" stroke-width="0.004472114"/>
+<circle class="hub" cx="0.42" cy="-1.95966e-11" r="0.01453437" fill="#3380b3" stroke="#24262e" stroke-width="0.002683269"/>
+<circle cx="0.42" cy="-1.95966e-11" r="0.005366537" fill="#1f2129"/>
+<line class="index" x1="0.42" y1="-1.95966e-11" x2="0.4099955" y2="-0.02247006" stroke="#ffffff" stroke-width="0.004472114"/>
 </g>
 <g class="shaft" data-body="minute">
 <circle class="hub" cx="1.02" cy="0.42" r="0.01453437" fill="#b84747" stroke="#24262e" stroke-width="0.002683269"/>
@@ -494,12 +495,12 @@
 <line class="index" x1="0.5808194" y1="0.3131152" x2="0.6053789" y2="0.3117652" stroke="#ffffff" stroke-width="0.004472114"/>
 </g>
 <g class="pin">
-<circle class="hub" cx="4.032631e-13" cy="-1.028377e-11" r="0.01118029" fill="#ffffff" stroke="#24262e" stroke-width="0.002683269"/>
-<circle cx="4.032631e-13" cy="-1.028377e-11" r="0.004919326" fill="#1f2129"/>
+<circle class="hub" cx="-7.09138e-16" cy="-1.967485e-11" r="0.01118029" fill="#ffffff" stroke="#24262e" stroke-width="0.002683269"/>
+<circle cx="-7.09138e-16" cy="-1.967485e-11" r="0.004919326" fill="#1f2129"/>
 </g>
 <g class="pin">
-<circle class="hub" cx="0.42" cy="-3.836163e-12" r="0.01118029" fill="#ffffff" stroke="#24262e" stroke-width="0.002683269"/>
-<circle cx="0.42" cy="-3.836163e-12" r="0.004919326" fill="#1f2129"/>
+<circle class="hub" cx="0.42" cy="-1.95966e-11" r="0.01118029" fill="#ffffff" stroke="#24262e" stroke-width="0.002683269"/>
+<circle cx="0.42" cy="-1.95966e-11" r="0.004919326" fill="#1f2129"/>
 </g>
 <g class="pin">
 <circle class="hub" cx="1.02" cy="0.42" r="0.01118029" fill="#ffffff" stroke="#24262e" stroke-width="0.002683269"/>
@@ -518,8 +519,8 @@
 <circle cx="0.5808194" cy="0.3131152" r="0.004919326" fill="#1f2129"/>
 </g>
 <polygon class="hand" data-name="second" points="0.4343174,0.03215668 0.4346788,0.01097866 0.3764114,-0.1066953 0.3549209,-0.1461667 0.3698747,-0.1037848 0.418337,0.01825469" fill="#292b33" fill-opacity="0.96" stroke="#24262e" stroke-width="0.001788846" stroke-linejoin="round"/>
-<circle cx="0.42" cy="-3.836163e-12" r="0.01229831" fill="#ffffff"/>
-<circle cx="0.42" cy="-3.836163e-12" r="0.005142932" fill="#1f2129"/>
+<circle cx="0.42" cy="-1.95966e-11" r="0.01229831" fill="#ffffff"/>
+<circle cx="0.42" cy="-1.95966e-11" r="0.005142932" fill="#1f2129"/>
 <polygon class="hand" data-name="minute" points="0.9495015,0.4560916 0.9920312,0.4443668 1.252353,0.3050665 1.340448,0.2559471 1.249092,0.2986973 0.9838793,0.4284437" fill="#292b33" fill-opacity="0.96" stroke="#24262e" stroke-width="0.001788846" stroke-linejoin="round"/>
 <circle cx="1.02" cy="0.42" r="0.01229831" fill="#ffffff"/>
 <circle cx="1.02" cy="0.42" r="0.005142932" fill="#1f2129"/>

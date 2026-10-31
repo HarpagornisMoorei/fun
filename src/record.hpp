@@ -21,6 +21,7 @@
 //   ledger.residual[J]    (E - E0) - (weight + impulse + drive - impact - friction)
 #pragma once
 #include "dynamics.hpp"
+#include "kinematics.hpp"
 #include "model.hpp"
 #include <string>
 #include <utility>

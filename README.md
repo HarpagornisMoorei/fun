@@ -111,6 +111,25 @@ Everything inside is reached by the instance's name (`left.follower.tip`, `--set
 `--report max:left.follower.y`), and an instanced file runs bit for bit like the flat one.
 See [`docs/PARTS.md`](docs/PARTS.md).
 
+## Joints and actuators
+
+A `slide` runs between any two bodies (not only on the ground), a `slot` keeps a pin on a line fixed in another
+moving part, and a slide can be driven by a rate or a force:
+
+```
+slot crank.B -> yoke.slot                       // a Scotch yoke
+slide piston.guide -> cyl.axis                  // a hydraulic cylinder: both parts move
+drive piston.guide at 0.02 m/s from 0.50 m      // extend it at 20 mm/s ...
+drive piston.guide force 500                    // ... or push with 500 N
+```
+
+![a hydraulic boom](docs/img/boom.svg)
+![a quick-return mechanism](docs/img/quickreturn.svg)
+
+`mech run --headless --csv` reports the force each actuator delivers, which is the number for sizing a cylinder. A
+free `body` can say where its mass is (`com: (0.5, 0)`). Every example here is checked against a closed form (the
+yoke is exactly r cos θ; a bead in a rotating tube follows r₀ cosh ωt). See [`docs/JOINTS.md`](docs/JOINTS.md).
+
 ## Drawings
 
 `mech render` draws a pose, or a looping animation, as an SVG: no window, no OpenGL.
@@ -166,6 +185,7 @@ See [`docs/LIB.md`](docs/LIB.md); `import` and rotation are in [`docs/PARTS.md`]
 | `ratchet` | a ratchet wheel and gravity pawl with friction: one click per tooth forward, locked and at rest in reverse; energy ledger closes |
 | `ellipgears` | a pair of elliptical gears: input steady, output surging between 3x and 1/3x |
 | `jumpcam` | the plate cam with mass, a spring and a contact that can let go — cam jump, impacts, energy ledger |
+| `scotchyoke`, `quickreturn`, `boom`, `slidingbead` | slots and slides on moving bodies: a Scotch yoke (x = r cos θ), a quick-return lever (ratio 2), a hydraulic boom driven by a linear actuator, a bead flung out along a rotating tube (r₀ cosh ωt) |
 | `camstar` | n library cams on a hub from one `for` loop, each turned with `rotate` so its follower pushes radially outward |
 | `camshaft` | two library cams geared 2:1 from outside the parts, `import`ed from `lib/` |
 | `twincam`, `linkage_parts` | parts: one cam-and-follower used twice with different numbers; a crank-slider assembled from one ground-less `link` part |
@@ -181,5 +201,6 @@ is the design for contact (cams, Geneva drives, ratchets, non-circular
 gears); M6a through M6f (profiles, cam synthesis, unilateral contact,
 non-circular gears, polygons and a ratchet, friction) are implemented, as are
 parameters and sweeps ([`docs/PARAMS.md`](docs/PARAMS.md)) reusable parts
-([`docs/PARTS.md`](docs/PARTS.md)) and a library of standard ones ([`docs/LIB.md`](docs/LIB.md)). `scripts/` holds offscreen-rendering harnesses for
+([`docs/PARTS.md`](docs/PARTS.md)), a library of standard ones ([`docs/LIB.md`](docs/LIB.md)) and prismatic joints, slots and linear
+drives ([`docs/JOINTS.md`](docs/JOINTS.md)). `scripts/` holds offscreen-rendering harnesses for
 screenshots without a display.

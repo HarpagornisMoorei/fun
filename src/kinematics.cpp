@@ -69,8 +69,41 @@ inline double maxAbs(const std::vector<double>& v) {
 
 } // namespace
 
+SlideGeom slideGeom(const Model& m, const SlideJoint& s, const std::vector<double>& q) {
+    SlideGeom g;
+    const Body& gb = m.bodies[s.guideBody];
+    const Anchor& ga = gb.anchors[s.guideAnchor];
+    g.oA = gb.qOffset;
+    g.rA = rotate(ga.local, q[gb.qOffset + 0]);
+    g.pA = g.rA + Vec2{q[gb.qOffset + 1], q[gb.qOffset + 2]};
+    if (s.lockDir) g.dirG = rotate(ga.dirLocal, q[gb.qOffset + 0]);
+    if (s.railBody == 0) {
+        g.pB = s.railPos;
+        g.u = s.railDir;
+    } else {
+        const Body& rb = m.bodies[s.railBody];
+        const Anchor& ra = rb.anchors[s.railAnchor];
+        g.oB = rb.qOffset;
+        g.rB = rotate(ra.local, q[rb.qOffset + 0]);
+        g.pB = g.rB + Vec2{q[rb.qOffset + 1], q[rb.qOffset + 2]};
+        g.u = rotate(ra.dirLocal, q[rb.qOffset + 0]);
+    }
+    return g;
+}
+
+int ConstraintSystem::slideRowCount() const {
+    int n = 0;
+    for (const SlideJoint& s : m.slides) n += s.lockDir ? 2 : 1;
+    return n;
+}
+
+int ConstraintSystem::linearRowStart() const {
+    return rowCount() - (int)std::count_if(m.linDrives.begin(), m.linDrives.end(),
+                                           [](const LinearDrive& d) { return !d.isForce; });
+}
+
 int ConstraintSystem::rowCount() const {
-    int rows = 2 * (int)m.pins.size() + 2 * (int)m.slides.size();
+    int rows = 2 * (int)m.pins.size() + slideRowCount();
     for (const Drive& d : m.drives) {
         if (!d.enabled) continue;   // M5: a disabled mode hold contributes no row
         ++rows;
@@ -81,6 +114,8 @@ int ConstraintSystem::rowCount() const {
     rows += (int)m.polarMeshes.size();
     for (const TouchJoint& tj : m.touches)
         if (tj.engaged) ++rows;        // M6c: a lifted-off contact adds no row
+    for (const LinearDrive& d : m.linDrives)
+        if (!d.isForce) ++rows;        // M14: a linear rate drive is one row (a force is not a constraint)
     return rows;
 }
 
@@ -96,14 +131,9 @@ void ConstraintSystem::residuals(const std::vector<double>& q, double t,
         r += 2;
     }
     for (const SlideJoint& s : m.slides) {
-        const Body& g = m.bodies[s.guideBody];
-        const Anchor& ga = g.anchors[s.guideAnchor];
-        const Vec2 rl = rotate(ga.local, q[g.qOffset + 0]);
-        const Vec2 p = rl + Vec2{q[g.qOffset + 1], q[g.qOffset + 2]};
-        const Vec2 dirG = rotate(ga.dirLocal, q[g.qOffset + 0]);
-        c[r]     = crossz(s.railDir, p - s.railPos);   // offset from rail line
-        c[r + 1] = crossz(dirG, s.railDir);            // guide parallel to rail
-        r += 2;
+        const SlideGeom g = slideGeom(m, s, q);
+        c[r++] = crossz(g.u, g.pA - g.pB);                  // offset from the rail line
+        if (s.lockDir) c[r++] = crossz(g.dirG, g.u);        // guide parallel to rail (not for a slot)
     }
     for (const Drive& d : m.drives) {
         if (!d.enabled) continue;
@@ -152,6 +182,11 @@ void ConstraintSystem::residuals(const std::vector<double>& q, double t,
         if (!tj.engaged) continue;
         c[r++] = m.touchState(tj, q).gap - tj.roller;
     }
+    for (const LinearDrive& ld : m.linDrives) {                // M14: travel along the rail follows s0 + rate t
+        if (ld.isForce) continue;
+        const SlideGeom g = slideGeom(m, m.slides[(size_t)ld.slide], q);
+        c[r++] = dot(g.u, g.pA - g.pB) - (ld.s0 + ld.rate * t);
+    }
 }
 
 void ConstraintSystem::jacobian(const std::vector<double>& q,
@@ -178,17 +213,24 @@ void ConstraintSystem::jacobian(const std::vector<double>& q,
         r += 2;
     }
     for (const SlideJoint& s : m.slides) {
-        const Body& g = m.bodies[s.guideBody];
-        const Anchor& ga = g.anchors[s.guideAnchor];
-        const Vec2 rl = rotate(ga.local, q[g.qOffset + 0]);
-        const Vec2 dirG = rotate(ga.dirLocal, q[g.qOffset + 0]);
-        // offset row: d crossz(railDir, p - railPos)
-        addJ(J, cols, r, g.qOffset + 0, crossz(s.railDir, perp(rl)));
-        addJ(J, cols, r, g.qOffset + 1, -s.railDir.y);
-        addJ(J, cols, r, g.qOffset + 2,  s.railDir.x);
-        // dir-lock row: d crossz(R(th)guideDir, railDir) / dth
-        addJ(J, cols, r + 1, g.qOffset + 0, crossz(perp(dirG), s.railDir));
-        r += 2;
+        const SlideGeom g = slideGeom(m, s, q);
+        const Vec2 v = g.pA - g.pB;
+        // offset row: d crossz(u, pA - pB)
+        addJ(J, cols, r, g.oA + 0, crossz(g.u, perp(g.rA)));
+        addJ(J, cols, r, g.oA + 1, -g.u.y);
+        addJ(J, cols, r, g.oA + 2,  g.u.x);
+        if (g.oB >= 0) {                                    // M14: the rail's body moves too
+            addJ(J, cols, r, g.oB + 0, crossz(perp(g.u), v) - crossz(g.u, perp(g.rB)));
+            addJ(J, cols, r, g.oB + 1,  g.u.y);
+            addJ(J, cols, r, g.oB + 2, -g.u.x);
+        }
+        ++r;
+        if (s.lockDir) {
+            // dir-lock row: d crossz(R(thA) guideDir, u)
+            addJ(J, cols, r, g.oA + 0, crossz(perp(g.dirG), g.u));
+            if (g.oB >= 0) addJ(J, cols, r, g.oB + 0, crossz(g.dirG, perp(g.u)));
+            ++r;
+        }
     }
     for (const Drive& d : m.drives) {
         if (!d.enabled) continue;
@@ -255,6 +297,20 @@ void ConstraintSystem::jacobian(const std::vector<double>& q,
     for (const TouchJoint& tj : m.touches) {
         if (!tj.engaged) continue;
         touchRow(tj, q, &J[(size_t)r * cols]);
+        ++r;
+    }
+    for (const LinearDrive& ld : m.linDrives) {                // M14: d (u . (pA - pB))
+        if (ld.isForce) continue;
+        const SlideGeom g = slideGeom(m, m.slides[(size_t)ld.slide], q);
+        const Vec2 v = g.pA - g.pB;
+        addJ(J, cols, r, g.oA + 0, dot(g.u, perp(g.rA)));
+        addJ(J, cols, r, g.oA + 1, g.u.x);
+        addJ(J, cols, r, g.oA + 2, g.u.y);
+        if (g.oB >= 0) {
+            addJ(J, cols, r, g.oB + 0, dot(perp(g.u), v) - dot(g.u, perp(g.rB)));
+            addJ(J, cols, r, g.oB + 1, -g.u.x);
+            addJ(J, cols, r, g.oB + 2, -g.u.y);
+        }
         ++r;
     }
 }

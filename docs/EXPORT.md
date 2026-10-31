@@ -79,3 +79,11 @@ no plotting code in this repository.
   rail the pressure angle is its distance from `pi/2`.
 * The kinematic file records the same pose columns as the dynamic one but no velocities,
   energies or ledger: there are no masses to give them meaning.
+
+## Slides and linear drives (M14)
+
+* `<guide>.travel[m]` — for every `slide` and `slot`, how far its guide anchor has travelled along its rail
+  (`u . (guide - rail anchor)`); `<guide>` is `body.anchor` of the statement's first anchor.
+* `<guide>.force[N]` — (dynamic runs) for every linear drive, the force it delivers along the rail: the multiplier of
+  the row for a rate drive (positive extends), the commanded force for a force drive. Read it to size an actuator.
+

@@ -14,6 +14,7 @@ enum class Tok : int {
     UnitDegPerSec,  // deg/s
     UnitRpm,        // rpm
     UnitDeg,        // deg
+    UnitMps,        // m/s (M14: a linear drive's rate)
     Str,            // "text" (M10: the path of an import); text holds the contents
 };
 

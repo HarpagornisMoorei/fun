@@ -24,9 +24,11 @@ mech render examples/fourbar.mech --frames 48 --span 10 --speed 2 --trace couple
 ## What is drawn
 
 The same things the viewer shows, in the viewer's order: dials, the ground (a hatched bar when its anchors
-lie on a line, a small mark under each otherwise, and a hatched rail where a follower slides), gears
+lie on a line, a small mark under each otherwise, and a hatched rail where a follower slides on the ground), gears
 (pitch circle and a tick per tooth; a ring gear as a band), profiles (cams, ratchet wheels, ellipses: the
-whole outline, filled faintly), rods as bars, shafts as hubs with an index line, springs as coils, touches
+whole outline, filled faintly), rods as bars (a body with more than two anchors as a chain through them), shafts as hubs with
+an index line, springs as coils, a rail that rides a moving body as a line from its own anchor past the guide's reach (`line.slide`, or `line.slot`
+for a slot), touches
 (the roller and the contact point on the curve), pins, and clock hands on top. A rail is drawn along the
 follower's travel across everything shown, so an animation shows where the follower goes.
 
@@ -63,8 +65,12 @@ count: 24 to 48 frames of a small mechanism is 100 to 300 kB. Browsers play it i
 | `ratchet` mid-click (dynamic) | `jumpcam` at lift-off: spring, roller, contact point |
 | ![the clock](img/clock.svg) | ![a planetary gear](img/planetary.svg) |
 | `clock`: gear train, dial, hands, pendulum | `planetary`: ring, planet, sun and carrier |
-| ![elliptical gears](img/ellipgears.svg) | |
-| `ellipgears`, animated | |
+| ![elliptical gears](img/ellipgears.svg) | ![a hydraulic boom](img/boom.svg) |
+| `ellipgears`, animated | `boom`, animated: cylinder and piston both move, tip trace |
+| ![a quick-return lever](img/quickreturn.svg) | ![a Scotch yoke](img/scotchyoke.svg) |
+| `quickreturn`, animated: the lever slot's path | `scotchyoke`, animated |
+| ![a bead in a rotating tube](img/slidingbead.svg) | |
+| `slidingbead`: the bead's path as it is flung out | |
 
 ## Looking at the output
 

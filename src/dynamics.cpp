@@ -58,16 +58,19 @@ const double kFrictionEps = 2e-3;
 
 // Solve A x = b for symmetric A with growing Tikhonov damping until the
 // Cholesky succeeds. Returns false only if even brutal damping collapses.
+//
+// The damping is relative to each row's own diagonal. (It used to be one absolute number scaled by the
+// largest diagonal, which for masses spanning many decades — a 10 kg boom and a 1e-5 kg linkage — swamped
+// the rows that come from the heavy bodies and skewed the multipliers by percent.)
 bool dampedSolve(std::vector<double> A, const std::vector<double>& b, int n,
                  std::vector<double>& x) {
     double eps = 1e-10;
-    double maxDiag = 1e-12;
-    for (int i = 0; i < n; ++i)
-        maxDiag = std::max(maxDiag, A[(size_t)i * n + i]);
-    eps *= 1.0 + maxDiag;
     for (int attempt = 0; attempt < 6; ++attempt) {
         std::vector<double> Ad = A;
-        for (int i = 0; i < n; ++i) Ad[(size_t)i * n + i] += eps;
+        for (int i = 0; i < n; ++i) {
+            const double d = Ad[(size_t)i * n + i];
+            Ad[(size_t)i * n + i] += eps * std::max(d, 1e-12) + 1e-15;
+        }
         if (choleskySolve(Ad, b, n, x)) return true;
         eps *= 100.0;
     }
@@ -155,6 +158,20 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
     for (const TorqueDrive& td : m.torques) {
         Q[m.bodies[td.body].qOffset + 0] += td.torque;
     }
+    // M14: a linear force pushes the guide along the rail and the rail's body back
+    for (const LinearDrive& ld : m.linDrives) {
+        if (!ld.isForce) continue;
+        const SlideGeom g = slideGeom(m, m.slides[(size_t)ld.slide], q);
+        const Vec2 F = ld.force * g.u;
+        Q[g.oA + 0] += crossz(g.rA, F);
+        Q[g.oA + 1] += F.x;
+        Q[g.oA + 2] += F.y;
+        if (g.oB >= 0) {
+            Q[g.oB + 0] -= crossz(g.rB, F);
+            Q[g.oB + 1] -= F.x;
+            Q[g.oB + 2] -= F.y;
+        }
+    }
     // M5: weight drives apply their torque (in the cord's unwind sense)
     // until the cord runs out
     for (const WeightDrive& w : m.weights) {
@@ -222,13 +239,25 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
         }
         r += 2;
     }
+    // Slide rows. With u the rail direction (turning with the rail's body, rate wB), v = pA - pB and
+    // vdot the relative velocity of the two anchor points, the offset row f1 = crossz(u, v) has
+    //   f1'' = J qdd + bias,  bias = crossz(-wB^2 u, v) + 2 crossz(wB perp(u), vdot)
+    //                                + crossz(u, -wA^2 rA + wB^2 rB)
+    // and the direction-lock row f2 = crossz(a, u) (a the guide's direction) has bias = -(wA - wB)^2 f2.
+    // For a ground rail (wB = 0, rB = 0) these are the old -crossz(u, wA^2 rA) and -wA^2 f2.
     for (const SlideJoint& s : m.slides) {
-        const int gi = s.guideBody;
-        const double w2 = qd[m.bodies[gi].qOffset + 0] * qd[m.bodies[gi].qOffset + 0];
-        const Vec2 Rg = anchorOff(gi, s.guideAnchor);
-        bias[r] = -crossz(s.railDir, w2 * Rg);   // offset row
-        bias[r + 1] = -w2 * c[r + 1];            // dirlock row: bias = -w^2 c2
-        r += 2;
+        const SlideGeom g = slideGeom(m, s, q);
+        const double wA = bodyW(s.guideBody), wB = s.railBody ? bodyW(s.railBody) : 0.0;
+        const Vec2 vA = anchorVel(s.guideBody, s.guideAnchor);
+        const Vec2 vB = s.railBody ? anchorVel(s.railBody, s.railAnchor) : Vec2{0.0, 0.0};
+        const Vec2 v = g.pA - g.pB, vdot = vA - vB;
+        bias[r] = crossz((-wB * wB) * g.u, v) + 2.0 * crossz(wB * perp(g.u), vdot) +
+                  crossz(g.u, (-wA * wA) * g.rA + (wB * wB) * g.rB);
+        ++r;
+        if (s.lockDir) {
+            bias[r] = -(wA - wB) * (wA - wB) * c[r];
+            ++r;
+        }
     }
     const int driveRow0 = r;
     for (const Drive& d : m.drives) {
@@ -313,6 +342,20 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
         const double u = (tw - cs.gap * wA) / (1.0 + cs.gap * cs.kappa);
         const double Om = wA + cs.kappa * u;
         bias[r++] = dot(cs.normal, (-wB * wB) * rB + (wA * wA) * rA) + wA * u + Om * tw;
+    }
+    // M14: linear rate drives. s = u . v, so s'' = J qdd + bias with
+    //   bias = dot(-wB^2 u, v) + 2 wB dot(perp(u), vdot) + dot(u, -wA^2 rA + wB^2 rB)
+    const int linRow0 = r;
+    for (const LinearDrive& ld : m.linDrives) {
+        if (ld.isForce) continue;
+        const SlideJoint& s = m.slides[(size_t)ld.slide];
+        const SlideGeom g = slideGeom(m, s, q);
+        const double wA = bodyW(s.guideBody), wB = s.railBody ? bodyW(s.railBody) : 0.0;
+        const Vec2 vA = anchorVel(s.guideBody, s.guideAnchor);
+        const Vec2 vB = s.railBody ? anchorVel(s.railBody, s.railAnchor) : Vec2{0.0, 0.0};
+        const Vec2 v = g.pA - g.pB, vdot = vA - vB;
+        bias[r++] = dot((-wB * wB) * g.u, v) + 2.0 * wB * dot(perp(g.u), vdot) +
+                    dot(g.u, (-wA * wA) * g.rA + (wB * wB) * g.rB);
     }
 
     // --- KKT via Schur complement --------------------------------------------
@@ -458,6 +501,17 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
         }
     }
 
+    // M14: the force each linear rate drive transmits (the multiplier of its row)
+    lastLinReaction_.assign(m.linDrives.size(), 0.0);
+    {
+        int rr = linRow0;
+        for (size_t li = 0; li < m.linDrives.size(); ++li) {
+            if (m.linDrives[li].isForce) continue;
+            lastLinReaction_[li] = rr < (int)lam.size() ? lam[rr] : 0.0;
+            ++rr;
+        }
+    }
+
     // reaction torques of the rate drives (N*m about each driven body;
     // a disabled mode hold reports 0)
     lastReaction_.assign(m.drives.size(), 0.0);
@@ -496,17 +550,28 @@ void DynamicsSystem::integrate(std::vector<double>& q, std::vector<double>& qd,
     // M6c: the drives' power at each stage, for the energy ledger: Simpson over
     // the four stages. A rate drive delivers (reaction torque x prescribed rate);
     // a torque drive delivers (torque x the body's angular velocity there).
-    auto power = [&](const std::vector<double>& v) {
+    auto power = [&](const std::vector<double>& qq, const std::vector<double>& v) {
         double P = 0.0;
         for (size_t di = 0; di < m.drives.size(); ++di)
             if (m.drives[di].enabled) P += lastReaction_[di] * m.drives[di].omegaRad;
         for (const TorqueDrive& td : m.torques)
             P += td.torque * v[(size_t)m.bodies[(size_t)td.body].qOffset];
+        // M14: a linear rate drive delivers (force x prescribed rate); a force drive (force x the
+        // guide's speed relative to the rail, along it)
+        for (size_t li = 0; li < m.linDrives.size(); ++li) {
+            const LinearDrive& ld = m.linDrives[li];
+            if (!ld.isForce) { P += lastLinReaction_[li] * ld.rate; continue; }
+            const SlideGeom g = slideGeom(m, m.slides[(size_t)ld.slide], qq);
+            Vec2 vA{v[(size_t)g.oA + 1] - v[(size_t)g.oA] * g.rA.y, v[(size_t)g.oA + 2] + v[(size_t)g.oA] * g.rA.x};
+            Vec2 vB{0.0, 0.0};
+            if (g.oB >= 0) vB = Vec2{v[(size_t)g.oB + 1] - v[(size_t)g.oB] * g.rB.y, v[(size_t)g.oB + 2] + v[(size_t)g.oB] * g.rB.x};
+            P += ld.force * dot(g.u, vA - vB);
+        }
         return P;
     };
     std::vector<double> a1, a2, a3, a4;
     accelerations(q, qd, a1);
-    const double P1 = power(qd), F1 = lastFrictionPower_;
+    const double P1 = power(q, qd), F1 = lastFrictionPower_;
 
     std::vector<double> qS(nq), qdS(nq);
     for (int i = 0; i < nq; ++i) {
@@ -514,21 +579,21 @@ void DynamicsSystem::integrate(std::vector<double>& q, std::vector<double>& qd,
         qdS[i] = qd[i] + 0.5 * h * a1[i];
     }
     accelerations(qS, qdS, a2);
-    const double P2 = power(qdS), F2 = lastFrictionPower_;
+    const double P2 = power(qS, qdS), F2 = lastFrictionPower_;
 
     for (int i = 0; i < nq; ++i) {
         qS[i] = q[i] + 0.5 * h * qd[i] + 0.25 * h * h * a1[i];
         qdS[i] = qd[i] + 0.5 * h * a2[i];
     }
     accelerations(qS, qdS, a3);
-    const double P3 = power(qdS), F3 = lastFrictionPower_;
+    const double P3 = power(qS, qdS), F3 = lastFrictionPower_;
 
     for (int i = 0; i < nq; ++i) {
         qS[i] = q[i] + h * qd[i] + 0.5 * h * h * a2[i];
         qdS[i] = qd[i] + h * a3[i];
     }
     accelerations(qS, qdS, a4);
-    lastDriveWork_ = h / 6.0 * (P1 + 2.0 * P2 + 2.0 * P3 + power(qdS));
+    lastDriveWork_ = h / 6.0 * (P1 + 2.0 * P2 + 2.0 * P3 + power(qS, qdS));
     lastFrictionLoss_ = h / 6.0 * (F1 + 2.0 * F2 + 2.0 * F3 + lastFrictionPower_);
 
     for (int i = 0; i < nq; ++i)
@@ -555,13 +620,18 @@ void DynamicsSystem::projectVelocities(const std::vector<double>& q,
     std::vector<double> J2;
     sys.jacobian(q, J2);
     // nu: drive rows prescribe their rate; every other row wants J qd = 0
-    const int driveRow0 = 2 * (int)m.pins.size() + 2 * (int)m.slides.size();
+    const int driveRow0 = sys.driveRowStart();
     std::vector<double> nu(rows, 0.0);
     {
         int r = driveRow0;
         for (const Drive& d : m.drives) {
             if (!d.enabled) continue;
             nu[r++] = d.omegaRad;
+        }
+        int lr = sys.linearRowStart();                   // M14: linear rate drives prescribe the guide's speed
+        for (const LinearDrive& ld : m.linDrives) {
+            if (ld.isForce) continue;
+            nu[(size_t)lr++] = ld.rate;
         }
     }
 

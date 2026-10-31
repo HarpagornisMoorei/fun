@@ -108,7 +108,12 @@ DofReport Model::dofReport() const {
     DofReport r;
     r.nBodies = (int)bodies.size();
     r.nPins = (int)pins.size();
-    r.nSlides = (int)slides.size();
+    r.nSlides = 0;
+    r.nSlots = 0;
+    for (const SlideJoint& sj : slides) (sj.lockDir ? r.nSlides : r.nSlots)++;
+    r.nLinearRate = 0;
+    r.nLinearForce = 0;
+    for (const LinearDrive& ld : linDrives) (ld.isForce ? r.nLinearForce : r.nLinearRate)++;
     r.nMeshes = (int)meshes.size();
     r.nTangentMeshes = 0;
     for (const MeshJoint& mm : meshes) if (mm.tangent) ++r.nTangentMeshes;
@@ -134,9 +139,9 @@ DofReport Model::dofReport() const {
     // constraints. A mode's active holds are rate-0 drive rows: they remove
     // one DOF each while engaged (the report shows the initial states).
     const int j = r.nPins + r.nSlides;
-    r.freeDof = 3 * (r.nBodies - 1) - 2 * j - r.nMeshes - r.nTangentMeshes - r.nTouches -
+    r.freeDof = 3 * (r.nBodies - 1) - 2 * j - r.nSlots - r.nMeshes - r.nTangentMeshes - r.nTouches -
                  r.nPolarMeshes;
-    r.residualDof = r.freeDof - r.nDrives;
+    r.residualDof = r.freeDof - r.nDrives - r.nLinearRate;     // a slot removes one DOF, a linear rate drive one
     return r;
 }
 
@@ -217,12 +222,44 @@ std::vector<std::string> Model::assemble(std::vector<double>& q) const {
         for (size_t k = 0; k < slides.size(); ++k) {
             if (slideConsumed[k]) continue;
             const SlideJoint& s = slides[k];
-            // rail side is ground (enforced at build) -> always placed
-            if (!placed[s.guideBody]) {
-                const double th = std::atan2(s.railDir.y, s.railDir.x);
-                placeBody(q, s.guideBody, s.guideAnchor, s.railPos, th);
+            if (s.railBody == 0) {
+                // ground rail: always placed
+                if (!placed[s.guideBody]) {
+                    // the guide's own direction turns with the body, so the body angle is the rail's minus it
+                    const Vec2 gd = bodies[(size_t)s.guideBody].anchors[(size_t)s.guideAnchor].dirLocal;
+                    const double th = s.lockDir ? std::atan2(s.railDir.y, s.railDir.x) - std::atan2(gd.y, gd.x)
+                                                : seedAngleFor(s.guideBody);
+                    placeBody(q, s.guideBody, s.guideAnchor, s.railPos, th);
+                    placed[s.guideBody] = 1; slideConsumed[k] = 1; progress = true;
+                } else {
+                    slideConsumed[k] = 1;
+                }
+                continue;
+            }
+            // M14: a rail on a moving body. Place whichever side is missing from the other.
+            const Body& rb = bodies[(size_t)s.railBody];
+            const Body& gb = bodies[(size_t)s.guideBody];
+            const bool gp = placed[s.guideBody], rp = placed[s.railBody];
+            if (rp && !gp) {
+                const Vec2 pB = worldAnchor(s.railBody, s.railAnchor, q);
+                const Vec2 u = rotate(rb.anchors[(size_t)s.railAnchor].dirLocal, q[(size_t)rb.qOffset]);
+                const double th = s.lockDir
+                    ? std::atan2(u.y, u.x) - std::atan2(gb.anchors[(size_t)s.guideAnchor].dirLocal.y,
+                                                       gb.anchors[(size_t)s.guideAnchor].dirLocal.x)
+                    : seedAngleFor(s.guideBody);
+                placeBody(q, s.guideBody, s.guideAnchor, pB, th);
                 placed[s.guideBody] = 1; slideConsumed[k] = 1; progress = true;
-            } else {
+            } else if (gp && !rp) {
+                const Vec2 pA = worldAnchor(s.guideBody, s.guideAnchor, q);
+                double th = seedAngleFor(s.railBody);
+                if (s.lockDir) {
+                    const Vec2 d = rotate(gb.anchors[(size_t)s.guideAnchor].dirLocal, q[(size_t)gb.qOffset]);
+                    th = std::atan2(d.y, d.x) - std::atan2(rb.anchors[(size_t)s.railAnchor].dirLocal.y,
+                                                          rb.anchors[(size_t)s.railAnchor].dirLocal.x);
+                }
+                placeBody(q, s.railBody, s.railAnchor, pA, th);
+                placed[s.railBody] = 1; slideConsumed[k] = 1; progress = true;
+            } else if (gp && rp) {
                 slideConsumed[k] = 1;
             }
         }
@@ -729,7 +766,7 @@ Model buildModel(const MechanismDecl& decl) {
     m.world.dynamic = decl.world.present;
     if (!decl.springs.empty()) m.world.dynamic = true;
     for (const DriveDecl& d : decl.drives)
-        if (d.isTorque || d.isWeight) m.world.dynamic = true;
+        if (d.isTorque || d.isWeight || (d.linear && d.linForce)) m.world.dynamic = true;
     if (!decl.modes.empty()) m.world.dynamic = true;   // M5: hybrid = dynamic
 
     // --- exactly one ground body, parked at index 0 ------------------------
@@ -896,34 +933,46 @@ Model buildModel(const MechanismDecl& decl) {
                 throw SemanticError{jd.line, "cannot pin body '" + jd.bodyA + "' to itself"};
             }
             m.pins.push_back(PinJoint{biA, anA, biB, anB, jd.line});
-        } else { // Slide
-            // M2: the rail must be on ground; the guide must be a moving body.
+        } else { // Slide or Slot
+            const bool slot = jd.kind == JointDecl::Kind::Slot;
+            const char* what = slot ? "slot" : "slide";
             const bool ag = m.bodies[biA].isGround, bg = m.bodies[biB].isGround;
-            if (ag == bg) {
-                throw SemanticError{jd.line, "slide '" + jd.bodyA + "." + jd.anchorA +
-                    " -> " + jd.bodyB + "." + jd.anchorB +
-                    "' must join exactly one moving body (the guide) and one ground "
-                    "anchor (the rail)"};
+            if (ag && bg) {
+                throw SemanticError{jd.line, std::string(what) + " '" + jd.bodyA + "." + jd.anchorA + " -> " +
+                    jd.bodyB + "." + jd.anchorB + "' joins two ground anchors — nothing moves"};
             }
-            const int guideBody = ag ? biB : biA;
-            const int guideAnch = ag ? anB : anA;
-            const int railBody  = ag ? biA : biB;
-            const int railAnch  = ag ? anA : anB;
+            if (biA == biB) {
+                throw SemanticError{jd.line, std::string("cannot ") + what + " body '" + jd.bodyA + "' on itself"};
+            }
+            // The guide rides the rail: the first anchor is the guide, the second the rail (M14: either
+            // may be on any moving body). A slide written ground-first keeps its old meaning: the moving
+            // body is the guide.
+            const bool swap = !slot && ag;
+            const int guideBody = swap ? biB : biA;
+            const int guideAnch = swap ? anB : anA;
+            const int railBody  = swap ? biA : biB;
+            const int railAnch  = swap ? anA : anB;
             const Anchor& guide = m.bodies[guideBody].anchors[guideAnch];
             const Anchor& rail  = m.bodies[railBody].anchors[railAnch];
             if (!rail.hasDir) {
-                throw SemanticError{jd.line, "rail anchor '" + jd.bodyB + "." + jd.anchorB +
-                    "' needs a direction — e.g. anchor rail at (0, 0) dir (1, 0)"};
+                throw SemanticError{jd.line, std::string(what) + " rail anchor '" + (swap ? jd.bodyA : jd.bodyB) + "." +
+                    (swap ? jd.anchorA : jd.anchorB) + "' needs a direction — e.g. anchor rail at (0, 0) dir (1, 0)"};
             }
-            if (!guide.hasDir) {
-                throw SemanticError{jd.line, "guide anchor '" + jd.bodyA + "." + jd.anchorA +
-                    "' needs a direction — e.g. anchor guide at (0, 0) dir (1, 0)"};
+            if (!slot && !guide.hasDir) {
+                throw SemanticError{jd.line, "guide anchor '" + (swap ? jd.bodyB : jd.bodyA) + "." +
+                    (swap ? jd.anchorB : jd.anchorA) + "' needs a direction — e.g. anchor guide at (0, 0) dir (1, 0)"};
             }
             SlideJoint s;
             s.guideBody = guideBody;
             s.guideAnchor = guideAnch;
-            s.railPos = m.bodies[railBody].anchors[railAnch].local;   // ground: world
-            s.railDir = rail.dirLocal;                                 // ground: world
+            s.lockDir = !slot;
+            if (m.bodies[railBody].isGround) {
+                s.railPos = rail.local;      // ground: world
+                s.railDir = rail.dirLocal;   // ground: world
+            } else {
+                s.railBody = railBody;       // the rail rides a moving body
+                s.railAnchor = railAnch;
+            }
             s.line = jd.line;
             m.slides.push_back(s);
         }
@@ -1942,7 +1991,34 @@ Model buildModel(const MechanismDecl& decl) {
 
     // --- drives (rate rows + torque forces + M5 weights) ----------------------
     std::unordered_set<int> driven;
+    std::unordered_set<int> linDriven;     // slides that already have a linear drive
     for (const DriveDecl& dd : decl.drives) {
+        if (dd.linear) {                   // M14: a drive on a slide, named by its guide anchor
+            const int gb = m.bodyIndex(dd.body);
+            const int ga = gb < 0 ? -1 : m.anchorIndex(gb, dd.anchor);
+            if (gb < 0 || ga < 0) {
+                throw SemanticError{dd.line, "linear drive refers to unknown anchor '" + dd.body + "." + dd.anchor + "'"};
+            }
+            int si = -1;
+            for (size_t k = 0; k < m.slides.size(); ++k)
+                if (m.slides[k].guideBody == gb && m.slides[k].guideAnchor == ga) si = (int)k;
+            if (si < 0) {
+                throw SemanticError{dd.line, "no slide or slot has '" + dd.body + "." + dd.anchor +
+                    "' as its guide anchor — a linear drive acts on a slide (the first anchor of its statement)"};
+            }
+            if (!linDriven.insert(si).second) {
+                throw SemanticError{dd.line, "slide at '" + dd.body + "." + dd.anchor + "' has more than one linear drive"};
+            }
+            LinearDrive ld;
+            ld.slide = si;
+            ld.isForce = dd.linForce;
+            ld.rate = dd.linRate;
+            ld.s0 = dd.linS0;
+            ld.force = dd.linForceN;
+            ld.line = dd.line;
+            m.linDrives.push_back(ld);
+            continue;
+        }
         const int bi = m.bodyIndex(dd.body);
         if (bi < 0) {
             if (m.gearIndex(dd.body) >= 0) {
@@ -2157,7 +2233,10 @@ Model buildModel(const MechanismDecl& decl) {
             } else {  // free body: unit mass at the frame origin unless given
                 double mm = 1.0;
                 if (bd && bd->props.count("mass")) mm = bd->props.at("mass");
-                parts.push_back(MassContribution{mm, Vec2{0.0, 0.0}, 0.01 * mm});
+                const Vec2 at = bd && bd->hasCom ? bd->com : Vec2{0.0, 0.0};          // M14: com: (x, y)
+                const double I = bd && bd->hasInertia ? bd->inertia : 0.01 * mm;       // M14: inertia: I
+                if (!(I >= 0.0)) throw SemanticError{b.declLine, "body '" + b.name + "' has a negative inertia"};
+                parts.push_back(MassContribution{mm, at, I});
             }
 
             // gears add discs centered on their host anchor

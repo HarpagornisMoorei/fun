@@ -72,8 +72,9 @@ struct RailSpan {
 // Everything that depends on the pose, for one frame.
 class Drawer {
 public:
-    Drawer(const Model& m, const Theme& th, double pxWorld, double extent, std::vector<RailSpan> rails)
-        : m_(m), th_(th), px_(pxWorld), extent_(extent), rails_(std::move(rails)) {}
+    Drawer(const Model& m, const Theme& th, double pxWorld, double extent, std::vector<RailSpan> rails,
+           std::vector<RailSpan> movingRails)
+        : m_(m), th_(th), px_(pxWorld), extent_(extent), rails_(std::move(rails)), moving_(std::move(movingRails)) {}
 
     std::string line(Vec2 a, Vec2 b, Rgb c, double wPx, const char* cls = "", const std::string& extra = "",
                      double opacity = 1.0, bool round = false) const {
@@ -219,6 +220,12 @@ public:
                 o << "<g class=\"rod\"" << tag << ">\n";
                 o << line(pa, pb, th_.outline, 9.0, "", "", 1.0, true);
                 o << line(pa, pb, col, 7.0, "bar", "", 1.0, true);
+                // a body with more anchors (a boom with a pivot, an attachment and a tip) is a chain through them
+                for (size_t ai = 2; ai < b.anchors.size(); ++ai) {
+                    const Vec2 p0 = m_.worldAnchor((int)bi, (int)ai - 1, q), p1 = m_.worldAnchor((int)bi, (int)ai, q);
+                    o << line(p0, p1, th_.outline, 9.0, "", "", 1.0, true);
+                    o << line(p0, p1, col, 7.0, "link", "", 1.0, true);
+                }
                 o << "</g>\n";
             } else if (b.anchors.size() == 1) {
                 const Vec2 c = m_.worldAnchor((int)bi, 0, q);
@@ -229,6 +236,23 @@ public:
                 o << line(c, c + Vec2{std::cos(th), std::sin(th)} * (11.0 * px_), th_.hub, 2.0, "index");
                 o << "</g>\n";
             }
+        }
+        // M14: a rail that rides a moving body is drawn with it, as a line through its anchor that reaches
+        // a little past the guide's travel (t0, t1 are measured from the rail anchor, over every frame)
+        for (size_t k = 0; k < m_.slides.size() && k < moving_.size(); ++k) {
+            const SlideJoint& sj = m_.slides[k];
+            if (sj.railBody == 0 || moving_[k].t1 < moving_[k].t0) continue;
+            const SlideGeom g = slideGeom(m_, sj, q);
+            const double margin = 0.03 * extent_;
+            // from the rail's own anchor (so the body it belongs to shows) to a little past the guide's farthest reach
+            double t0 = std::min(moving_[k].t0 - margin, 0.0), t1 = std::max(moving_[k].t1 + margin, 0.0);
+            if (t1 - t0 < 0.12 * extent_) { const double c = 0.5 * (t0 + t1); t0 = c - 0.06 * extent_; t1 = c + 0.06 * extent_; }
+            const Rgb col = th_.palette[(size_t)(sj.railBody - 1) % 5];
+            const std::string tag = " data-body=\"" + xml(m_.bodies[(size_t)sj.railBody].name) + "\" data-guide=\"" +
+                                    xml(m_.bodies[(size_t)sj.guideBody].name) + "\"";
+            o << line(g.pB + g.u * t0, g.pB + g.u * t1, th_.outline, 7.0, "", "", 1.0, true);
+            o << line(g.pB + g.u * t0, g.pB + g.u * t1, th_.hub, 4.5, sj.lockDir ? "slide" : "slot", tag, 1.0, true);
+            o << line(g.pB + g.u * t0, g.pB + g.u * t1, col, 4.5, "", "", 0.45, true);
         }
         // springs
         for (const SpringJoint& sp : m_.springs)
@@ -332,6 +356,7 @@ private:
     const Theme& th_;
     double px_, extent_;
     std::vector<RailSpan> rails_;
+    std::vector<RailSpan> moving_;     // per slide: the guide's travel along a rail on a moving body
 };
 
 } // namespace
@@ -464,21 +489,29 @@ RenderResult renderSvg(const Model& m, const RenderOptions& opt) {
     const double Wpx = opt.width, Hpx = ey * scale;
     const double pxWorld = 1.0 / scale;
 
-    std::vector<RailSpan> rails;
-    for (const SlideJoint& sj : m.slides) {
+    std::vector<RailSpan> rails, movingRails(m.slides.size());
+    for (size_t si = 0; si < m.slides.size(); ++si) {
+        const SlideJoint& sj = m.slides[si];
         RailSpan r;
         r.pos = sj.railPos;
         r.dir = sj.railDir;
         for (size_t k = 0; k < times.size(); ++k) {
-            const double t = dot(m.worldAnchor(sj.guideBody, sj.guideAnchor, poses[k]) - sj.railPos, sj.railDir);
-            r.t0 = std::min(r.t0, t);
-            r.t1 = std::max(r.t1, t);
+            if (sj.railBody == 0) {
+                const double t = dot(m.worldAnchor(sj.guideBody, sj.guideAnchor, poses[k]) - sj.railPos, sj.railDir);
+                r.t0 = std::min(r.t0, t);
+                r.t1 = std::max(r.t1, t);
+            } else {                                              // measured from the rail anchor, which moves
+                const SlideGeom g = slideGeom(m, sj, poses[k]);
+                const double t = dot(g.u, g.pA - g.pB);
+                movingRails[si].t0 = std::min(movingRails[si].t0, t);
+                movingRails[si].t1 = std::max(movingRails[si].t1, t);
+            }
         }
-        rails.push_back(r);
+        if (sj.railBody == 0) rails.push_back(r);
     }
 
     const Theme th = opt.dark ? darkTheme() : lightTheme();
-    const Drawer dr(m, th, pxWorld, std::max(ex, ey), rails);
+    const Drawer dr(m, th, pxWorld, std::max(ex, ey), rails, movingRails);
 
     std::ostringstream o;
     o << "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"" << num(Wpx)
