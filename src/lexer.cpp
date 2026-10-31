@@ -119,6 +119,21 @@ std::vector<Token> lex(const std::string& src) {
             continue;
         }
 
+        // two-character operators of the conditions (M19): <= >= == != && ||
+        {
+            static const char* ops2[] = {"<=", ">=", "==", "!=", "&&", "||"};
+            bool hit = false;
+            for (const char* op : ops2) {
+                if (src.compare(i, 2, op) == 0) {
+                    Token t; t.type = Tok::Sym; t.text = op; t.line = tl; t.col = tc;
+                    out.push_back(t); advance(2);
+                    hit = true;
+                    break;
+                }
+            }
+            if (hit) continue;
+        }
+
         // arrow before single '-'
         if (src.compare(i, 2, "->") == 0) {
             Token t; t.type = Tok::Sym; t.text = "->"; t.line = tl; t.col = tc;
@@ -129,7 +144,7 @@ std::vector<Token> lex(const std::string& src) {
         // single-character punctuation ('<' and '>' are M5 guard comparators;
         // '+' '*' '/' '=' are the M7 expression operators and `param name = ...`;
         // a '/' that starts "//" was taken as a comment above, and "deg/s" as a unit)
-        if (std::string("{}(),:;.-<>+*/=[]").find((char)c) != std::string::npos) {
+        if (std::string("{}(),:;.-<>+*/=[]!").find((char)c) != std::string::npos) {
             Token t; t.type = Tok::Sym; t.text = std::string(1, (char)c);
             t.line = tl; t.col = tc;
             out.push_back(t); advance();

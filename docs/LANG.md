@@ -94,6 +94,8 @@ stmt        = groundDecl | bodyDecl | rodDecl | shaftDecl | worldDecl
             | paramDecl                                   (* M8 *)
             | slotDecl                                    (* M14 *)
             | useDecl                                     (* M9 *)
+            | requireDecl                                 (* M19 *)
+            | ifStmt                                      (* M19 *)
             | forStmt ;                                   (* M12 *)
 
 groundDecl  = "ground" IDENT "{" { anchorDecl } "}" ;
@@ -116,6 +118,12 @@ linearDrive = "drive" ref ( "at" num "m/s" [ "from" num [ "m" ] ] | "force" num 
 forStmt     = "for" IDENT "=" expr "to" expr "{" { stmt } "}" ;      (* M12 *)
 (* `for` also stands where a list item does: in the anchors of a ground or body, and among the
    tuples of `polygon:`, `points:` and `polar:` ( `for k = 0 to n - 1 { (x, y) (x, y) }` ). *)
+ifStmt      = "if" cond "{" { stmt } "}" { "else" "if" cond "{" { stmt } "}" } [ "else" "{" { stmt } "}" ] ;   (* M19 *)
+requireDecl = "require" cond STRING ;                         (* M19: stops with the message if cond is false *)
+cond        = and { "||" and } ;  and = not { "&&" not } ;  not = "!" not | cmp ;
+cmp         = expr [ ( "<" | ">" | "<=" | ">=" | "==" | "!=" ) expr ] ;   (* M19: 1 or 0; also `if(c, a, b)`; on the right of
+                                                                param, in parentheses, part defaults and `use` arguments *)
+(* `if` stands wherever `for` does (anchor lists, polygon tuples) and the two nest. *)
 name        = IDENT [ "[" expr "]" ] ;                       (* M12: IDENT_k, k a whole number >= 0 *)
 partDecl    = "part" IDENT [ "(" paramInit { "," paramInit } ")" ] "{" { stmt } "}" ;   (* M9 *)
 paramInit   = IDENT "=" expr ;
@@ -1430,6 +1438,10 @@ compared by running many of it. Reusable parts and composition remain open.
 M9 added reusable parts: `part` with parameters and `use ... as name on ground at (x, y)`
 (see `docs/PARTS.md`), expanded at parse time so the solver, dynamics and tooling are
 unchanged, and an instanced file runs bit for bit like the flat one.
+
+M19 added conditions (`<  >  <=  >=  ==  !=  &&  ||  !`, as 1 and 0), `if(c, a, b)`, `if cond { } else if cond { } else { }`
+as a statement and inside anchor and polygon lists, and `require COND "message"` (see `docs/PARAMS.md`); `lib/geneva.mech` uses
+`require` to refuse the parameters it knows jam.
 
 M18 sped the core up without changing a number (pruned polygon contact search, sparse rows and an envelope Cholesky in
 the multiplier solve, parallel sweeps; `docs/PERFORMANCE.md`).

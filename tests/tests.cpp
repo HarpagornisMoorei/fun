@@ -330,7 +330,7 @@ void testLexer() {
     CHECK(v[2].type == Tok::Ident && v[2].text == "b");
 
     bool threw = false;
-    try { lex("what !"); } catch (const LexError&) { threw = true; }
+    try { lex("what @"); } catch (const LexError&) { threw = true; }
     CHECK(threw);
 }
 
@@ -8930,11 +8930,11 @@ void testGeneva() {
         CHECK(i > 0);
         return i;
     };
-    // a model the dimensions of which are out of whack warns: a disc too big for the wheel starts inside it
+    // a model the dimensions of which are out of whack warns: a point that starts inside its curve
     {
-        ParamOverrides ov;
-        ov["gv.lock_gap"] = -0.0003;
-        const Model m = modelFromFile("examples/geneva.mech", ov);
+        const Model m = buildFromText("mechanism m { world { gravity: 0 step: 0.001 } ground g { anchor o at (0,0) anchor p at (0.01, 0) } "
+            "body w { anchor o at (0,0) mass: 1 } pin w.o -> g.o profile c on w.o { circle: 0.02 } "
+            "body f { anchor p at (0,0) mass: 1 } pin f.p -> g.p touch f.p on c }");
         std::vector<double> q;
         const std::vector<std::string> w = m.assemble(q);
         bool found = false;
@@ -8943,6 +8943,15 @@ void testGeneva() {
         std::vector<double> q2;
         const Model ok = modelFromFile("examples/geneva.mech");
         for (const std::string& x : ok.assemble(q2)) CHECK(x.find("inside the curve") == std::string::npos);
+        // the part states its own limits: a tight lock gap, too few slots, a pin that does not fit
+        for (const auto& bad : std::vector<std::pair<const char*, double>>{{"gv.lock_gap", 0.00002}, {"gv.N", 2.0}, {"gv.rho", 0.03}, {"gv.clearance", -0.001}}) {
+            ParamOverrides ov;
+            ov[bad.first] = bad.second;
+            bool refused = false;
+            try { (void)modelFromFile("examples/geneva.mech", ov); }
+            catch (const ParseError& e) { refused = e.msg.find("requirement not met") != std::string::npos; }
+            CHECK(refused);
+        }
         // nine unilateral contacts are not nine constraints
         const DofReport d = ok.dofReport();
         CHECK(d.nTouches == 9 && d.freeDof == 2 && d.residualDof == 1);
@@ -9135,6 +9144,199 @@ void testSpeed() {
     }
 }
 
+// ============================================================================
+// M19 — conditionals. Comparisons and logic are numbers (1 or 0) inside `param`, parentheses and `if(c, a, b)`;
+// `if cond { } else if cond { } else { }` chooses which statements (or anchors, or polygon vertices) exist. All of
+// it is decided while parsing, so the oracle is the flat file the chosen branch spells out, bit for bit.
+// ============================================================================
+
+void testConditionals() {
+    std::printf("[conditionals M19]\n");
+    auto val = [](const std::string& expr, double* out) {
+        try {
+            const Program p = parse(lex("mechanism x { ground g { anchor a at (0,0) } param v = " + expr + " }"));
+            *out = p.mechanisms[0].params.at(0).value;
+            return true;
+        } catch (const ParseError&) { return false; }
+    };
+    // ---- the lexer: two-character operators, and the single '<' '>' the mode guards use are unchanged ---------------------
+    {
+        const std::vector<Token> t = lex("a <= b >= c == d != e && f || !g < h > i");
+        std::vector<std::string> syms;
+        for (const Token& k : t) if (k.type == Tok::Sym) syms.push_back(k.text);
+        const std::vector<std::string> want = {"<=", ">=", "==", "!=", "&&", "||", "!", "<", ">"};
+        CHECK(syms == want);
+        CHECK(lex("x = y")[1].text == "=" && lex("a -> b")[1].text == "->");
+    }
+    // ---- values ----------------------------------------------------------------------------------------------------------------
+    {
+        struct Case { const char* e; double v; };
+        const Case cases[] = {
+            {"1 < 2", 1}, {"2 < 1", 0}, {"2 > 1", 1}, {"1 > 2", 0}, {"2 <= 2", 1}, {"3 <= 2", 0}, {"2 >= 2", 1}, {"1 >= 2", 0},
+            {"2 == 2", 1}, {"2 == 3", 0}, {"2 != 3", 1}, {"2 != 2", 0},
+            {"1 + 2 > 2", 1}, {"2 * 3 == 6", 1}, {"(1 > 0) + (1 > 0)", 2},                    // arithmetic binds tighter than a comparison
+            {"(1 < 2) && (2 < 3)", 1}, {"(1 < 2) && (3 < 2)", 0}, {"(1 > 2) || (3 > 2)", 1}, {"(1 > 2) || (3 < 2)", 0},
+            {"!(1 > 2)", 1}, {"!(1 < 2)", 0}, {"!0", 1}, {"!5", 0}, {"!!5", 1},
+            {"(1 > 2) || (1 < 2) && (2 < 1)", 0},                                                // && binds tighter than ||
+            {"(1 < 2) || (1 > 2) && (2 > 1)", 1},
+            {"1 > 2 || 2 > 1", 1}, {"2 > 1 && 3 > 2", 1},                                        // param right-hand sides take a whole condition
+            {"if(1, 5, 6)", 5}, {"if(0, 5, 6)", 6}, {"if(2 > 1, 10, 20)", 10}, {"if(2 < 1, 10, 20)", 20}, {"if(-3, 1, 2)", 1},
+            {"if(1, 4, 1 / 0)", 4}, {"if(0, 1 / 0, 7)", 7},                                      // only the chosen branch is evaluated
+            {"if(1, 2, sqrt(-1))", 2}, {"if(0, sqrt(-1), 3)", 3},
+            {"if(1, if(0, 1, 2), 3)", 2}, {"if(0, 1, if(1, 8, 9))", 8},                           // nested
+            {"if(2 > 1, (3 + 4) * 2, 0) + 1", 15}, {"max(if(1, 3, 9), if(0, 9, 4))", 4},
+            {"if(1 > 0 && 2 > 1, min(3, 5), 0)", 3},
+        };
+        for (const Case& c : cases) {
+            double v = std::nan("");
+            const bool ok = val(c.e, &v);
+            CHECK(ok);
+            if (!ok || v != c.v) { std::printf("  case '%s': %s %g, wanted %g\n", c.e, ok ? "got" : "failed", v, c.v); CHECK(false); }
+        }
+        double v;
+        CHECK(!val("if(1, 2)", &v) && !val("if(1, 2, 3, 4)", &v) && !val("if(1 2, 3)", &v) && !val("if(1, 2, 3", &v));
+        CHECK(!val("1 / 0", &v) && !val("if(1, 1 / 0, 2)", &v));                                 // the chosen branch still errors
+        CHECK(!val("1 <", &v) && !val("<= 2", &v));
+        // a bare expression is still arithmetic only: the guards' '<' and '>' are not read as comparisons there
+        CHECK(!val("1 < 2", &v) || v == 1.0);                                                    // allowed because `param` takes a condition
+    }
+    // ---- statements ------------------------------------------------------------------------------------------------------------
+    {
+        const std::string src = R"(
+mechanism m {
+  param n = 3
+  ground g { anchor a at (0, 0) }
+  if n > 2 {
+    rod big on g.a { length: 0.3 }
+  } else if n > 1 {
+    rod mid on g.a { length: 0.2 }
+  } else {
+    rod small on g.a { length: 0.1 }
+  }
+})";
+        auto names = [&](double n) {
+            std::vector<std::string> out;
+            const Program p = parse(lex(src), ParamOverrides{{"n", n}});
+            for (const BodyDecl& b : p.mechanisms[0].bodies) out.push_back(b.name);
+            return out;
+        };
+        CHECK(names(3) == (std::vector<std::string>{"g", "big"}));
+        CHECK(names(5) == (std::vector<std::string>{"g", "big"}));
+        CHECK(names(2) == (std::vector<std::string>{"g", "mid"}));
+        CHECK(names(1) == (std::vector<std::string>{"g", "small"}));
+        CHECK(names(-4) == (std::vector<std::string>{"g", "small"}));
+        // exactly one branch is taken even when several conditions hold
+        CHECK(parse(lex("mechanism m { ground g { anchor a at (0,0) } if 1 { rod a1 on g.a { length: 1 } } else if 1 { rod a2 on g.a { length: 1 } } else { rod a3 on g.a { length: 1 } } }"))
+                  .mechanisms[0].bodies.size() == 2);
+        // no else: nothing happens when it is false
+        CHECK(parse(lex("mechanism m { ground g { anchor a at (0,0) } if 0 { rod r on g.a { length: 1 } } }")).mechanisms[0].bodies.size() == 1);
+        // the skipped branch is only skipped, not parsed: it may mention things that do not exist
+        CHECK(parse(lex("mechanism m { ground g { anchor a at (0,0) } if 0 { rod r on nowhere.x { length: 1 / 0 } bogus } }")).mechanisms[0].bodies.size() == 1);
+        // braces inside the skipped block are matched
+        CHECK(parse(lex("mechanism m { ground g { anchor a at (0,0) } if 0 { body b { anchor p at (0,0) } } else { rod r on g.a { length: 1 } } }")).mechanisms[0].bodies.size() == 2);
+        // it composes with loops, both ways
+        const std::string mixed = R"(
+mechanism m {
+  ground g { anchor a at (0, 0) }
+  for i = 0 to 4 {
+    if i > 1 && i < 4 { rod r[i] on g.a { length: 0.1 * i } }
+  }
+  if 1 { for j = 0 to 1 { rod s[j] on g.a { length: 1 } } }
+})";
+        const Program q = parse(lex(mixed));
+        std::vector<std::string> got;
+        for (const BodyDecl& b : q.mechanisms[0].bodies) got.push_back(b.name);
+        CHECK(got == (std::vector<std::string>{"g", "r_2", "r_3", "s_0", "s_1"}));
+        // errors
+        CHECK(parseFails("mechanism m { ground g { } if 1 { rod r on g.a { length: 1 }", "unterminated"));
+        CHECK(parseFails("mechanism m { ground g { } if 1 rod r }", "expected '{'"));
+        CHECK(parseFails("mechanism m { ground g { } else { } }", "expected a statement"));
+        CHECK(parseFails("mechanism m { ground g { } if 0 { } else", "expected '{'"));
+        CHECK(parseFails("mechanism m { if 1 { param p = 2 } }", "cannot be declared inside"));
+        CHECK(parseFails("mechanism m { if 1 > { } }", "expected number"));
+    }
+    // ---- inside a body's anchors and a polygon's vertices -----------------------------------------------------------------------------
+    {
+        const std::string withIf = R"(
+mechanism m {
+  param tip = 1
+  param n = 5
+  ground g { anchor a at (0, 0) }
+  body b {
+    anchor p at (0, 0)
+    if tip { anchor t at (0.1, 0) }
+    for i = 0 to n - 1 { if i != 2 { anchor k[i] at (0.01 * i, 0) } }
+  }
+  profile shape on b.p {
+    polygon:
+      (0, 0) (0.05, 0) (0.05, 0.02)
+      if tip { (0.03, 0.04) }
+      for i = 0 to 1 { if i == 1 { (0.0, 0.03) } }
+    fillet 0.001
+  }
+})";
+        const std::string flat = R"(
+mechanism m {
+  ground g { anchor a at (0, 0) }
+  body b {
+    anchor p at (0, 0)
+    anchor t at (0.1, 0)
+    anchor k_0 at (0.01 * 0, 0)
+    anchor k_1 at (0.01 * 1, 0)
+    anchor k_3 at (0.01 * 3, 0)
+    anchor k_4 at (0.01 * 4, 0)
+  }
+  profile shape on b.p {
+    polygon: (0, 0) (0.05, 0) (0.05, 0.02) (0.03, 0.04) (0.0, 0.03)
+    fillet 0.001
+  }
+})";
+        const Program a = parse(lex(withIf)), b = parse(lex(flat));
+        const BodyDecl &ba = a.mechanisms[0].bodies[1], &bb = b.mechanisms[0].bodies[1];
+        CHECK(ba.anchors.size() == bb.anchors.size() && ba.anchors.size() == 6);
+        bool same = ba.anchors.size() == bb.anchors.size();
+        for (size_t i = 0; same && i < ba.anchors.size(); ++i)
+            same = ba.anchors[i].name == bb.anchors[i].name && ba.anchors[i].pos.x == bb.anchors[i].pos.x && ba.anchors[i].pos.y == bb.anchors[i].pos.y;
+        CHECK(same);
+        const ProfileDecl &pa = a.mechanisms[0].profiles[0], &pb = b.mechanisms[0].profiles[0];
+        CHECK(pa.points.size() == 5 && pb.points.size() == 5);
+        CHECK(!pa.points.empty() && pa.points.size() == pb.points.size() && pa.points.back().x == pb.points.back().x);
+        // without the tip: no anchor t and one vertex fewer
+        const Program c = parse(lex(withIf), ParamOverrides{{"tip", 0.0}});
+        CHECK(c.mechanisms[0].bodies[1].anchors.size() == 5 && c.mechanisms[0].profiles[0].points.size() == 4);
+    }
+    // ---- the actual use: a part that refuses a bad parameter, and one that adapts ----------------------------------------------------
+    {
+        const std::string part = R"(
+part spoked(n = 4, hub = 0.01) {
+  require n >= 2 "a wheel needs at least two spokes"
+  require hub > 0 && hub < 0.1 "the hub radius must be between 0 and 0.1"
+  param len = if(n > 6, 0.05, 0.1)
+  ground frame { anchor c at (0, 0) }
+  for i = 0 to n - 1 { rod spoke[i] on frame.c { length: len, from: 360 * i / n deg } }
+}
+mechanism m { ground bench { anchor o at (0, 0) } use spoked(n = N) as w on bench at (0, 0) }
+)";
+        auto count = [&](double n) {
+            std::string src = part;
+            const size_t at = src.find("N)");
+            src.replace(at, 1, std::to_string((int)n));
+            return parse(lex(src)).mechanisms[0].bodies.size();
+        };
+        CHECK(count(4) == 5 && count(8) == 9);
+        CHECK(parseFails([&] { std::string s = part; s.replace(s.find("N)"), 1, "1"); return s; }().c_str(), "requirement not met: a wheel needs at least two spokes"));
+        double L4 = 0, L8 = 0;
+        {
+            std::string a = part, b = part;
+            a.replace(a.find("N)"), 1, "4");
+            b.replace(b.find("N)"), 1, "8");
+            L4 = parse(lex(a)).mechanisms[0].bodies[1].props.at("length");
+            L8 = parse(lex(b)).mechanisms[0].bodies[1].props.at("length");
+        }
+        CHECK(L4 == 0.1 && L8 == 0.05);                                                           // the length follows the count
+    }
+}
+
 int runAllTests() {
     testLexer();
     testParser();
@@ -9177,6 +9379,7 @@ int runAllTests() {
     testRackBelt();
     testGeneva();
     testSpeed();
+    testConditionals();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

@@ -236,6 +236,51 @@ private:
     // `100 deg`) or the next item ends it exactly as before.
     double parseNum() { return parseSum(); }
 
+    // --- conditions (M19) -----------------------------------------------------------------
+    //   cond := and { '||' and }       and := not { '&&' not }       not := '!' not | cmp
+    //   cmp  := expr [ ('<' | '>' | '<=' | '>=' | '==' | '!=') expr ]
+    // A condition is a number too: comparisons and logic give 1 or 0, and anything but 0 is true. They are
+    // reachable from `if`, from `if(c, a, b)` and from inside parentheses, never from a bare expression, so
+    // the '<' and '>' of the mode guards keep their meaning.
+    double parseCond() {
+        double v = parseAnd();
+        while (cur().type == Tok::Sym && cur().text == "||") {
+            next();
+            const double r = parseAnd();
+            v = (v != 0.0 || r != 0.0) ? 1.0 : 0.0;
+        }
+        return v;
+    }
+    double parseAnd() {
+        double v = parseNot();
+        while (cur().type == Tok::Sym && cur().text == "&&") {
+            next();
+            const double r = parseNot();
+            v = (v != 0.0 && r != 0.0) ? 1.0 : 0.0;
+        }
+        return v;
+    }
+    double parseNot() {
+        if (acceptSym("!")) return parseNot() == 0.0 ? 1.0 : 0.0;
+        return parseCmp();
+    }
+    double parseCmp() {
+        const double a = parseSum();
+        if (cur().type != Tok::Sym) return a;
+        const std::string op = cur().text;
+        if (op != "<" && op != ">" && op != "<=" && op != ">=" && op != "==" && op != "!=") return a;
+        next();
+        const double b = parseSum();
+        bool r = false;
+        if (op == "<") r = a < b;
+        else if (op == ">") r = a > b;
+        else if (op == "<=") r = a <= b;
+        else if (op == ">=") r = a >= b;
+        else if (op == "==") r = a == b;
+        else r = a != b;
+        return r ? 1.0 : 0.0;
+    }
+
     static bool isFunc(const std::string& n) {
         return n == "sqrt" || n == "sin" || n == "cos" || n == "tan" || n == "atan" ||
                n == "abs" || n == "min" || n == "max" || n == "pow";
@@ -290,12 +335,33 @@ private:
         const Token t = cur();
         if (t.type == Tok::Number) { next(); return t.num; }
         if (acceptSym("(")) {
-            const double v = parseSum();
+            const double v = parseCond();
             expectSym(")");
             return v;
         }
         if (t.type == Tok::Ident) {
             if (t.text == "pi") { next(); return kPi; }
+            if (t.text == "if" && pos_ + 1 < t_.size() && t_[pos_ + 1].type == Tok::Sym && t_[pos_ + 1].text == "(") {
+                // if(c, a, b): only the chosen branch is evaluated, so `if(n > 1, 1 / (n - 1), 0)` is safe
+                next();
+                expectSym("(");
+                const double c = parseCond();
+                expectSym(",");
+                const size_t aPos = pos_;
+                skipArg();
+                expectSym(",");
+                const size_t bPos = pos_;
+                skipArg();
+                const size_t closePos = pos_;
+                expectSym(")");
+                const size_t after = pos_;
+                pos_ = c != 0.0 ? aPos : bPos;
+                const double v = parseCond();
+                if (pos_ != (c != 0.0 ? bPos - 1 : closePos))
+                    fail("unexpected '" + cur().text + "' in if(c, a, b)");
+                pos_ = after;
+                return v;
+            }
             auto it = params_.find(t.text);
             if (it != params_.end()) { next(); return it->second; }
             if (isFunc(t.text) && pos_ + 1 < t_.size() && t_[pos_ + 1].type == Tok::Sym &&
@@ -312,6 +378,21 @@ private:
                  "(declare it with 'param " + t.text + " = ...' first)");
         }
         fail("expected number, got '" + t.text + "'");
+    }
+
+    // Step over one argument of if(c, a, b) without evaluating it: up to the ',' or ')' at depth 0.
+    void skipArg() {
+        int depth = 0;
+        while (!atEnd()) {
+            if (cur().type == Tok::Sym) {
+                const std::string& s = cur().text;
+                if (s == "(" || s == "[") ++depth;
+                else if (s == ")" || s == "]") { if (depth == 0) return; --depth; }
+                else if (s == "," && depth == 0) return;
+            }
+            next();
+        }
+        fail("unterminated if(...)");
     }
 
     double callFunc(const Token& f, const std::vector<double>& a) {
@@ -339,8 +420,8 @@ private:
     // param NAME = expr
     void paramDecl(MechanismDecl& m) {
         if (loopDepth_ > 0)
-            fail("a 'param' cannot be declared inside a 'for' loop (it would be declared once per iteration); "
-                 "declare it before the loop");
+            fail("a 'param' cannot be declared inside a 'for' loop or an 'if' (it would be declared once per iteration, or "
+                 "only sometimes); declare it before");
         const Token name = expectIdent();
         if (isReservedParam(name.text)) {
             throw ParseError{name.line, name.col, "'" + name.text + "' cannot be a parameter name "
@@ -353,7 +434,7 @@ private:
         ParamDecl pd;
         pd.name = prefix_ + name.text;           // inside a part: 'left.lift'
         pd.line = name.line;
-        pd.declared = pd.value = checkFinite(parseNum());
+        pd.declared = pd.value = checkFinite(parseCond());
         auto ov = ov_.find(pd.name);
         if (ov != ov_.end()) {
             pd.value = ov->second;
@@ -456,11 +537,70 @@ private:
         pos_ = endPos;
     }
 
+    // --- conditionals (M19) ---------------------------------------------------------------
+
+    bool isIf() const {
+        return cur().type == Tok::Ident && cur().text == "if" &&
+               !(pos_ + 1 < t_.size() && t_[pos_ + 1].type == Tok::Sym && t_[pos_ + 1].text == "(" && false);
+    }
+
+    // 'if' cond { ... } [ 'else' 'if' cond { ... } ]* [ 'else' { ... } ] — the conditions are evaluated as they are
+    // read (they can only use parameters, which are numbers by now); the block of the first true one is read by
+    // `body`, which is positioned at its first token and must consume the closing '}', and the others are skipped.
+    void ifChain(const std::function<void()>& body) {
+        bool taken = false;
+        next();                                                  // 'if'
+        for (;;) {
+            const double c = parseCond();
+            expectSym("{");
+            const size_t bodyPos = pos_;
+            int depth = 1;
+            while (depth > 0) {
+                if (atEnd()) fail("unterminated '{' in an 'if'");
+                if (cur().type == Tok::Sym && cur().text == "{") ++depth;
+                if (cur().type == Tok::Sym && cur().text == "}") --depth;
+                next();
+            }
+            const size_t endPos = pos_;
+            if (c != 0.0 && !taken) {
+                taken = true;
+                pos_ = bodyPos;
+                ++loopDepth_;
+                body();
+                --loopDepth_;
+            }
+            pos_ = endPos;
+            if (!(cur().type == Tok::Ident && cur().text == "else")) return;
+            next();
+            if (cur().type == Tok::Ident && cur().text == "if") { next(); continue; }
+            // plain else: a condition that is always true
+            expectSym("{");
+            const size_t ePos = pos_;
+            int d2 = 1;
+            while (d2 > 0) {
+                if (atEnd()) fail("unterminated '{' in an 'else'");
+                if (cur().type == Tok::Sym && cur().text == "{") ++d2;
+                if (cur().type == Tok::Sym && cur().text == "}") --d2;
+                next();
+            }
+            const size_t eEnd = pos_;
+            if (!taken) {
+                pos_ = ePos;
+                ++loopDepth_;
+                body();
+                --loopDepth_;
+            }
+            pos_ = eEnd;
+            return;
+        }
+    }
+
     // ( ... ) groups and `for` loops of them, as in `polygon:`. `one` parses what follows '(' through ')'.
     void tuples(const std::function<void()>& one) {
         for (;;) {
             if (acceptSym("(")) { one(); skipSeparators(); }
             else if (isFor()) { forLoop([&] { tuples(one); expectSym("}"); }); skipSeparators(); }
+            else if (isIf()) { ifChain([&] { tuples(one); expectSym("}"); }); skipSeparators(); }
             else break;
         }
     }
@@ -549,7 +689,7 @@ private:
                     if (a.first == an.text)
                         throw ParseError{an.line, an.col, "argument '" + an.text + "' is given twice"};
                 expectSym("=");
-                args.emplace_back(an.text, checkFinite(parseNum()));   // evaluated in the caller's scope
+                args.emplace_back(an.text, checkFinite(parseCond()));   // evaluated in the caller's scope
                 if (acceptSym(",")) continue;
                 expectSym(")");
                 break;
@@ -735,6 +875,15 @@ private:
         else if (acceptKw("touch")) touchDecl(m);
         else if (cur().type == Tok::Ident && cur().text == "cam") { next(); camDecl(m); }
         else if (cur().type == Tok::Ident && cur().text == "param") { next(); paramDecl(m); }
+        else if (cur().type == Tok::Ident && cur().text == "require") {      // M19: require COND "what is wrong if it fails"
+            const Token at = cur();
+            next();
+            const double c = parseCond();
+            if (cur().type != Tok::Str) fail("expected a message in quotes after the condition of 'require'");
+            const std::string msg = cur().text;
+            next();
+            if (c == 0.0) throw ParseError{at.line, at.col, "requirement not met: " + msg};
+        }
         else if (cur().type == Tok::Ident && cur().text == "use") { next(); useDecl(m); }
         else if (cur().type == Tok::Ident && cur().text == "slot") { next(); jointDecl(m, JointDecl::Kind::Slot); }
         else if (isFor()) {
@@ -746,9 +895,18 @@ private:
                 }
             });
         }
+        else if (isIf()) {
+            ifChain([&] {
+                while (!acceptSym("}")) {
+                    if (atEnd()) fail("unterminated '{' in an 'if'");
+                    stmt(m);
+                    skipSeparators();
+                }
+            });
+        }
         else fail("expected a statement ('ground', 'body', 'rod', 'shaft', 'world', 'gear', "
                   "'mesh', 'spring', 'pin', 'slide', 'drive', 'reduce', 'hand', 'dial', "
-                  "'mode', 'profile', 'touch', 'cam', 'param', 'use', 'slot' or 'for'), got '" + cur().text + "'");
+                  "'mode', 'profile', 'touch', 'cam', 'param', 'use', 'slot', 'require', 'for' or 'if'), got '" + cur().text + "'");
     }
 
     void anchorBodyDecl(MechanismDecl& m, BodyDecl::Kind kind) {
@@ -813,21 +971,17 @@ private:
                 b.anchors.push_back(a);
             }
         };
-        while (!acceptSym("}")) {
-            if (atEnd()) fail("unterminated '{' in body '" + b.name + "'");
-            if (isFor()) {
-                forLoop([&] {
-                    while (!acceptSym("}")) {
-                        if (atEnd()) fail("unterminated '{' in a 'for' loop");
-                        item();
-                        skipSeparators();
-                    }
-                });
-            } else {
-                item();
+        // items, `for` loops and `if` blocks, nested in any order; `closer` says what a '}' ends
+        std::function<void(const char*)> items = [&](const char* closer) {
+            while (!acceptSym("}")) {
+                if (atEnd()) fail(std::string("unterminated '{' in ") + closer);
+                if (isFor()) forLoop([&] { items("a 'for' loop"); });
+                else if (isIf()) ifChain([&] { items("an 'if'"); });
+                else item();
+                skipSeparators();
             }
-            skipSeparators();
-        }
+        };
+        items(("body '" + b.name + "'").c_str());
         if (kind == BodyDecl::Kind::Ground && !prefix_.empty()) { mergePartGround(m, b); return; }
         m.bodies.push_back(b);
     }
