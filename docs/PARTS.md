@@ -192,19 +192,57 @@ the language changes. The standard parts are in `lib/` (see `LIB.md`).
 * **Not a module system.** There are no namespaces: imported parts share the file's one namespace. An
   `import` inside a `mechanism` or `part` is not a statement.
 
-## 7. What it does not do
+## 7. Repetition: `for` loops and indexed names
+
+```
+for i = 0 to n - 1 {
+  use plate_cam(lift = 0.012) as cam[i] on bench at (dist * cos(i * span * pi / 180), dist * sin(i * span * pi / 180))
+      rotate i * span - 90 deg
+  gear g[i] { teeth: teeth, module: mod } on cam[i].cam
+  mesh gd g[i]
+}
+```
+
+* `for i = a to b { ... }` repeats its block for `i = a ... b` inclusive. The bounds are expressions that
+  must be whole numbers, so **the count can be a parameter**, and so a part parameter (`--set s.n=5`)
+  or a sweep axis (`--set n=3,4,6`). `b < a` runs nothing.
+* **Indexed names.** `cam[i]` is the identifier `cam_<i>`, so each pass declares a distinct name, and from
+  outside you write it plainly: `cam_2.follower.tip`, `--set cam_2.lift=0.02`, `max:cam_2.follower.x`. An
+  index works anywhere a name does (also outside loops), and refers to other passes too:
+  `pin link[i].B -> link[i + 1].A`. It must be a whole number >= 0.
+* A loop works in a mechanism, in a part, inside another loop, in the anchor list of a `ground` or `body`
+  (`for k = 0 to 5 { anchor spoke[k] at (...) }`), and among the tuples of a `polygon:`, `points:` or
+  `polar:` shape, which is how a profile with a computed outline is written:
+
+```
+polygon:
+  for k = 0 to teeth - 1 {
+    (r_root * cos(k * pitch),       r_root * sin(k * pitch))
+    (r_tip  * cos((k + 1) * pitch), r_tip  * sin((k + 1) * pitch))
+  }
+fillet 0.0005
+```
+
+* Limits: one loop has at most 1000 iterations, a file 20000 in all; the loop variable is gone after its
+  loop and cannot be an existing parameter; a `param` cannot be declared inside a loop; a name is still
+  declared once, so a loop that declares a plain name (no index) hits the usual duplicate-name error.
+* Still no conditionals: the loop decides how many, not whether.
+
+`examples/camstar.mech` is n cams around a hub from one loop; `lib/ratchet.mech` generates its teeth.
+
+## 8. What it does not do
 
 * **No reflection** when mounting (rotation is supported, mirroring is not); no mounting on a moving body. To
   attach an instance to a moving body, give the part a ground-less body and pin it
   from the mechanism, as in the linkage example.
-* **No conditionals or loops**: the structure of an instance does not depend on
-  its parameters (the numbers do). Five identical instances are five `use` lines.
+* **No conditionals**: a loop decides how many things there are, not whether one exists (`if` is not
+  in the language).
 * **Rotation is about the part's mount point and only for what the part owns.** It does not rotate gravity,
   and refuses a part with a `mode`. A drive you write outside the part is in the world frame: when you
   drive a rod of a rotated part from outside, add the rotation yourself (`from 20 + A deg`).
 * A part cannot declare a `world`, and a file's mechanisms do not share instances.
 
-## 8. Errors
+## 9. Errors
 
 Errors inside a part carry the line of the part's own text, and the model builder
 names the instance:
@@ -218,7 +256,7 @@ argument the part does not have (listing the ones it does), an argument given
 twice, a ground-less part given `on ... at`, a part with a ground and no `on`, a
 mount that is not a ground declared before, a name already taken.
 
-## 9. How it is checked
+## 10. How it is checked
 
 * Two instances of the plate-cam part, with different lifts and speeds, run
   **bit for bit** like the flat file with the same bodies written out.
@@ -241,3 +279,7 @@ mount that is not a ground declared before, a name already taken.
   definition-time check, or any one of the name sites (`mesh`, `reduce`, `via`,
   `hold`, mode guards and resets, `drive`, hands, gear hosts, touch profiles)
   fails tests.
+* Loops: a looped file equals the same file with the iterations written out (the declarations, then the
+  simulated rows); regular polygons of 3, 5, 8 and 17 sides have the closed-form area and all vertices on the
+  circle; the generated ratchet has the closed-form area, clicks about once per tooth for 6 to 16 teeth, and
+  locks under reverse torque; `camstar` with 3, 4 and 6 cams puts every follower on its own radial line.

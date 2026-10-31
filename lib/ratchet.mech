@@ -1,0 +1,51 @@
+// ratchet — a ratchet wheel with `teeth` sawtooth teeth and a gravity pawl. Each tooth is a gentle
+// ramp and a radial drop face; the pawl is a light rod hanging from a pin, its tip resting in the
+// root at the top of the wheel. Turned one way (the ratcheting direction, clockwise) the wheel runs
+// under the pawl and clicks once per tooth; turned the other way a radial face meets the tip and the
+// wheel locks. A dynamic part: the mechanism supplies the world (gravity) and the torque.
+//
+//   import "../lib/ratchet.mech"
+//   mechanism m {
+//     world { gravity: 9.81  step: 0.0005 }
+//     ground bench { anchor o at (0, 0) }
+//     use ratchet(teeth = 16) as r on bench at (0, 0)
+//     drive r.wheel torque -0.004            // clockwise: the ratcheting direction
+//   }
+//
+// Ports:
+//   wheel             the wheel body (drive it, or read its angle)
+//   pawl              the pawl rod (pawl.B is the tip); rim is the toothed profile
+// The teeth are generated, not listed: tooth k has its root at pitch angle k * 2 pi / teeth (from the
+// top of the wheel) and its tip one pitch later, so root k+1 lies radially below tip k. The wheel is
+// a polygon with `fillet_r` rounded corners (a corner has no contact normal, so a fillet is required).
+// Closed forms checked in the tests: the polygon's area, and one click per tooth of advance.
+part ratchet(teeth = 12, r_root = 0.030, r_tip = 0.036, fillet_r = 0.0005, pawl_len = 0.04,
+             pawl_deg = -40, wheel_mass = 0.05, mu = 0.3) {
+  param pitch = 2 * pi / teeth
+
+  ground frame {
+    anchor axle  at (0, 0)
+    // the pin: the pawl tip lands on the root at the top, at (0, r_root + fillet_r)
+    anchor pivot at (-pawl_len * cos(pawl_deg * pi / 180),
+                     r_root + fillet_r - pawl_len * sin(pawl_deg * pi / 180))
+  }
+
+  body wheel {
+    anchor axle at (0, 0)
+    mass: wheel_mass
+    from: 0 deg
+  }
+  pin wheel.axle -> frame.axle
+
+  profile rim on wheel.axle {
+    polygon:
+      for k = 0 to teeth - 1 {
+        (r_root * cos(pi / 2 + k * pitch),       r_root * sin(pi / 2 + k * pitch))
+        (r_tip  * cos(pi / 2 + (k + 1) * pitch), r_tip  * sin(pi / 2 + (k + 1) * pitch))
+      }
+    fillet fillet_r
+  }
+
+  rod pawl on frame.pivot { length: pawl_len, from: pawl_deg deg }
+  touch pawl.B on rim friction mu
+}

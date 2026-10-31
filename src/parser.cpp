@@ -87,6 +87,12 @@
 // A part is expanded at parse time: its body is re-parsed once per instance with every
 // name qualified by the instance ('left.follower'), so the model sees a flat mechanism.
 //
+// M12 ('for' is contextual at statement start, in anchor lists and in shape lists; 'to' too):
+//   forStmt     := 'for' IDENT '=' expr 'to' expr '{' item* '}'     (integer bounds, inclusive)
+//   name        := IDENT [ '[' expr ']' ]       the identifier IDENT_k (k a non-negative integer)
+// The loop variable is a number inside the body: `cam[i]` names cam_0, cam_1, ..., and `polygon:`
+// may hold `for k = 0 to n - 1 { (x, y) (x, y) }`. Loops are expanded at parse time.
+//
 // M6b ('cam' is contextual at statement start so `cam` stays usable as a
 // body name; the items below are contextual identifiers too):
 //   camDecl     := 'cam' IDENT [ 'on' IDENT ['.' IDENT] ]
@@ -106,6 +112,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <set>
 
 namespace mech {
@@ -166,6 +173,9 @@ private:
     std::map<std::string, GroundAlias> aliases_; // a part's ground -> the outer ground it merged into
     std::string prefix_;                         // "" at top level, "left." inside instance 'left'
     Mount mount_;
+    int loopDepth_ = 0;                          // 'for' loops being expanded in the current scope
+    long loopIterations_ = 0;                    // iterations expanded so far (a guard against runaway nesting)
+    static constexpr long kMaxLoop = 1000, kMaxLoopTotal = 20000;
 
     // --- token helpers -----------------------------------------------------
 
@@ -198,7 +208,17 @@ private:
 
     Token expectIdent() {
         if (cur().type != Tok::Ident) fail("expected identifier, got '" + cur().text + "'");
-        Token t = cur(); next(); return t;
+        Token t = cur(); next();
+        if (cur().type == Tok::Sym && cur().text == "[") {      // M12: name[expr] is the identifier name_k
+            next();
+            const double v = checkFinite(parseNum());
+            const double k = std::round(v);
+            if (std::fabs(v - k) > 1e-9 || k < 0.0 || k > 1e9)
+                fail("an index in a name must be a non-negative whole number, got " + std::to_string(v));
+            expectSym("]");
+            t.text += "_" + std::to_string((long long)k);
+        }
+        return t;
     }
 
     void skipSeparators() {
@@ -317,6 +337,9 @@ private:
 
     // param NAME = expr
     void paramDecl(MechanismDecl& m) {
+        if (loopDepth_ > 0)
+            fail("a 'param' cannot be declared inside a 'for' loop (it would be declared once per iteration); "
+                 "declare it before the loop");
         const Token name = expectIdent();
         if (isReservedParam(name.text)) {
             throw ParseError{name.line, name.col, "'" + name.text + "' cannot be a parameter name "
@@ -382,6 +405,64 @@ private:
     }
 
     // --- parts (M9) --------------------------------------------------------
+
+    // --- loops (M12) -------------------------------------------------------
+
+    bool isFor() const {
+        return cur().type == Tok::Ident && cur().text == "for" && pos_ + 1 < t_.size() &&
+               t_[pos_ + 1].type == Tok::Ident;
+    }
+
+    // 'for' i = a to b { ... } — `body` is called once per value of i, with the loop variable bound
+    // as a number and the position at the first token of the block, and must consume the closing '}'.
+    void forLoop(const std::function<void()>& body) {
+        next();                                                  // 'for'
+        const Token v = cur();
+        if (isReservedParam(v.text) || params_.count(v.text))
+            fail("loop variable '" + v.text + "' is already a parameter or a reserved word");
+        next();
+        expectSym("=");
+        const double a = checkFinite(parseNum());
+        if (!(cur().type == Tok::Ident && cur().text == "to"))
+            fail("expected 'to' in the loop range, got '" + cur().text + "'");
+        next();
+        const double b = checkFinite(parseNum());
+        if (std::fabs(a - std::round(a)) > 1e-9 || std::fabs(b - std::round(b)) > 1e-9)
+            fail("loop bounds must be whole numbers, got " + std::to_string(a) + " to " + std::to_string(b));
+        const long lo = std::lround(a), hi = std::lround(b);
+        if (hi >= lo && hi - lo + 1 > kMaxLoop)
+            fail("this loop has " + std::to_string(hi - lo + 1) + " iterations; the limit is " + std::to_string(kMaxLoop));
+        expectSym("{");
+        const size_t bodyPos = pos_;
+        int depth = 1;
+        while (depth > 0) {
+            if (atEnd()) fail("unterminated '{' in a 'for' loop");
+            if (cur().type == Tok::Sym && cur().text == "{") ++depth;
+            if (cur().type == Tok::Sym && cur().text == "}") --depth;
+            next();
+        }
+        const size_t endPos = pos_;
+        ++loopDepth_;
+        for (long k = lo; k <= hi; ++k) {
+            if (++loopIterations_ > kMaxLoopTotal)
+                fail("loops expand to more than " + std::to_string(kMaxLoopTotal) + " iterations in all");
+            pos_ = bodyPos;
+            params_[v.text] = (double)k;
+            body();
+        }
+        params_.erase(v.text);
+        --loopDepth_;
+        pos_ = endPos;
+    }
+
+    // ( ... ) groups and `for` loops of them, as in `polygon:`. `one` parses what follows '(' through ')'.
+    void tuples(const std::function<void()>& one) {
+        for (;;) {
+            if (acceptSym("(")) { one(); skipSeparators(); }
+            else if (isFor()) { forLoop([&] { tuples(one); expectSym("}"); }); skipSeparators(); }
+            else break;
+        }
+    }
 
     // part NAME [ ( p = expr, ... ) ] { ... }   — the body is kept as tokens and expanded per use.
     void partDecl() {
@@ -548,6 +629,8 @@ private:
         const std::string savedPrefix = prefix_;
         const Mount savedMount = mount_;
         const size_t savedPos = pos_;
+        const int savedLoopDepth = loopDepth_;
+        loopDepth_ = 0;                          // a part's own statements are not inside the caller's loop
         prefix_ = inst + ".";
         mount_ = mt;
 
@@ -581,6 +664,7 @@ private:
 
         mt.used = mount_.used;
         mount_ = savedMount;
+        loopDepth_ = savedLoopDepth;
         prefix_ = savedPrefix;
         params_.swap(savedParams);
         pos_ = savedPos;
@@ -650,9 +734,18 @@ private:
         else if (cur().type == Tok::Ident && cur().text == "cam") { next(); camDecl(m); }
         else if (cur().type == Tok::Ident && cur().text == "param") { next(); paramDecl(m); }
         else if (cur().type == Tok::Ident && cur().text == "use") { next(); useDecl(m); }
+        else if (isFor()) {
+            forLoop([&] {
+                while (!acceptSym("}")) {
+                    if (atEnd()) fail("unterminated '{' in a 'for' loop");
+                    stmt(m);
+                    skipSeparators();
+                }
+            });
+        }
         else fail("expected a statement ('ground', 'body', 'rod', 'shaft', 'world', 'gear', "
                   "'mesh', 'spring', 'pin', 'slide', 'drive', 'reduce', 'hand', 'dial', "
-                  "'mode', 'profile', 'touch', 'cam', 'param' or 'use'), got '" + cur().text + "'");
+                  "'mode', 'profile', 'touch', 'cam', 'param', 'use' or 'for'), got '" + cur().text + "'");
     }
 
     void anchorBodyDecl(MechanismDecl& m, BodyDecl::Kind kind) {
@@ -664,8 +757,8 @@ private:
         b.line = name.line;
         expectSym("{");
 
-        while (!acceptSym("}")) {
-            if (atEnd()) fail("unterminated '{' in body '" + b.name + "'");
+        // one item of the block: a property or an anchor
+        auto item = [&]() {
             if (kind == BodyDecl::Kind::Free && cur().type == Tok::Ident &&
                 cur().text == "mass") {
                 next();
@@ -701,6 +794,20 @@ private:
                     a.hasDir = true;
                 }
                 b.anchors.push_back(a);
+            }
+        };
+        while (!acceptSym("}")) {
+            if (atEnd()) fail("unterminated '{' in body '" + b.name + "'");
+            if (isFor()) {
+                forLoop([&] {
+                    while (!acceptSym("}")) {
+                        if (atEnd()) fail("unterminated '{' in a 'for' loop");
+                        item();
+                        skipSeparators();
+                    }
+                });
+            } else {
+                item();
             }
             skipSeparators();
         }
@@ -898,14 +1005,13 @@ private:
                 p.radius = parseNum();
             } else if (shape == "polygon") {
                 p.kind = ProfileDecl::Kind::Polygon;
-                while (acceptSym("(")) {
+                tuples([&] {
                     const double x = parseNum();
                     expectSym(",");
                     const double y = parseNum();
                     expectSym(")");
                     p.points.push_back(Vec2{x, y});
-                    skipSeparators();
-                }
+                });
                 if (p.points.empty()) fail("'polygon:' needs (x, y) vertices");
                 if (cur().type == Tok::Ident && cur().text == "fillet") {
                     next();
@@ -922,26 +1028,24 @@ private:
                 }
             } else if (shape == "polar") {
                 p.kind = ProfileDecl::Kind::Polar;
-                while (acceptSym("(")) {
+                tuples([&] {
                     double a = parseNum();
                     if (cur().type == Tok::UnitDeg) { next(); a = deg2rad(a); }
                     expectSym(",");
                     const double r = parseNum();
                     expectSym(")");
                     p.polar.emplace_back(a, r);
-                    skipSeparators();
-                }
+                });
                 if (p.polar.empty()) fail("'polar:' needs (angle, radius) pairs");
             } else {
                 p.kind = ProfileDecl::Kind::Points;
-                while (acceptSym("(")) {
+                tuples([&] {
                     const double x = parseNum();
                     expectSym(",");
                     const double y = parseNum();
                     expectSym(")");
                     p.points.push_back(Vec2{x, y});
-                    skipSeparators();
-                }
+                });
                 if (p.points.empty()) fail("'points:' needs (x, y) pairs");
             }
             skipSeparators();

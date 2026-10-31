@@ -1,6 +1,6 @@
 # The standard parts (`lib/`)
 
-Four parts ship with the tool. Each is an ordinary `part` (see `PARTS.md`), imported by path:
+Five parts ship with the tool. Each is an ordinary `part` (see `PARTS.md`), imported by path:
 
 ```
 import "../lib/plate_cam.mech"
@@ -59,6 +59,20 @@ Two spur gears on parallel shafts, centres `module × (teeth_a + teeth_b)/2` apa
 Closed form checked for three tooth pairs: `Δθb = −(teeth_a/teeth_b) Δθa` (the gears start at a mesh
 phase the compiler picks, so the comparison is of changes), and the centre distance.
 
+## `ratchet.mech`
+
+A ratchet wheel with `teeth` generated sawtooth teeth and a gravity pawl. Parameters: `teeth` (12), `r_root`
+(0.030), `r_tip` (0.036), `fillet_r` (0.0005), `pawl_len` (0.04), `pawl_deg` (-40), `wheel_mass` (0.05), `mu` (0.3).
+Ports: `wheel`, `pawl` (`pawl.B` the tip), `rim`. A dynamic part: the mechanism supplies the `world` and the
+torque (`drive r.wheel torque -0.004`, clockwise, is the ratcheting direction).
+
+The tooth outline is a `for` loop inside `polygon:` (vertex pairs root_k, tip_k at `pi/2 + k * 2 pi / teeth`), so a
+root is always at the top where the pawl rests, whatever the count. The tooth count is a parameter and a sweep axis.
+Checked against closed forms: the polygon's area `teeth * (1/2) r_root r_tip sin(2 pi / teeth)`; about one impact
+per tooth of advance for 6 to 16 teeth; locked within a tenth of a tooth under reverse torque; the energy ledger
+closing. The defaults suit about 6 to 16 teeth: at 24 the teeth are too fine for this pawl and it chatters (32
+impacts, hardly any advance), which is a property of the geometry and not of the part.
+
 ## Placing them at an angle
 
 Every library part is written upright (a vertical cam rail, a ground link along +x) and is placed
@@ -79,6 +93,3 @@ A library file is a `.mech` file with parts and nothing else (it may import othe
 the formula that tells you the part is right in the header comment, and a test for it next to
 the others.
 
-Left out on purpose: the **ratchet**. Its wheel is a polygon with hand-listed vertices, and a
-`ratchet(teeth = n)` part needs the language to compute those vertices (loops over `n` or a
-regular-polygon profile), which the language does not have yet.
