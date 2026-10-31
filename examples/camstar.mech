@@ -1,0 +1,39 @@
+// camstar — n plate cams around one driver gear, each follower pushing radially outward.
+// The library cam's follower rail is vertical; `rotate` turns each instance about its own axle so
+// the rail points away from the hub, and a `for` loop places as many as you ask for:
+//
+//   mech check examples/camstar.mech
+//   mech run   examples/camstar.mech --headless 4 --csv camstar.csv
+//   mech run   examples/camstar.mech --headless 4 --set n=6          six cams instead of four
+//   mech sweep examples/camstar.mech --set cam_0.lift=0.01:0.03:0.01 --time 4 --report max:cam_0.follower.x
+//
+// `cam[i]` is the name cam_<i>, so the instances are cam_0 ... cam_<n-1> from outside, and
+// `cam[i].cam` is the shaft of instance i from inside the loop. The cams are driven through
+// gears, 1:1, so their lifts are in step; the driver turns at 60 rpm and every cam turns the
+// opposite way (each one meshes the driver). A cam is cut for a rail at a fixed angle in its own
+// frame; `rotate` turns that with the part, so every cam keeps its lift against its own shaft angle,
+// whichever way its rail points. (The gears are not checked for clearance: n = 8 or more crowd.)
+import "../lib/plate_cam.mech"
+
+mechanism camstar {
+  param n     = 4                          // number of cams around the hub
+  param mod   = 0.002                      // gear module, m
+  param teeth = 20                         // all the gears
+  param dist  = mod * teeth                // hub-to-cam centre distance of a pair of equal gears
+  param span  = 360 / n                    // degrees between neighbouring spokes
+
+  ground bench { anchor hub at (0, 0) }
+
+  shaft driver at bench.hub
+  gear gd { teeth: teeth, module: mod } on driver
+
+  for i = 0 to n - 1 {
+    use plate_cam(lift = 0.012) as cam[i] on bench
+        at (dist * cos(i * span * pi / 180), dist * sin(i * span * pi / 180))
+        rotate i * span - 90 deg                          // spoke i points along i * span; the rail starts at +y
+    gear g[i] { teeth: teeth, module: mod } on cam[i].cam
+    mesh gd g[i]
+  }
+
+  drive driver at 60 rpm
+}

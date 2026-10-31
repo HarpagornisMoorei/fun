@@ -111,10 +111,24 @@ Everything inside is reached by the instance's name (`left.follower.tip`, `--set
 `--report max:left.follower.y`), and an instanced file runs bit for bit like the flat one.
 See [`docs/PARTS.md`](docs/PARTS.md).
 
+## Loops
+
+The count of things can be a number: `for i = 0 to n - 1 { ... }`, with `cam[i]` naming `cam_<i>`, and loops
+also work inside anchor lists and `polygon:` lists, so outlines can be computed.
+
+```
+for i = 0 to n - 1 {
+  use plate_cam as cam[i] on bench at (dist * cos(i * span * pi / 180), dist * sin(i * span * pi / 180)) rotate i * span - 90 deg
+}
+```
+
+`mech run examples/camstar.mech --set n=6` is six cams around a hub; `--set r.teeth=16` is a 16-tooth ratchet.
+See [`docs/PARTS.md`](docs/PARTS.md), section 7.
+
 ## Standard parts
 
-`lib/` has four parts, each checked against its closed form: `plate_cam`, `crank_slider`,
-`four_bar` and `gear_pair`.
+`lib/` has five parts, each checked against its closed form: `plate_cam`, `crank_slider`,
+`four_bar`, `gear_pair` and `ratchet`.
 
 ```
 import "../lib/plate_cam.mech"
@@ -122,7 +136,10 @@ import "../lib/plate_cam.mech"
 use plate_cam(lift = 0.02) as c on bench at (0, 0)
 ```
 
-See [`docs/LIB.md`](docs/LIB.md); `import` itself is in [`docs/PARTS.md`](docs/PARTS.md).
+Mounts can be rotated: `use plate_cam as east on bench at (0.04, 0) rotate -90 deg` turns the part about its
+mount point, so a library part written upright can point any way.
+
+See [`docs/LIB.md`](docs/LIB.md); `import` and rotation are in [`docs/PARTS.md`](docs/PARTS.md).
 
 ## Examples
 
@@ -134,6 +151,7 @@ See [`docs/LIB.md`](docs/LIB.md); `import` itself is in [`docs/PARTS.md`](docs/P
 | `ratchet` | a ratchet wheel and gravity pawl with friction: one click per tooth forward, locked and at rest in reverse; energy ledger closes |
 | `ellipgears` | a pair of elliptical gears: input steady, output surging between 3x and 1/3x |
 | `jumpcam` | the plate cam with mass, a spring and a contact that can let go — cam jump, impacts, energy ledger |
+| `camstar` | n library cams on a hub from one `for` loop, each turned with `rotate` so its follower pushes radially outward |
 | `camshaft` | two library cams geared 2:1 from outside the parts, `import`ed from `lib/` |
 | `twincam`, `linkage_parts` | parts: one cam-and-follower used twice with different numbers; a crank-slider assembled from one ground-less `link` part |
 | `pendulum`, `doublepend`, `flywheel`, `oscillator`, `orbit` | dynamics |

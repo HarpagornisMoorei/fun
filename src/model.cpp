@@ -158,7 +158,7 @@ double Model::seedAngleFor(int bodyIdx) const {
     // Deterministic tilt for undriven bodies: a freshly assembled mechanism
     // must not sit on a collinear dead-point singularity (rank-deficient J).
     static const double kSeed[5] = {0.42, -0.31, 0.26, -0.44, 0.35};
-    return kSeed[bodyIdx % 5];
+    return kSeed[bodyIdx % 5] + bodies[bodyIdx].frameRot;   // a turned part starts from a turned guess
 }
 
 void Model::placeBody(std::vector<double>& q, int bodyIdx, int viaAnchor,
@@ -770,6 +770,7 @@ Model buildModel(const MechanismDecl& decl) {
         Body b;
         b.name = bd.name;
         b.isGround = false;
+        b.frameRot = bd.frameRot;
         b.declLine = bd.line;
         b.qOffset = m.nq();  // this body's (theta,x,y) slot, assigned pre-push
 
@@ -1979,7 +1980,9 @@ Model buildModel(const MechanismDecl& decl) {
             d.line = dd.line;
             d.body = bi;
             d.omegaRad = dd.omegaRad;
-            d.theta0Rad = dd.theta0Rad;
+            // a rod's or body's start angle turns with the part it was written in; a shaft's does not
+            // (its angle is measured against what it carries, and a cam is cut for its rail)
+            d.theta0Rad = m.bodies[(size_t)bi].isShaft ? dd.theta0Rad : dd.theta0Rad + dd.frameRot;
             m.drives.push_back(d);
         }
     }

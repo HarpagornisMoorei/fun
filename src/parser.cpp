@@ -82,10 +82,16 @@
 // M9 ('part' at top level and 'use' at statement start are contextual; 'as' too):
 //   partDecl    := 'part' IDENT [ '(' IDENT '=' expr { ',' IDENT '=' expr } ')' ] '{' stmt* '}'
 //   useDecl     := 'use' IDENT [ '(' IDENT '=' expr { ',' IDENT '=' expr } ')' ] 'as' IDENT
-//                  [ 'on' IDENT 'at' '(' expr ',' expr ')' ]
+//                  [ 'on' IDENT 'at' '(' expr ',' expr ')' [ 'rotate' expr 'deg' ] ]     (M11: rotate)
 //   ref         := qname '.' IDENT        qname := IDENT { '.' IDENT } while the prefix names an instance
 // A part is expanded at parse time: its body is re-parsed once per instance with every
 // name qualified by the instance ('left.follower'), so the model sees a flat mechanism.
+//
+// M12 ('for' is contextual at statement start, in anchor lists and in shape lists; 'to' too):
+//   forStmt     := 'for' IDENT '=' expr 'to' expr '{' item* '}'     (integer bounds, inclusive)
+//   name        := IDENT [ '[' expr ']' ]       the identifier IDENT_k (k a non-negative integer)
+// The loop variable is a number inside the body: `cam[i]` names cam_0, cam_1, ..., and `polygon:`
+// may hold `for k = 0 to n - 1 { (x, y) (x, y) }`. Loops are expanded at parse time.
 //
 // M6b ('cam' is contextual at statement start so `cam` stays usable as a
 // body name; the items below are contextual identifiers too):
@@ -106,6 +112,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <set>
 
 namespace mech {
@@ -151,14 +158,24 @@ private:
         std::vector<PartParam> params;
         size_t bodyPos = 0;                      // first token after '{'
     };
-    struct GroundAlias { std::string target; std::string anchorPrefix; Vec2 off; };
-    struct Mount { std::string target; Vec2 off; bool used = false; };
+    struct GroundAlias { std::string target; std::string anchorPrefix; Vec2 off; double rot = 0.0; };
+    struct Mount { std::string target; Vec2 off; double rot = 0.0; bool used = false; };
+
+    // p turned by `a` radians about the origin; a = 0 returns p untouched, bit for bit
+    static Vec2 turned(Vec2 p, double a) {
+        if (a == 0.0) return p;
+        const double c = std::cos(a), s = std::sin(a);
+        return Vec2{c * p.x - s * p.y, s * p.x + c * p.y};
+    }
     std::map<std::string, PartDef> parts_;
     std::vector<std::string> expanding_;         // parts being expanded (recursion guard)
     std::set<std::string> instances_;            // qualified instance names of this mechanism
     std::map<std::string, GroundAlias> aliases_; // a part's ground -> the outer ground it merged into
     std::string prefix_;                         // "" at top level, "left." inside instance 'left'
     Mount mount_;
+    int loopDepth_ = 0;                          // 'for' loops being expanded in the current scope
+    long loopIterations_ = 0;                    // iterations expanded so far (a guard against runaway nesting)
+    static constexpr long kMaxLoop = 1000, kMaxLoopTotal = 20000;
 
     // --- token helpers -----------------------------------------------------
 
@@ -191,7 +208,17 @@ private:
 
     Token expectIdent() {
         if (cur().type != Tok::Ident) fail("expected identifier, got '" + cur().text + "'");
-        Token t = cur(); next(); return t;
+        Token t = cur(); next();
+        if (cur().type == Tok::Sym && cur().text == "[") {      // M12: name[expr] is the identifier name_k
+            next();
+            const double v = checkFinite(parseNum());
+            const double k = std::round(v);
+            if (std::fabs(v - k) > 1e-9 || k < 0.0 || k > 1e9)
+                fail("an index in a name must be a non-negative whole number, got " + std::to_string(v));
+            expectSym("]");
+            t.text += "_" + std::to_string((long long)k);
+        }
+        return t;
     }
 
     void skipSeparators() {
@@ -310,6 +337,9 @@ private:
 
     // param NAME = expr
     void paramDecl(MechanismDecl& m) {
+        if (loopDepth_ > 0)
+            fail("a 'param' cannot be declared inside a 'for' loop (it would be declared once per iteration); "
+                 "declare it before the loop");
         const Token name = expectIdent();
         if (isReservedParam(name.text)) {
             throw ParseError{name.line, name.col, "'" + name.text + "' cannot be a parameter name "
@@ -375,6 +405,64 @@ private:
     }
 
     // --- parts (M9) --------------------------------------------------------
+
+    // --- loops (M12) -------------------------------------------------------
+
+    bool isFor() const {
+        return cur().type == Tok::Ident && cur().text == "for" && pos_ + 1 < t_.size() &&
+               t_[pos_ + 1].type == Tok::Ident;
+    }
+
+    // 'for' i = a to b { ... } — `body` is called once per value of i, with the loop variable bound
+    // as a number and the position at the first token of the block, and must consume the closing '}'.
+    void forLoop(const std::function<void()>& body) {
+        next();                                                  // 'for'
+        const Token v = cur();
+        if (isReservedParam(v.text) || params_.count(v.text))
+            fail("loop variable '" + v.text + "' is already a parameter or a reserved word");
+        next();
+        expectSym("=");
+        const double a = checkFinite(parseNum());
+        if (!(cur().type == Tok::Ident && cur().text == "to"))
+            fail("expected 'to' in the loop range, got '" + cur().text + "'");
+        next();
+        const double b = checkFinite(parseNum());
+        if (std::fabs(a - std::round(a)) > 1e-9 || std::fabs(b - std::round(b)) > 1e-9)
+            fail("loop bounds must be whole numbers, got " + std::to_string(a) + " to " + std::to_string(b));
+        const long lo = std::lround(a), hi = std::lround(b);
+        if (hi >= lo && hi - lo + 1 > kMaxLoop)
+            fail("this loop has " + std::to_string(hi - lo + 1) + " iterations; the limit is " + std::to_string(kMaxLoop));
+        expectSym("{");
+        const size_t bodyPos = pos_;
+        int depth = 1;
+        while (depth > 0) {
+            if (atEnd()) fail("unterminated '{' in a 'for' loop");
+            if (cur().type == Tok::Sym && cur().text == "{") ++depth;
+            if (cur().type == Tok::Sym && cur().text == "}") --depth;
+            next();
+        }
+        const size_t endPos = pos_;
+        ++loopDepth_;
+        for (long k = lo; k <= hi; ++k) {
+            if (++loopIterations_ > kMaxLoopTotal)
+                fail("loops expand to more than " + std::to_string(kMaxLoopTotal) + " iterations in all");
+            pos_ = bodyPos;
+            params_[v.text] = (double)k;
+            body();
+        }
+        params_.erase(v.text);
+        --loopDepth_;
+        pos_ = endPos;
+    }
+
+    // ( ... ) groups and `for` loops of them, as in `polygon:`. `one` parses what follows '(' through ')'.
+    void tuples(const std::function<void()>& one) {
+        for (;;) {
+            if (acceptSym("(")) { one(); skipSeparators(); }
+            else if (isFor()) { forLoop([&] { tuples(one); expectSym("}"); }); skipSeparators(); }
+            else break;
+        }
+    }
 
     // part NAME [ ( p = expr, ... ) ] { ... }   — the body is kept as tokens and expanded per use.
     void partDecl() {
@@ -485,10 +573,21 @@ private:
             expectSym(",");
             const double y = parseNum();
             expectSym(")");
+            double turn = 0.0;                                   // 'rotate A deg': the part, turned about (x, y)
+            if (cur().type == Tok::Ident && cur().text == "rotate") {
+                next();
+                const double v = checkFinite(parseNum());
+                if (cur().type != Tok::UnitDeg) fail("expected 'deg' after the rotation angle, got '" + cur().text + "'");
+                next();
+                turn = deg2rad(v);
+            }
             auto al = aliases_.find(g);
             if (al != aliases_.end()) {
+                // a mount on a part's own ground is in that part's frame: carry it into the world's
+                const Vec2 d = turned(Vec2{x, y}, al->second.rot);
                 mt.target = al->second.target;
-                mt.off = Vec2{al->second.off.x + x, al->second.off.y + y};
+                mt.off = Vec2{al->second.off.x + d.x, al->second.off.y + d.y};
+                mt.rot = al->second.rot + turn;
             } else {
                 bool isGround = false;
                 for (const BodyDecl& b : m.bodies) isGround = isGround || (b.name == g && b.kind == BodyDecl::Kind::Ground);
@@ -496,8 +595,11 @@ private:
                     throw ParseError{gt.line, gt.col, "'" + g + "' is not a ground declared before this 'use'"};
                 mt.target = g;
                 mt.off = Vec2{x, y};
+                mt.rot = turn;
             }
             mounted = true;
+        } else if (cur().type == Tok::Ident && cur().text == "rotate") {
+            fail("'rotate' goes with a mount: 'use ... as name on <ground> at (x, y) rotate A deg'");
         }
         const size_t endPos = pos_;
         instances_.insert(full);
@@ -527,6 +629,8 @@ private:
         const std::string savedPrefix = prefix_;
         const Mount savedMount = mount_;
         const size_t savedPos = pos_;
+        const int savedLoopDepth = loopDepth_;
+        loopDepth_ = 0;                          // a part's own statements are not inside the caller's loop
         prefix_ = inst + ".";
         mount_ = mt;
 
@@ -560,6 +664,7 @@ private:
 
         mt.used = mount_.used;
         mount_ = savedMount;
+        loopDepth_ = savedLoopDepth;
         prefix_ = savedPrefix;
         params_.swap(savedParams);
         pos_ = savedPos;
@@ -579,10 +684,12 @@ private:
                              "mounted: 'use ... as name on <ground> at (x, y)'"};
         for (AnchorDecl a : g.anchors) {
             a.name = g.name + "." + a.name;
-            a.pos = Vec2{a.pos.x + mount_.off.x, a.pos.y + mount_.off.y};
+            const Vec2 r = turned(a.pos, mount_.rot);
+            a.pos = Vec2{r.x + mount_.off.x, r.y + mount_.off.y};
+            if (a.hasDir) a.dir = turned(a.dir, mount_.rot);
             target->anchors.push_back(a);
         }
-        aliases_[g.name] = GroundAlias{mount_.target, g.name + ".", mount_.off};
+        aliases_[g.name] = GroundAlias{mount_.target, g.name + ".", mount_.off, mount_.rot};
         mount_.used = true;
     }
 
@@ -627,9 +734,18 @@ private:
         else if (cur().type == Tok::Ident && cur().text == "cam") { next(); camDecl(m); }
         else if (cur().type == Tok::Ident && cur().text == "param") { next(); paramDecl(m); }
         else if (cur().type == Tok::Ident && cur().text == "use") { next(); useDecl(m); }
+        else if (isFor()) {
+            forLoop([&] {
+                while (!acceptSym("}")) {
+                    if (atEnd()) fail("unterminated '{' in a 'for' loop");
+                    stmt(m);
+                    skipSeparators();
+                }
+            });
+        }
         else fail("expected a statement ('ground', 'body', 'rod', 'shaft', 'world', 'gear', "
                   "'mesh', 'spring', 'pin', 'slide', 'drive', 'reduce', 'hand', 'dial', "
-                  "'mode', 'profile', 'touch', 'cam', 'param' or 'use'), got '" + cur().text + "'");
+                  "'mode', 'profile', 'touch', 'cam', 'param', 'use' or 'for'), got '" + cur().text + "'");
     }
 
     void anchorBodyDecl(MechanismDecl& m, BodyDecl::Kind kind) {
@@ -637,11 +753,12 @@ private:
         b.kind = kind;
         Token name = expectIdent();
         b.name = declName(name);
+        if (kind == BodyDecl::Kind::Free) b.frameRot = mount_.rot;
         b.line = name.line;
         expectSym("{");
 
-        while (!acceptSym("}")) {
-            if (atEnd()) fail("unterminated '{' in body '" + b.name + "'");
+        // one item of the block: a property or an anchor
+        auto item = [&]() {
             if (kind == BodyDecl::Kind::Free && cur().type == Tok::Ident &&
                 cur().text == "mass") {
                 next();
@@ -652,7 +769,7 @@ private:
                 // release angle, as for a rod: assembly seeds this body at the angle
                 next();
                 expectSym(":");
-                b.props["from"] = parseNum();
+                b.props["from"] = parseNum() + rad2deg(mount_.rot);   // a turned part's angles turn with it
                 if (cur().type == Tok::UnitDeg) { next(); }
                 else fail("expected 'deg' after the body's release angle, got '" + cur().text + "'");
             } else {
@@ -677,6 +794,20 @@ private:
                     a.hasDir = true;
                 }
                 b.anchors.push_back(a);
+            }
+        };
+        while (!acceptSym("}")) {
+            if (atEnd()) fail("unterminated '{' in body '" + b.name + "'");
+            if (isFor()) {
+                forLoop([&] {
+                    while (!acceptSym("}")) {
+                        if (atEnd()) fail("unterminated '{' in a 'for' loop");
+                        item();
+                        skipSeparators();
+                    }
+                });
+            } else {
+                item();
             }
             skipSeparators();
         }
@@ -735,6 +866,7 @@ private:
         b.kind = BodyDecl::Kind::Rod;
         Token name = expectIdent();
         b.name = declName(name);
+        b.frameRot = mount_.rot;
         b.line = name.line;
         parseAttach(b);               // 'rod r on A.p { ... }'
         expectSym("{");
@@ -763,7 +895,7 @@ private:
                 // release angle: assembly seeds this body at the given angle
                 next();
                 expectSym(":");
-                b.props["from"] = parseNum();
+                b.props["from"] = parseNum() + rad2deg(mount_.rot);   // a turned part's angles turn with it
                 if (cur().type == Tok::UnitDeg) { next(); }
                 else fail("expected 'deg' after rod release angle, got '" + cur().text + "'");
             } else if (cur().type == Tok::Ident && cur().text == "mass") {
@@ -873,14 +1005,13 @@ private:
                 p.radius = parseNum();
             } else if (shape == "polygon") {
                 p.kind = ProfileDecl::Kind::Polygon;
-                while (acceptSym("(")) {
+                tuples([&] {
                     const double x = parseNum();
                     expectSym(",");
                     const double y = parseNum();
                     expectSym(")");
                     p.points.push_back(Vec2{x, y});
-                    skipSeparators();
-                }
+                });
                 if (p.points.empty()) fail("'polygon:' needs (x, y) vertices");
                 if (cur().type == Tok::Ident && cur().text == "fillet") {
                     next();
@@ -897,26 +1028,24 @@ private:
                 }
             } else if (shape == "polar") {
                 p.kind = ProfileDecl::Kind::Polar;
-                while (acceptSym("(")) {
+                tuples([&] {
                     double a = parseNum();
                     if (cur().type == Tok::UnitDeg) { next(); a = deg2rad(a); }
                     expectSym(",");
                     const double r = parseNum();
                     expectSym(")");
                     p.polar.emplace_back(a, r);
-                    skipSeparators();
-                }
+                });
                 if (p.polar.empty()) fail("'polar:' needs (angle, radius) pairs");
             } else {
                 p.kind = ProfileDecl::Kind::Points;
-                while (acceptSym("(")) {
+                tuples([&] {
                     const double x = parseNum();
                     expectSym(",");
                     const double y = parseNum();
                     expectSym(")");
                     p.points.push_back(Vec2{x, y});
-                    skipSeparators();
-                }
+                });
                 if (p.points.empty()) fail("'points:' needs (x, y) pairs");
             }
             skipSeparators();
@@ -1018,6 +1147,7 @@ private:
             }
             skipSeparators();
         }
+        c.spec.startRad += mount_.rot;    // the cam is cut for a rail that turns with its part
         if (!hasHost && acceptKw("on")) host();
         if (!hasHost) {
             throw ParseError{name.line, name.col, "cam '" + c.name +
@@ -1160,6 +1290,7 @@ private:
             if (cur().type == Tok::UnitDeg) { next(); }
             else fail("expected 'deg' after initial angle, got '" + cur().text + "'");
         }
+        d.frameRot = mount_.rot;    // the model turns a rod's or body's start angle with its part (not a shaft's)
         m.drives.push_back(d);
     }
 
@@ -1319,6 +1450,9 @@ private:
     // 'state', 'when', 'hold', 'impulse', 'maintain' are contextual
     // identifiers, so they remain usable as ordinary names elsewhere.
     void modeDecl(MechanismDecl& m) {
+        if (mount_.rot != 0.0)
+            fail("a part with a 'mode' cannot be rotated: its guards are angles in the gravity field, "
+                 "which does not turn with the part");
         ModeDecl md;
         Token name = expectIdent();
         md.name = declName(name);

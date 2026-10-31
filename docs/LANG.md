@@ -1,4 +1,4 @@
-# The mech language — M10 specification
+# The mech language — M12 specification
 
 This document pins down the M6f kernel: lexical structure, grammar, static
 semantics, the kinematic solver's mathematical formulation, the
@@ -10,7 +10,7 @@ impact in dynamic ones), plate cams stated as displacement diagrams, and
 non-circular gear pairs (`mesh` between two profiles), and polygon profiles
 with filleted corners (ratchets and anything with teeth), and Coulomb friction at
 contacts, plus (M8) named parameters, numeric expressions and sweeps, and (M9) reusable
-parts, and (M10) `import` with a library of standard parts. It is the contract
+parts, and (M10) `import` with a library of standard parts, (M11) rotated mounts, and (M12) loops and indexed names. It is the contract
 the implementation is tested against (`mech test`).
 
 ---
@@ -70,7 +70,7 @@ Four principles govern the design:
   `cycloidal`, `harmonic`, `modtrap`) are *contextual* identifiers (not
   keywords), usable as names — a body called `cam` is fine. So is `param`, which
   only means something at statement start (M8, see below).
-* Punctuation: `{ } ( ) , : ; . - -> < > + * / =`
+* Punctuation: `{ } ( ) [ ] , : ; . - -> < > + * / =`
 * Comments: `// line` and `# line`.
 * Whitespace (including newlines) is insignificant; statements may be
   separated by `;` or `,` or nothing.
@@ -91,7 +91,8 @@ stmt        = groundDecl | bodyDecl | rodDecl | shaftDecl | worldDecl
             | profileDecl | touchDecl                      (* M6 *)
             | camDecl                                     (* M6b *)
             | paramDecl                                   (* M8 *)
-            | useDecl ;                                   (* M9 *)
+            | useDecl                                     (* M9 *)
+            | forStmt ;                                   (* M12 *)
 
 groundDecl  = "ground" IDENT "{" { anchorDecl } "}" ;
 bodyDecl    = "body" IDENT "{" { anchorDecl | "mass" ":" num
@@ -108,10 +109,14 @@ attach      = ( "on" | "at" ) ref ;                    (* pins anchor A *)
 worldDecl   = "world" "{" { ( "gravity" | "step" ) ":" num } "}" ;
 
 paramDecl   = "param" IDENT "=" expr ;                       (* M8 *)
+forStmt     = "for" IDENT "=" expr "to" expr "{" { stmt } "}" ;      (* M12 *)
+(* `for` also stands where a list item does: in the anchors of a ground or body, and among the
+   tuples of `polygon:`, `points:` and `polar:` ( `for k = 0 to n - 1 { (x, y) (x, y) }` ). *)
+name        = IDENT [ "[" expr "]" ] ;                       (* M12: IDENT_k, k a whole number >= 0 *)
 partDecl    = "part" IDENT [ "(" paramInit { "," paramInit } ")" ] "{" { stmt } "}" ;   (* M9 *)
 paramInit   = IDENT "=" expr ;
 useDecl     = "use" IDENT [ "(" paramInit { "," paramInit } ")" ] "as" IDENT
-              [ "on" IDENT "at" "(" expr "," expr ")" ] ;
+              [ "on" IDENT "at" "(" expr "," expr ")" [ "rotate" expr "deg" ] ] ;     (* rotate: M11 *)
 (* A reference to a name is `qname`: IDENT { "." IDENT }, followed through while the prefix
    names an instance (`left.follower.tip`); `ref = qname "." IDENT`. *)
 (* Everywhere this grammar writes `num`, M8 accepts an expression that evaluates to one. *)
@@ -241,6 +246,28 @@ Checks run at model build time, each error pointing at a source line:
   the escapement's pair (a wheel driven by a weight and locked by a pallet).
   One hold row exists per held body across the whole mechanism: two modes
   cannot hold the same body.
+
+**M12 loop checks:**
+
+* `for i = a to b { ... }` runs its block for i = a, a+1, ..., b (inclusive; no iterations if b < a).
+  Both bounds are expressions that must be whole numbers; one loop has at most 1000 iterations and a
+  file at most 20000 in all. The loop variable is a number inside the block (usable in any expression,
+  and in names) and is gone after it; it may not be an existing parameter or a reserved word.
+* A name may be written `ident[expr]`, which is the identifier `ident_k`, `k` the value of `expr`
+  (a whole number >= 0). It is lexical sugar that works anywhere a name does, loop or not: `cam[2]` and
+  `cam_2` are the same name, so a looped file is addressed from outside by the plain identifiers.
+* A `param` cannot be declared inside a loop (it would be declared once per iteration). A part used
+  inside a loop is its own scope, so its own `param`s are fine there.
+* A loop is expanded while parsing, like `use`. Nothing past the parser knows about it, and a looped
+  file equals the file with the iterations written out.
+
+**M11 rotation checks:**
+
+* `rotate A deg` after the mount turns the part rigidly about the mount point: its ground anchors
+  (position and `dir`), the `from:` of its rods and bodies, the start angle of a rate drive on a rod or
+  body, a cam's `start`, and the solver's default starting guess for its rods and bodies. A drive on a
+  shaft, gravity, and anything written outside the part do not turn. Rotations nest and add; `rotate 0 deg`
+  is bit-for-bit no rotation. A part containing a `mode` cannot be rotated. See [`PARTS.md`](PARTS.md).
 
 **M10 import checks:**
 
@@ -1054,7 +1081,7 @@ resistance, more than one contact point per `touch`, and compliant
 
 ## 8. Test matrix
 
-`mech test` (14886 checks) covers: lexer tokens/units/keywords/comments/errors;
+`mech test` (15144 checks) covers: lexer tokens/units/keywords/comments/errors;
 parser AST shapes for all M3 and M4 forms and all error classes; model checks,
 desugaring, gear radius arithmetic, module rules, mass derivation (rods,
 discs, compound assemblies, overrides), DOF arithmetic including tangent
@@ -1261,6 +1288,33 @@ directory). Mutation checks cover the nesting depth, the parts-only rule, the ex
 canonical paths, line tagging, the search order, relative resolution, the lexer's string check, and the
 error plumbing in `check` and `sweep`.
 
+The M11 suite adds: covariance of rotated library parts at four angles (positions turn about the mount
+point, rod angles shift by the rotation, a slider's angle is compared modulo pi, shaft angles do not shift);
+the plate cam's lift along the turned rail equal to the unrotated lift and its shaft angle unchanged; a drive
+written inside a rotated part equal to the same drive written outside with the angle added, and a shaft's
+drive left alone; a rotated dynamic part (a pendulum under gravity) equal to the flat file with the turned
+numbers written out, bit for bit; `rotate 0 deg` identical to no rotation and `rotate 360 deg` equal to it to 1e-9;
+nested rotations adding (the inner mount carried into the world, the rail turned 180 degrees); an angle that is
+an expression and sweeps; `examples/camstar.mech` (four followers on four radial lines); and the refusals
+(missing `deg`, `rotate` without a mount, a division by zero in the angle, a `mode` at one and at two levels
+down). Mutation checks cover the rotation's sign, the ground positions and directions, `from:` on rods and
+bodies, the drive rule for rods and shafts, a cam's `start`, the default starting guess, nested angle and
+offset, the stored rotation of a ground, the `mode` refusal and the syntax checks.
+
+The M12 suite adds: a statement loop equal to its hand-unrolled file, bit for bit (the declaration and then
+the simulated rows); the count as a parameter (`--set n=6` six bodies, `n=0` none); nested loops and an
+index that is an expression; loops in anchor lists and in `polygon:`, `points:` and `polar:` lists; regular
+polygons of 3, 5, 8 and 17 sides against the closed-form area `(n/2) R^2 sin(2 pi / n)` with every vertex on
+the circle; the library ratchet (area `teeth * (1/2) r_root r_tip sin(pitch)`, a root at the top, about one
+impact per tooth of advance over several teeth for 6, 8, 12 and 16 teeth, locked within a tenth of a tooth
+in reverse, the energy ledger closing); `examples/camstar.mech` for 3, 4 and 6 cams (each follower on its own
+radial line, 71 to 83 mm) and equal to the file written out by hand; a loop inside a part, parts inside a loop
+with per-instance parameters addressed by indexed names; the loop variable ending with its loop; and the
+refusals (fractional or oversized bounds, runaway nesting, a `param` or an existing name as the variable, a
+missing `to`, an unterminated block, a negative or fractional index, an error in the body reported at the
+body's line). Mutation checks cover the index suffix and its checks, the range's ends, the variable's scope
+and collision rules, the loop limit, the integer checks and the three places a loop may appear.
+
 ## 9. Milestone history & reserved ground
 
 M1 walked the skeleton (lexer/parser/rods/pins/drives); M2 added shafts,
@@ -1329,6 +1383,13 @@ compared by running many of it. Reusable parts and composition remain open.
 M9 added reusable parts: `part` with parameters and `use ... as name on ground at (x, y)`
 (see `docs/PARTS.md`), expanded at parse time so the solver, dynamics and tooling are
 unchanged, and an instanced file runs bit for bit like the flat one.
+
+M12 added `for` loops, indexed names (`cam[i]`), and loops inside anchor and shape lists (see
+`docs/PARTS.md`), so structure can depend on a number: the count of a part's contents is a parameter and
+a sweep axis, and `lib/ratchet.mech` generates its teeth. Loops are expanded by the parser, like `use`.
+
+M11 added `rotate A deg` to a mount (see `docs/PARTS.md`): a part can be placed at any angle, and for
+kinematic parts the result is the unrotated one turned, which the tests check as covariance.
 
 M10 added `import` and `lib/` (plate cam, slider-crank, four-bar, gear pair; see `docs/LIB.md`). Imports are
 resolved on the token stream, so nothing downstream changed: a part from a library runs like the part

@@ -6815,6 +6815,618 @@ void testImports() {
     }
 }
 
+// ============================================================================
+// M11 — rotated mounts. A part mounted with `rotate A deg` is the same assembly turned rigidly
+// by A about its mount point. For kinematic parts that is a covariance statement and is tested as
+// one: every body's position turns with it, and the angles of rods and bodies shift by A.
+// ============================================================================
+
+// c0 + R(a) (p - c0)
+Vec2 turnAbout(Vec2 p, Vec2 c0, double a) {
+    const double dx = p.x - c0.x, dy = p.y - c0.y;
+    return Vec2{c0.x + std::cos(a) * dx - std::sin(a) * dy, c0.y + std::sin(a) * dx + std::cos(a) * dy};
+}
+
+double angleDiff(double a, double b, double period) {
+    double d = std::fmod(a - b, period);
+    if (d > period / 2) d -= period;
+    if (d < -period / 2) d += period;
+    return d;
+}
+
+struct RotBody { const char* name; double anglePeriod; };   // anglePeriod: 2 pi for rods, pi for a slider
+
+// Largest deviation of the rotated run from the unrotated one turned by `deg`, over `bodies`.
+double covarianceError(const std::string& unrotated, const std::string& rotated, double deg, Vec2 c0,
+                       const std::vector<RotBody>& bodies, double seconds, bool anglesShift = true) {
+    const Model m0 = buildModel(loadParse(unrotated).mechanisms[0]);
+    const Model m1 = buildModel(loadParse(rotated).mechanisms[0]);
+    const auto r0 = simulate(m0, seconds, 1.0 / 60.0, {}, 1).rows;
+    const auto r1 = simulate(m1, seconds, 1.0 / 60.0, {}, 1).rows;
+    if (r0.size() != r1.size() || r0.empty()) return 1e9;
+    const double a = deg2rad(deg);
+    double worst = 0.0;
+    for (const RotBody& b : bodies) {
+        const int i0 = m0.bodyIndex(b.name), i1 = m1.bodyIndex(b.name);
+        if (i0 < 1 || i1 < 1) return 1e9;
+        for (size_t k = 0; k < r0.size(); ++k) {
+            const size_t o0 = 1 + 3 * (size_t)(i0 - 1), o1 = 1 + 3 * (size_t)(i1 - 1);
+            const Vec2 want = turnAbout(Vec2{r0[k][o0 + 1], r0[k][o0 + 2]}, c0, a);
+            worst = std::max(worst, std::hypot(want.x - r1[k][o1 + 1], want.y - r1[k][o1 + 2]));
+            const double shift = anglesShift ? a : 0.0;
+            worst = std::max(worst, std::fabs(angleDiff(r1[k][o1], r0[k][o0] + shift, b.anglePeriod)));
+        }
+    }
+    return worst;
+}
+
+void testRotation() {
+    std::printf("[rotation M11]\n");
+    const double kTwoPi = 2.0 * kPi;
+
+    // ---- the standard parts, rotated: covariance --------------------------------------------------------
+    for (const double deg : {30.0, 90.0, 217.0, -45.0}) {
+        // slider-crank: positions turn, rod angles shift, the piston's angle is defined modulo pi
+        auto crank = [&](const std::string& rotate, double from) {
+            return std::string("import \"lib/crank_slider.mech\"\nmechanism m { ground bench { anchor o at (0, 0) }\n"
+                "  use crank_slider(crank_len = 0.1, rod_len = 0.3, offset = 0.02) as eng on bench at (0.2, 0.05) " + rotate + "\n"
+                "  drive eng.crank at 90 deg/s from " + std::to_string(from) + " deg }");
+        };
+        CHECK(covarianceError(crank("", 20.0), crank("rotate " + std::to_string(deg) + " deg", 20.0 + deg), deg, Vec2{0.2, 0.05},
+                              {{"eng.crank", kTwoPi}, {"eng.conrod", kTwoPi}, {"eng.piston", kPi}}, 4.0) < 1e-9);
+        // four-bar: the same, three rods
+        auto bar = [&](const std::string& rotate, double from) {
+            return std::string("import \"lib/four_bar.mech\"\nmechanism m { ground bench { anchor o at (0, 0) }\n"
+                "  use four_bar as lk on bench at (1, 2) " + rotate + "\n  drive lk.crank at 36 deg/s from " +
+                std::to_string(from) + " deg }");
+        };
+        CHECK(covarianceError(bar("", 60.0), bar("rotate " + std::to_string(deg) + " deg", 60.0 + deg), deg, Vec2{1.0, 2.0},
+                              {{"lk.crank", kTwoPi}, {"lk.coupler", kTwoPi}, {"lk.rocker", kTwoPi}}, 10.0) < 1e-9);
+        // gear pair: shafts sit at the turned centres; the shaft angles are the shafts' own and do not turn
+        auto gears = [&](const std::string& rotate) {
+            return std::string("import \"lib/gear_pair.mech\"\nmechanism m { ground bench { anchor o at (0, 0) }\n"
+                "  use gear_pair(teeth_a = 20, teeth_b = 60, module = 0.004) as gp on bench at (0.1, 0.1) " + rotate + "\n"
+                "  drive gp.sa at 60 rpm }");
+        };
+        CHECK(covarianceError(gears(""), gears("rotate " + std::to_string(deg) + " deg"), deg, Vec2{0.1, 0.1},
+                              {{"gp.sa", kTwoPi}, {"gp.sb", kTwoPi}}, 2.0, false) < 1e-9);
+    }
+
+    // ---- a cam keeps its phase: rotated about its axle, the follower moves the same along the turned rail ----
+    for (const double deg : {90.0, 33.0}) {
+        auto cam = [&](const std::string& rotate) {
+            return std::string(kPlatePart) + "mechanism m { ground bench { anchor o at (0, 0) }\n"
+                "  use plate_cam(lift = 0.02) as c on bench at (0.3, 0.1) " + rotate + "\n  drive c.cam at 30 rpm }";
+        };
+        const Model m0 = buildModel(parse(lex(cam("")) ).mechanisms[0]);
+        const Model m1 = buildModel(parse(lex(cam("rotate " + std::to_string(deg) + " deg"))).mechanisms[0]);
+        const auto r0 = simulate(m0, 2.0, 1.0 / 120.0, {}, 1).rows, r1 = simulate(m1, 2.0, 1.0 / 120.0, {}, 1).rows;
+        const int f0 = m0.bodyIndex("c.follower"), f1 = m1.bodyIndex("c.follower");
+        const double a = deg2rad(deg);
+        double worst = 0.0, top = 0.0;
+        for (size_t k = 0; k < r0.size(); ++k) {
+            const size_t o0 = 1 + 3 * (size_t)(f0 - 1), o1 = 1 + 3 * (size_t)(f1 - 1);
+            const double s0 = r0[k][o0 + 2] - 0.1;                              // height above the axle, unrotated
+            const double s1 = (r1[k][o1 + 1] - 0.3) * -std::sin(a) + (r1[k][o1 + 2] - 0.1) * std::cos(a);   // along the turned rail
+            worst = std::max(worst, std::fabs(s0 - s1));
+            top = std::max(top, s1);
+        }
+        CHECK(worst < 1e-9);
+        CHECK_APPROX(top, 0.031 + 0.02, 1e-5);
+        // the cam shaft kept its own angle (the drive is on a shaft)
+        const int c1 = m1.bodyIndex("c.cam"), c0 = m0.bodyIndex("c.cam");
+        CHECK_APPROX(r1.back()[1 + 3 * (size_t)(c1 - 1)], r0.back()[1 + 3 * (size_t)(c0 - 1)], 1e-12);
+    }
+
+    // ---- a drive written inside a part turns with it on a rod, not on a shaft ---------------------------------
+    {
+        const std::string part = "part crank(len = 0.1) { ground g { anchor p at (0, 0) } rod r on g.p { length: len }\n"
+                                 "  drive r at 90 deg/s from 20 deg }\n";
+        const std::string outside = "part crank(len = 0.1) { ground g { anchor p at (0, 0) } rod r on g.p { length: len } }\n";
+        const std::string a = part + "mechanism m { ground bench { anchor o at (0, 0) } use crank as c on bench at (0.5, 0.2) rotate 70 deg }";
+        const std::string b = outside + "mechanism m { ground bench { anchor o at (0, 0) } use crank as c on bench at (0.5, 0.2) rotate 70 deg\n"
+                                        "  drive c.r at 90 deg/s from 90 deg }";
+        const auto ra = runRows(a, 2.0), rb = runRows(b, 2.0);
+        CHECK(ra.size() == rb.size());
+        double worst = 0.0;
+        for (size_t k = 0; k < ra.size() && k < rb.size(); ++k)
+            for (size_t c = 0; c < ra[k].size(); ++c) worst = std::max(worst, std::fabs(ra[k][c] - rb[k][c]));
+        CHECK(worst < 1e-12);                                           // 20 deg written inside = 90 deg written outside
+        // and a shaft's drive angle is left alone
+        const std::string sa = "part sh { ground g { anchor p at (0, 0) } shaft s at g.p\n drive s at 60 rpm from 25 deg }\n"
+                               "mechanism m { ground bench { anchor o at (0, 0) } use sh as c on bench at (0, 0) rotate 70 deg }";
+        const Model m = buildModel(parse(lex(sa)).mechanisms[0]);
+        CHECK_APPROX(m.drives[0].theta0Rad, deg2rad(25.0), 1e-15);
+    }
+
+    // ---- a dynamic part, rotated, equals the flat file with the turned numbers written out -----------------------
+    {
+        const double deg = 40.0, a = deg2rad(deg);
+        const Vec2 off{0.3, 0.2}, p{0.0, 0.5}, d{1.0, 0.0};
+        const double c = std::cos(a), s = std::sin(a);
+        const Vec2 pr{c * p.x - s * p.y, s * p.x + c * p.y}, dr{c * d.x - s * d.y, s * d.x + c * d.y};
+        char buf[1024];
+        std::snprintf(buf, sizeof buf,
+            "mechanism m { world { gravity: 9.81 } ground bench { anchor o at (0, 0)\n"
+            "  anchor q_g_p at (%.17g, %.17g) dir (%.17g, %.17g) }\n"
+            "  rod q_r on bench.q_g_p { length: 1, from: %.17g deg } }",
+            pr.x + off.x, pr.y + off.y, dr.x, dr.y, -60.0 + rad2deg(a));
+        const std::string flat = buf;
+        const std::string part = "part pend { ground g { anchor p at (0, 0.5) dir (1, 0) }\n  rod r on g.p { length: 1, from: -60 deg } }\n"
+            "mechanism m { world { gravity: 9.81 } ground bench { anchor o at (0, 0) }\n"
+            "  use pend as q on bench at (0.3, 0.2) rotate 40 deg }";
+        const auto ra = runRows(part, 3.0), rb = runRows(flat, 3.0);
+        CHECK(ra.size() == rb.size() && ra.size() > 100);
+        CHECK(ra == rb);                                                // the same numbers, bit for bit
+        double lo = 1e9, hi = -1e9;
+        for (const auto& row : ra) { lo = std::min(lo, row[1]); hi = std::max(hi, row[1]); }
+        CHECK(hi - lo > 1.0);                                           // and it really swings
+    }
+
+    // ---- the start angle of a free body and of a rod turns with its part ------------------------------------------------------
+    {
+        const std::string part = R"(
+part p {
+  ground g { anchor a at (0, 0) }
+  body piece { anchor tip at (0, 0) from: 10 deg }
+  rod arm on g.a { length: 1, from: 25 deg }
+}
+)";
+        auto starts = [&](const std::string& mount, double& piece, double& arm) {
+            const Program pr = parse(lex(part + "mechanism m { ground base { anchor o at (0, 0) } use p as q on base at (0, 0) " + mount + " }"));
+            piece = arm = -1.0;
+            for (const BodyDecl& b : pr.mechanisms[0].bodies) {
+                if (b.name == "q.piece") piece = b.props.at("from");
+                if (b.name == "q.arm") arm = b.props.at("from");
+            }
+        };
+        double piece = 0.0, arm = 0.0;
+        starts("rotate 30 deg", piece, arm);
+        CHECK_APPROX(piece, 40.0, 1e-12);                                // 10 + 30
+        CHECK_APPROX(arm, 55.0, 1e-12);                                  // 25 + 30
+        starts("", piece, arm);
+        CHECK_APPROX(piece, 10.0, 1e-15);                                // unrotated: as written
+        CHECK_APPROX(arm, 25.0, 1e-15);
+    }
+
+    // ---- zero rotation is no rotation, bit for bit ------------------------------------------------------------------
+    {
+        const std::string base = std::string(kPlatePart) + "mechanism m { ground bench { anchor o at (0, 0) }\n"
+            "  use plate_cam(lift = 0.02) as c on bench at (0.3, 0.1) %s\n  drive c.cam at 30 rpm }";
+        char b0[1024], b1[1024], b2[1024];
+        std::snprintf(b0, sizeof b0, base.c_str(), "");
+        std::snprintf(b1, sizeof b1, base.c_str(), "rotate 0 deg");
+        std::snprintf(b2, sizeof b2, base.c_str(), "rotate 360 deg");
+        CHECK(runRows(b0, 2.0) == runRows(b1, 2.0));
+        const auto r0 = runRows(b0, 2.0), r2 = runRows(b2, 2.0);       // a full turn is the same placement (not bit for bit)
+        double worst = 0.0;
+        for (size_t k = 0; k < r0.size(); ++k) for (size_t c = 0; c < r0[k].size(); ++c) worst = std::max(worst, std::fabs(r0[k][c] - r2[k][c]));
+        CHECK(worst < 1e-9);
+        // the clock wrapped in a part and 'rotated' 0 deg is still the clock
+        std::string body, world;
+        splitMechanism(readFile("examples/clock.mech"), body, world);
+        if (!body.empty()) CHECK(runRows(wrapAsPart(body, world, "use unit as c on mount at (0, 0) rotate 0 deg"), 5.0) ==
+                                 runRows(readFile("examples/clock.mech"), 5.0));
+    }
+
+    // ---- parts inside rotated parts: the angles add and the inner mount is carried into the world -------------------------
+    {
+        const std::string nested = std::string(kPlatePart) + R"(
+part pair {
+  ground g { anchor m at (0, 0) }
+  use plate_cam as a on g at (0.2, 0) rotate 90 deg
+}
+mechanism m {
+  ground base { anchor origin at (0, 0) }
+  use pair as p on base at (1, 2) rotate 90 deg
+})";
+        const Program pr = parse(lex(nested));
+        const BodyDecl* base = nullptr;
+        for (const BodyDecl& b : pr.mechanisms[0].bodies) if (b.name == "base") base = &b;
+        CHECK(base != nullptr);
+        auto anchor = [&](const char* n) -> const AnchorDecl* {
+            if (base) for (const AnchorDecl& a : base->anchors) if (a.name == n) return &a;
+            return nullptr;
+        };
+        const AnchorDecl* axle = anchor("p.a.frame.axle");
+        const AnchorDecl* rail = anchor("p.a.frame.rail");
+        CHECK(axle != nullptr && rail != nullptr);
+        if (axle && rail) {
+            // the inner part sits at (0.2, 0) of the outer one, which is turned 90 deg about (1, 2): (1, 2.2)
+            CHECK_APPROX(axle->pos.x, 1.0, 1e-12);
+            CHECK_APPROX(axle->pos.y, 2.2, 1e-12);
+            // the rail was (0, 1) in the part, turned 90 + 90 = 180: (0, -1)
+            CHECK_APPROX(rail->dir.x, 0.0, 1e-12);
+            CHECK_APPROX(rail->dir.y, -1.0, 1e-12);
+            CHECK_APPROX(rail->pos.x, 1.0, 1e-12);                       // (0, 0.09) turned 180 about the axle: 0.09 below it
+            CHECK_APPROX(rail->pos.y, 2.2 - 0.09, 1e-12);
+        }
+        // and as a model: the follower comes to rest below the axle, the cam's roller on its underside
+        const Model m = buildModel(pr.mechanisms[0]);
+        const int fi = m.bodyIndex("p.a.follower");
+        CHECK(fi > 0);
+        const auto rows = simulate(m, 0.1, 1.0 / 60.0, {}, 1).rows;    // t = 0 is solved: the roller is on the cam
+        CHECK_APPROX(rows[0][1 + 3 * (size_t)(fi - 1) + 2], 2.2 - 0.031, 1e-6);
+    }
+
+    // ---- an angle is an expression, so a design can sweep it -----------------------------------------------------------------
+    {
+        const std::string src = std::string(kPlatePart) + "mechanism m { param tilt = 0\n ground bench { anchor o at (0, 0) }\n"
+            "  use plate_cam as c on bench at (0, 0) rotate tilt * 2 deg\n  drive c.cam at 30 rpm }";
+        SweepAxis ax;
+        std::string err;
+        CHECK(parseAxis("tilt=0,15,45", ax, err));
+        SweepOptions opt;
+        opt.seconds = 2.0;
+        opt.reports = {"max:c.follower.x", "min:c.follower.x"};
+        const SweepResult r = runSweep(src, {ax}, opt);
+        CHECK(r.rows.size() == 3);
+        for (size_t i = 0; i < r.rows.size(); ++i) {
+            CHECK(r.rows[i].error.empty());
+            const double a = deg2rad(2.0 * ax.values[i]);
+            // the follower tip rides a line through the axle, along the turned rail (-sin a, cos a)
+            const double top = 0.031 + 0.012;
+            const double lo = 0.031;
+            const double xs[2] = {-std::sin(a) * lo, -std::sin(a) * top};
+            CHECK_APPROX(r.rows[i].metrics[0], std::max(xs[0], xs[1]), 1e-5);
+            CHECK_APPROX(r.rows[i].metrics[1], std::min(xs[0], xs[1]), 1e-5);
+        }
+    }
+
+    // ---- refusals, and where they point ---------------------------------------------------------------------------------------------
+    {
+        const std::string pre = std::string(kPlatePart) + "mechanism m { ground base { anchor o at (0, 0) } ";
+        CHECK(partsFail(pre + "use plate_cam as c on base at (0, 0) rotate 90 }", "expected 'deg' after the rotation angle"));
+        CHECK(partsFail(pre + "use plate_cam as c rotate 90 deg }", "'rotate' goes with a mount"));
+        CHECK(partsFail(pre + "use plate_cam as c on base at (0, 0) rotate }", "expected number"));
+        CHECK(partsFail(pre + "use plate_cam as c on base at (0, 0) rotate 1 / 0 deg }", "division by zero"));
+        // a part with a mode is not turned: its guards are angles in the gravity field
+        std::string body, world;
+        splitMechanism(readFile("examples/clock.mech"), body, world);
+        if (!body.empty()) {
+            int line = 0;
+            CHECK(partsFail(wrapAsPart(body, world, "use unit as c on mount at (0, 0) rotate 10 deg"), "cannot be rotated", &line));
+            const std::string clock = readFile("examples/clock.mech");
+            CHECK(line > 0 && line < lineOfText(wrapAsPart(body, world, "x"), "mechanism wrapped"));   // reported at the mode inside the part
+        }
+        // nested: a mode two levels down is refused too
+        CHECK(partsFail("part inner { ground g { anchor a at (0,0) } rod r on g.a { length: 1 mass: 1 }\n"
+                        "  mode md { state s { } s -> s when r.theta > 1 deg } }\n"
+                        "part outer { ground h { anchor b at (0,0) } use inner as i on h at (0, 0) rotate 5 deg }\n"
+                        "mechanism m { ground base { anchor o at (0,0) } use outer as o on base at (0, 0) }", "cannot be rotated"));
+    }
+}
+
+// ============================================================================
+// M12 — structure that depends on numbers: `for` loops, indexed names (`cam[i]` is cam_<i>), and loops
+// inside anchor and shape lists. The oracle is the unrolled file: a looped file must be the file with
+// the iterations written out by hand — the same numbers, bit for bit where the expressions agree.
+// ============================================================================
+
+double polygonArea(const std::vector<Vec2>& v) {
+    double a = 0.0;
+    for (size_t i = 0; i < v.size(); ++i) {
+        const Vec2 p = v[i], q = v[(i + 1) % v.size()];
+        a += p.x * q.y - q.x * p.y;
+    }
+    return 0.5 * a;
+}
+
+const ProfileDecl* profileNamed(const Program& p, const char* name) {
+    for (const ProfileDecl& pr : p.mechanisms[0].profiles) if (pr.name == name) return &pr;
+    return nullptr;
+}
+
+void testLoops() {
+    std::printf("[loops M12]\n");
+
+    // ---- a statement loop is its unrolling, bit for bit ---------------------------------------------------
+    {
+        const std::string looped = R"(
+mechanism m {
+  param n = 4
+  ground bench { anchor hub at (0, 0) }
+  for i = 0 to n - 1 {
+    rod arm[i] on bench.hub { length: 0.1 * (i + 1), from: 90 * i deg }
+  }
+})";
+        const std::string unrolled = R"(
+mechanism m {
+  param n = 4
+  ground bench { anchor hub at (0, 0) }
+  rod arm_0 on bench.hub { length: 0.1 * (0 + 1), from: 90 * 0 deg }
+  rod arm_1 on bench.hub { length: 0.1 * (1 + 1), from: 90 * 1 deg }
+  rod arm_2 on bench.hub { length: 0.1 * (2 + 1), from: 90 * 2 deg }
+  rod arm_3 on bench.hub { length: 0.1 * (3 + 1), from: 90 * 3 deg }
+})";
+        const Program a = parse(lex(looped)), b = parse(lex(unrolled));
+        CHECK(a.mechanisms[0].bodies.size() == 5 && b.mechanisms[0].bodies.size() == 5);
+        bool same = true;
+        for (size_t i = 0; i < 5; ++i) {
+            const BodyDecl &x = a.mechanisms[0].bodies[i], &y = b.mechanisms[0].bodies[i];
+            same = same && x.name == y.name && x.props == y.props;
+        }
+        CHECK(same);
+        CHECK(a.mechanisms[0].bodies[3].name == "arm_2");               // arm[2] is the identifier arm_2
+        CHECK(runRows(looped, 1.0) == runRows(unrolled, 1.0));
+        // the count is a parameter, so --set changes the structure
+        const Program six = parse(lex(looped), ParamOverrides{{"n", 6.0}});
+        CHECK(six.mechanisms[0].bodies.size() == 7 && six.mechanisms[0].bodies[6].name == "arm_5");
+        const Program none = parse(lex(looped), ParamOverrides{{"n", 0.0}});
+        CHECK(none.mechanisms[0].bodies.size() == 1);                    // zero iterations: nothing, and that is fine
+        // a name outside the loop is the same identifier
+        CHECK(parse(lex(looped + "\nmechanism k { ground g { anchor a at (0,0) } rod r[3] on g.a { length: 1 } }")).mechanisms[1].bodies[1].name == "r_3");
+    }
+
+    // ---- nested loops, and an index that is an expression ------------------------------------------------------
+    {
+        const std::string looped = R"(
+mechanism m {
+  ground bench { anchor hub at (0, 0) }
+  for i = 0 to 2 { for j = 0 to 1 { rod r[i * 2 + j] on bench.hub { length: 1 + i + j / 10 } } }
+})";
+        const Program p = parse(lex(looped));
+        CHECK(p.mechanisms[0].bodies.size() == 7);
+        bool ok = true;
+        for (size_t k = 0; k < 6; ++k) ok = ok && p.mechanisms[0].bodies[k + 1].name == "r_" + std::to_string(k);
+        CHECK(ok);
+        CHECK_APPROX(p.mechanisms[0].bodies[4].props.at("length"), 1 + 1 + 0.1, 1e-15);   // r_3: i = 1, j = 1
+        // descending and empty ranges
+        CHECK(parse(lex("mechanism m { ground g { anchor a at (0,0) } for i = 3 to 1 { rod r[i] on g.a { length: 1 } } }")).mechanisms[0].bodies.size() == 1);
+    }
+
+    // ---- loops in anchor lists --------------------------------------------------------------------------------------
+    {
+        const std::string looped = R"(
+mechanism m {
+  ground frame {
+    anchor axle at (0, 0)
+    for k = 0 to 2 { anchor spoke[k] at (0.1 * cos(k * 2 * pi / 3), 0.1 * sin(k * 2 * pi / 3)) dir (k, 1) }
+    anchor last at (1, 1)
+  }
+})";
+        const Program p = parse(lex(looped));
+        const BodyDecl& g = p.mechanisms[0].bodies[0];
+        CHECK(g.anchors.size() == 5 && g.anchors[1].name == "spoke_0" && g.anchors[3].name == "spoke_2" && g.anchors[4].name == "last");
+        CHECK(g.anchors[2].pos.x == 0.1 * std::cos(1 * 2 * kPi / 3) && g.anchors[2].pos.y == 0.1 * std::sin(1 * 2 * kPi / 3));
+        CHECK(g.anchors[3].hasDir && g.anchors[3].dir.x == 2.0);
+        // a free body too, with a property after the loop
+        const Program q = parse(lex("mechanism m { ground g { anchor a at (0,0) } body b { for i = 0 to 1 { anchor p[i] at (i, 0) } mass: 2 } }"));
+        CHECK(q.mechanisms[0].bodies[1].anchors.size() == 2 && q.mechanisms[0].bodies[1].props.at("mass") == 2.0);
+    }
+
+    // ---- loops in shape lists: a regular polygon, and the ratchet's sawtooth -----------------------------------------
+    for (const int n : {3, 5, 8, 17}) {
+        const std::string src = "mechanism m { ground g { anchor a at (0, 0) } body w { anchor a at (0, 0) }\n"
+            "  pin w.a -> g.a\n  param n = " + std::to_string(n) + "\n  profile ring on w.a { polygon: for k = 0 to n - 1 "
+            "{ (0.05 * cos(2 * pi * k / n), 0.05 * sin(2 * pi * k / n)) } fillet 0.001 } }";
+        const Program p = parse(lex(src));
+        const ProfileDecl* pr = profileNamed(p, "ring");
+        CHECK(pr != nullptr && pr->points.size() == (size_t)n);
+        if (!pr) continue;
+        // area of a regular n-gon of circumradius R: (n / 2) R^2 sin(2 pi / n)
+        CHECK_APPROX(polygonArea(pr->points), 0.5 * n * 0.05 * 0.05 * std::sin(2.0 * kPi / n), 1e-12);
+        for (const Vec2& v : pr->points) CHECK_APPROX(std::hypot(v.x, v.y), 0.05, 1e-15);       // every vertex on the circle
+    }
+    {
+        // a loop beside hand-listed vertices, and `points:` / `polar:` take loops too
+        const Program p = parse(lex("mechanism m { ground g { anchor a at (0,0) } body w { anchor a at (0,0) } pin w.a -> g.a\n"
+            "  profile a on w.a { polygon: (1, 0) for k = 1 to 2 { (k, k) } (0, 3) fillet 0.1 }\n"
+            "  profile b on w.a { points: for k = 0 to 5 { (cos(k), sin(k)) } }\n"
+            "  profile c on w.a { polar: for k = 0 to 3 { (90 * k deg, 0.02 + k / 1000) } } }"));
+        CHECK(profileNamed(p, "a")->points.size() == 4 && profileNamed(p, "a")->points[3].y == 3.0);
+        CHECK(profileNamed(p, "b")->points.size() == 6);
+        const ProfileDecl* c = profileNamed(p, "c");
+        CHECK(c->polar.size() == 4 && std::fabs(c->polar[2].first - kPi) < 1e-12 && c->polar[3].second == 0.02 + 3.0 / 1000);
+    }
+
+    // ---- the library ratchet: area, one click per tooth, locked in reverse ------------------------------------------------
+    for (const int teeth : {6, 8, 12, 16}) {
+        const std::string src = "import \"lib/ratchet.mech\"\nmechanism m { world { gravity: 9.81  step: 0.0005 }\n"
+            "  ground bench { anchor o at (0, 0) }\n  use ratchet(teeth = " + std::to_string(teeth) + ") as r on bench at (0, 0)\n"
+            "  drive r.wheel torque -0.004 }";
+        const Program p = loadParse(src);
+        const ProfileDecl* rim = profileNamed(p, "r.rim");
+        CHECK(rim != nullptr && rim->points.size() == (size_t)(2 * teeth));
+        if (!rim) continue;
+        // the polygon's area is `teeth` triangles (O, root, tip): (1/2) r_root r_tip sin(pitch); root k+1 sits radially below tip k
+        CHECK_APPROX(polygonArea(rim->points), 0.5 * teeth * 0.030 * 0.036 * std::sin(2.0 * kPi / teeth), 1e-12);
+        // a root at the top of the wheel, where the pawl rests
+        CHECK_APPROX(rim->points[0].x, 0.030 * std::cos(kPi / 2), 1e-15);
+        CHECK_APPROX(rim->points[0].y, 0.030, 1e-15);
+
+        SweepAxis ax;
+        std::string err;
+        CHECK(parseAxis("r.mu=0.3", ax, err));
+        SweepOptions opt;
+        opt.seconds = 2.0;
+        opt.reports = {"impacts", "final:r.wheel.theta", "ledger"};
+        const SweepResult fwd = runSweep(src, {ax}, opt);
+        CHECK(fwd.rows.size() == 1 && fwd.rows[0].error.empty());
+        const double advance = std::fabs(fwd.rows[0].metrics[1]) / (2.0 * kPi / teeth);       // teeth passed
+        CHECK(advance > 4.0);                                                // it ratchets round, several teeth
+        CHECK(std::fabs(fwd.rows[0].metrics[0] - advance) <= 2.0);          // about one click per tooth (a little chatter)
+        CHECK(fwd.rows[0].metrics[2] < 1e-5);                                // and the books close
+
+        std::string rev = src;
+        rev.replace(rev.find("-0.004"), 6, "0.004");
+        const SweepResult back = runSweep(rev, {ax}, opt);
+        CHECK(back.rows.size() == 1 && back.rows[0].error.empty());
+        CHECK(std::fabs(back.rows[0].metrics[1]) < 0.1 * (2.0 * kPi / teeth));   // locked within a tenth of a tooth
+        CHECK(back.rows[0].metrics[2] < 1e-5);
+    }
+    {
+        // the count is a sweep axis: more teeth, more clicks for the same wheel (while the teeth stay coarse enough for the pawl)
+        const std::string src = "import \"lib/ratchet.mech\"\nmechanism m { world { gravity: 9.81  step: 0.0005 }\n"
+            "  ground bench { anchor o at (0, 0) }\n  use ratchet as r on bench at (0, 0)\n  drive r.wheel torque -0.004 }";
+        SweepAxis ax;
+        std::string err;
+        CHECK(parseAxis("r.teeth=6,12", ax, err));
+        SweepOptions opt;
+        opt.seconds = 1.0;
+        opt.reports = {"impacts", "final:r.wheel.theta"};
+        const SweepResult r = runSweep(src, {ax}, opt);
+        CHECK(r.rows.size() == 2 && r.rows[0].error.empty() && r.rows[1].error.empty());
+        CHECK(std::fabs(r.rows[0].metrics[1]) > std::fabs(r.rows[1].metrics[1]));    // coarser teeth: more angle per click
+    }
+
+    // ---- the camstar example: n cams from a loop, against the unrolled file ------------------------------------------------
+    {
+        const std::string path = "examples/camstar.mech";
+        const std::string text = readFile(path.c_str());
+        CHECK(!text.empty());
+        auto rowsFor = [&](double n) {
+            const Model m = buildModel(parse(loadSource(text, path).tokens, ParamOverrides{{"n", n}}).mechanisms[0]);
+            return std::make_pair(m, simulate(m, 4.0, 1.0 / 120.0, {}, 1).rows);
+        };
+        for (const int n : {3, 4, 6}) {
+            const auto mr = rowsFor(n);
+            const Model& m = mr.first;
+            const auto& rows = mr.second;
+            for (int i = 0; i < n; ++i) {
+                const int fi = m.bodyIndex("cam_" + std::to_string(i) + ".follower");
+                CHECK(fi > 0);
+                const double phi = deg2rad(i * 360.0 / n);
+                const double ux = std::cos(phi), uy = std::sin(phi);
+                double lo = 1e9, hi = -1e9, across = 0.0;
+                for (const auto& row : rows) {
+                    const double x = row[1 + 3 * (size_t)(fi - 1) + 1], y = row[1 + 3 * (size_t)(fi - 1) + 2];
+                    const double radial = x * ux + y * uy;
+                    lo = std::min(lo, radial);
+                    hi = std::max(hi, radial);
+                    across = std::max(across, std::fabs(-x * uy + y * ux));      // off its spoke
+                }
+                CHECK_APPROX(lo, 0.04 + 0.031, 1e-6);                             // hub distance + base + roller
+                CHECK_APPROX(hi, 0.04 + 0.031 + 0.012, 1e-5);                     // ... + lift
+                CHECK(across < 1e-9);
+            }
+            CHECK(m.bodyIndex("cam_" + std::to_string(n) + ".follower") < 0);   // and no more than n of them
+        }
+        // against the file written out by hand, for n = 4: the same motion (the hand version has literal angles)
+        const std::string unrolled = R"(
+import "lib/plate_cam.mech"
+mechanism camstar {
+  ground bench { anchor hub at (0, 0) }
+  shaft driver at bench.hub
+  gear gd { teeth: 20, module: 0.002 } on driver
+  use plate_cam(lift = 0.012) as cam_0 on bench at ( 0.04,  0) rotate -90 deg
+  use plate_cam(lift = 0.012) as cam_1 on bench at ( 0,  0.04) rotate   0 deg
+  use plate_cam(lift = 0.012) as cam_2 on bench at (-0.04,  0) rotate  90 deg
+  use plate_cam(lift = 0.012) as cam_3 on bench at ( 0, -0.04) rotate 180 deg
+  gear g_0 { teeth: 20, module: 0.002 } on cam_0.cam
+  gear g_1 { teeth: 20, module: 0.002 } on cam_1.cam
+  gear g_2 { teeth: 20, module: 0.002 } on cam_2.cam
+  gear g_3 { teeth: 20, module: 0.002 } on cam_3.cam
+  mesh gd g_0
+  mesh gd g_1
+  mesh gd g_2
+  mesh gd g_3
+  drive driver at 60 rpm
+})";
+        const auto a = rowsFor(4).second;
+        const auto b = simulate(buildModel(loadParse(unrolled).mechanisms[0]), 4.0, 1.0 / 120.0, {}, 1).rows;
+        CHECK(a.size() == b.size());
+        double worst = 0.0;
+        for (size_t k = 0; k < a.size() && k < b.size(); ++k)
+            for (size_t c = 0; c < a[k].size() && c < b[k].size(); ++c) worst = std::max(worst, std::fabs(a[k][c] - b[k][c]));
+        CHECK(worst < 1e-9);
+    }
+
+    // ---- a loop inside a part, and parts inside a loop, with the count a part parameter ---------------------------------------
+    {
+        const std::string src = std::string(kPlatePart) + R"(
+part spokes(n = 3, lift = 0.012) {
+  ground hub { anchor c at (0, 0) }
+  for i = 0 to n - 1 {
+    use plate_cam(lift = lift) as c[i] on hub at (0.1 * cos(2 * pi * i / n), 0.1 * sin(2 * pi * i / n)) rotate i * 360 / n - 90 deg
+  }
+}
+mechanism m {
+  ground bench { anchor o at (0, 0) }
+  use spokes(n = 5) as s on bench at (1, 1)
+  use spokes as t on bench at (-1, -1)
+})";
+        const Program p = parse(lex(src));
+        // instances: s, s.c_0 ... s.c_4, t, t.c_0 ... t.c_2
+        CHECK(p.mechanisms[0].instances.size() == 1 + 5 + 1 + 3);
+        CHECK(p.mechanisms[0].instances[5].name == "s.c_4" && p.mechanisms[0].instances[9].name == "t.c_2");
+        // the part's count is an instance parameter: --set s.n
+        const Program q = parse(lex(src), ParamOverrides{{"s.n", 2.0}});
+        CHECK(q.mechanisms[0].instances.size() == 1 + 2 + 1 + 3);
+        // a loop whose body uses a part: each iteration its own instance, parameters per instance
+        const Program r = parse(lex(std::string(kPlatePart) + "mechanism m { ground bench { anchor o at (0, 0) }\n"
+            "  for i = 0 to 2 { use plate_cam(lift = 0.01 * (i + 1)) as c[i] on bench at (0.1 * i, 0) } }"), ParamOverrides{{"c_2.lift", 0.5}});
+        double l0 = 0, l2 = 0;
+        for (const ParamDecl& pd : r.mechanisms[0].params) { if (pd.name == "c_0.lift") l0 = pd.value; if (pd.name == "c_2.lift") l2 = pd.value; }
+        CHECK_APPROX(l0, 0.01, 1e-15);
+        CHECK_APPROX(l2, 0.5, 1e-15);                                              // addressed by its indexed name
+    }
+
+    // ---- a pass can name another pass: a chain of links pinned end to end ------------------------------------------------------
+    {
+        const Program p = parse(lex("mechanism m { param n = 4 ground g { anchor a at (0, 0) }\n"
+            "  for i = 0 to n - 1 { rod link[i] { length: 0.2 } }\n"
+            "  pin link[0].A -> g.a\n"
+            "  for i = 0 to n - 2 { pin link[i + 1].A -> link[i].B } }"));
+        const MechanismDecl& d = p.mechanisms[0];
+        CHECK(d.joints.size() == 1 + 3);
+        bool chain = true;
+        for (size_t i = 1; i < d.joints.size(); ++i)
+            chain = chain && d.joints[i].bodyA == "link_" + std::to_string(i) && d.joints[i].bodyB == "link_" + std::to_string(i - 1) &&
+                    d.joints[i].anchorA == "A" && d.joints[i].anchorB == "B";
+        CHECK(chain);
+        // and it assembles into the straight-out-or-folded chain it describes: the free end is within n * 0.2 of the pivot
+        const Model m = buildModel(d);
+        CHECK(m.bodyIndex("link_3") > 0 && m.bodyIndex("link_4") < 0);
+    }
+
+    // ---- the loop variable ends with its loop; a part with its own params works inside a loop ---------------------------------------
+    {
+        const Program p = parse(lex("mechanism m { ground g { anchor a at (0, 0) }\n"
+            "  for i = 0 to 1 { rod a[i] on g.a { length: 1 } }\n  for i = 0 to 2 { rod b[i] on g.a { length: 2 } } }"));
+        CHECK(p.mechanisms[0].bodies.size() == 1 + 2 + 3);                       // `i` is free to be used again
+        CHECK(partsFail("mechanism m { ground g { anchor a at (0, 0) }\n  for i = 0 to 1 { rod a[i] on g.a { length: 1 } }\n"
+                        "  rod c[i] on g.a { length: 1 } }", "declare it with 'param i"));   // ... and is not a number outside
+        const Program q = parse(loadSource("import \"lib/ratchet.mech\"\nmechanism m { ground bench { anchor o at (0, 0) }\n"
+            "  for k = 0 to 1 { use ratchet(teeth = 6 + 2 * k) as r[k] on bench at (0.2 * k, 0) } }", "").tokens);
+        CHECK(q.mechanisms[0].instances.size() == 2);                              // the part's own `param pitch` ran in each
+        double p0 = 0, p1 = 0;
+        for (const ParamDecl& pd : q.mechanisms[0].params) { if (pd.name == "r_0.pitch") p0 = pd.value; if (pd.name == "r_1.pitch") p1 = pd.value; }
+        CHECK_APPROX(p0, 2 * kPi / 6, 1e-15);
+        CHECK_APPROX(p1, 2 * kPi / 8, 1e-15);
+    }
+
+    // ---- refusals ------------------------------------------------------------------------------------------------------------------
+    {
+        const std::string pre = "mechanism m { ground g { anchor a at (0, 0) } ";
+        CHECK(partsFail(pre + "for i = 0.5 to 3 { } }", "loop bounds must be whole numbers"));
+        CHECK(partsFail(pre + "for i = 0 to 2000 { } }", "the limit is 1000"));
+        CHECK(partsFail(pre + "for i = 0 to 999 { for j = 0 to 999 { for k = 0 to 999 { } } } }", "more than 20000 iterations"));
+        CHECK(partsFail(pre + "for i = 0 to 2 { param p = 1 } }", "cannot be declared inside a 'for' loop"));
+        CHECK(partsFail(pre + "param i = 3 for i = 0 to 2 { } }", "already a parameter"));
+        CHECK(partsFail(pre + "for i = 0 to 2 { for i = 0 to 1 { } } }", "already a parameter"));
+        CHECK(partsFail(pre + "for pi = 0 to 2 { } }", "reserved"));
+        CHECK(partsFail(pre + "for i = 0 2 { } }", "expected 'to'"));
+        CHECK(partsFail(pre + "for i = 0 to 2 { rod r[i] on g.a { length: 1 } ", "unterminated"));
+        CHECK(partsFail(pre + "for i = 0 to 2 rod r on g.a { length: 1 } }", "expected '{'"));
+        CHECK(partsFail(pre + "rod r[-1] on g.a { length: 1 } }", "non-negative whole number"));
+        CHECK(partsFail(pre + "rod r[0.5] on g.a { length: 1 } }", "non-negative whole number"));
+        CHECK(partsFail(pre + "rod r[1 on g.a { length: 1 } }", "expected ']'"));
+        CHECK(partsFail(pre + "rod r[n] on g.a { length: 1 } }", "declare it with 'param n"));
+        // a mistake in the body is reported at the body's own line, whichever iteration finds it
+        int line = 0;
+        CHECK(partsFail("mechanism m {\n  ground g { anchor a at (0, 0) }\n  for i = 0 to 2 {\n    rod r[i] on g.a { lenth: 1 }\n  }\n}\n", "rod property", &line));
+        CHECK(line == 4);
+        // a duplicate name made by a careless index is the usual duplicate-name error
+        bool dup = false;
+        try { (void)buildModel(parse(lex(pre + "for i = 0 to 2 { rod r on g.a { length: 1 } } }")).mechanisms[0]); }
+        catch (const SemanticError& e) { dup = e.msg.find("duplicate body name 'r'") != std::string::npos; }
+        CHECK(dup);
+        // 'for', 'to' stay ordinary names elsewhere
+        CHECK(parse(lex("mechanism m { ground for { anchor to at (0, 0) } rod x on for.to { length: 1 } }")).mechanisms[0].bodies.size() == 2);
+    }
+}
+
 } // namespace (anonymous)
 
 namespace mech {
@@ -6854,6 +7466,8 @@ int runAllTests() {
     testParams();
     testParts();
     testImports();
+    testRotation();
+    testLoops();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;
