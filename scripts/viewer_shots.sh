@@ -23,7 +23,7 @@ if [ ! -x "$SHOT" ]; then
 fi
 mkdir -p "$OUT"
 # name:frame — the frame is where the picture is taken (60 frames are about a second of motion)
-for spec in boom:130 quickreturn:130 scotchyoke:60 slidingbead:40 camstar:120 planetary:120 ratchet:120 clock:200 rackpinion:90 beltdrive:60 rollingwheel:40; do
+for spec in boom:130 quickreturn:130 scotchyoke:60 slidingbead:40 camstar:120 planetary:120 ratchet:120 clock:200 rackpinion:90 beltdrive:60 rollingwheel:40 geneva:170; do
   name=${spec%%:*}; frame=${spec##*:}
   MECH_FRAMES=$((frame + 10)) MECH_SHOT="$frame:$OUT/$name.ppm" timeout 300 "$SHOT" run "examples/$name.mech" >/dev/null 2>&1
   python3 scripts/ppm2png.py "$OUT/$name.ppm" "$OUT/$name.png"

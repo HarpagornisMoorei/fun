@@ -238,7 +238,7 @@ int cmdCheck(const std::string& path, const ParamOverrides& overrides = {}) {
         const int j = d.nPins + d.nSlides;
         std::printf("Grubler-Kutzbach (planar): F = 3(n-1) - 2j - k = 3*%d - 2*%d - %d = %d\n",
                     d.nBodies - 1, j,
-                    d.nSlots + d.nMeshes + d.nTangentMeshes + d.nTouches + d.nPolarMeshes +
+                    d.nSlots + d.nMeshes + d.nTangentMeshes + (m.world.dynamic ? 0 : d.nTouches) + d.nPolarMeshes +
                         d.nRacks + d.nTangentRacks + d.nBeltRows, d.freeDof);   // k counts slots, rack rows and belt links too
         if (d.residualDof == 0) {
             std::printf("residual DOF after drives: 0  ->  fully determined [ok]\n");

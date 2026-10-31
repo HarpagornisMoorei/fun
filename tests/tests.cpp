@@ -8910,6 +8910,88 @@ void testRackBelt() {
     }
 }
 
+// ============================================================================
+// M17 — the Geneva drive (lib/geneva.mech): intermittent motion from ordinary unilateral contact. A pin
+// of radius r = a sin(pi/N) on the crank enters a radial slot of the N-slot wheel, which therefore follows the
+// pin's direction seen from the wheel's shaft: with the crank angle c from the line of centres' far side, the pin
+// is at (a + r cos c, r sin c) from the wheel's shaft, so
+//     phi(c) = atan2(r sin c, a + r cos c) - pi/N  (+ asin(clearance / |pin|) on the leading wall,
+//                                                    - asin(...) on the trailing one)
+// for the wheel's angle phi. The pin presses the leading wall until the crank is at 180 degrees (where the wheel
+// stops accelerating and starts to brake), then the trailing wall; the wheel turns 360/N per crank turn and is
+// held by the locking disc in between.
+// ============================================================================
+
+void testGeneva() {
+    std::printf("[geneva M17]\n");
+    auto col = [](const SimSeries& s, const char* name) {
+        const int i = colOf(s.columns, name);
+        CHECK(i > 0);
+        return i;
+    };
+    // a model the dimensions of which are out of whack warns: a disc too big for the wheel starts inside it
+    {
+        ParamOverrides ov;
+        ov["gv.lock_gap"] = -0.0003;
+        const Model m = modelFromFile("examples/geneva.mech", ov);
+        std::vector<double> q;
+        const std::vector<std::string> w = m.assemble(q);
+        bool found = false;
+        for (const std::string& x : w) if (x.find("inside the curve") != std::string::npos) found = true;
+        CHECK(found);
+        std::vector<double> q2;
+        const Model ok = modelFromFile("examples/geneva.mech");
+        for (const std::string& x : ok.assemble(q2)) CHECK(x.find("inside the curve") == std::string::npos);
+        // nine unilateral contacts are not nine constraints
+        const DofReport d = ok.dofReport();
+        CHECK(d.nTouches == 9 && d.freeDof == 2 && d.residualDof == 1);
+    }
+
+    for (int N : {4, 6, 3}) {
+        ParamOverrides ov;
+        ov["gv.N"] = N;
+        const Model m = modelFromFile("examples/geneva.mech", ov);
+        const double a = 0.1, r = a * std::sin(kPi / N), c = 0.0001;
+        const double entry = 90.0 + 180.0 / N;                 // crank angle at which the pin enters, degrees
+        const double secs = (N == 4 ? 7.0 : 4.6);
+        const SimSeries s = simulate(m, secs, 0.005, {}, 1);
+        const int iw = col(s, "gv.wheel.theta"), iwo = col(s, "gv.wheel.omega"), il = col(s, "ledger.residual");
+        double leadErr = 0.0, trailErr = 0.0, before = 0.0, ledger = 0.0;
+        int lead = 0, trail = 0;
+        for (const auto& row : s.rows) {
+            const double t = row[0], ph = deg2rad(60.0 * t);
+            const double wp = std::hypot(a + r * std::cos(ph), r * std::sin(ph));
+            const double psi = std::atan2(r * std::sin(ph), a + r * std::cos(ph));
+            const double th = row[(size_t)iw];
+            const double tin = (entry + 8.0) / 60.0, tmid = 3.0;           // 8 degrees after the pin is in, up to 180 degrees
+            const double tout = (360.0 - entry + 0.0) / 60.0;             // symmetric exit
+            if (t < entry / 60.0 - 0.05) before = std::max(before, std::fabs(th) + std::fabs(row[(size_t)iwo]));
+            if (t > tin && t < tmid - 0.05) { leadErr = std::max(leadErr, std::fabs(th - (psi - kPi / N + std::asin(c / wp)))); ++lead; }
+            if (t > tmid + 0.25 && t < tout - 0.12) { trailErr = std::max(trailErr, std::fabs(th - (psi - kPi / N - std::asin(c / wp)))); ++trail; }
+            ledger = std::max(ledger, std::fabs(row[(size_t)il]));
+        }
+        CHECK(lead > 20 && trail > 10);
+        CHECK(before == 0.0);                                  // locked and still until the pin comes in
+        CHECK(leadErr < 1e-7);
+        CHECK(trailErr < 1e-7);
+        CHECK(ledger < 1e-5);
+        // indexed: a full step against the crank, held by the disc to within the lock's slack (0.3 mm / the radius)
+        const double step = -360.0 / N;
+        const double final = rad2deg(s.rows.back()[(size_t)iw]);
+        CHECK(std::fabs(final - step) < 0.8);
+        CHECK(std::fabs(s.rows.back()[(size_t)iwo]) < 0.1);
+    }
+
+    // the drawing has the slots and the disc, and the pin is outside the wheel's body when locked
+    {
+        const Model m = modelFromFile("examples/geneva.mech");
+        RenderOptions o;
+        o.at = 0.0;
+        const auto tags = svgTags(renderSvg(m, o).svg);
+        CHECK(withClass(tags, "profile", "polygon").size() == 2);
+    }
+}
+
 int runAllTests() {
     testLexer();
     testParser();
@@ -8950,6 +9032,7 @@ int runAllTests() {
     testRender();
     testSlides();
     testRackBelt();
+    testGeneva();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

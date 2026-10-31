@@ -288,7 +288,11 @@ void SceneBuilder::pose(const std::vector<double>& q, std::vector<SceneItem>& ou
         const Body& b = m_.bodies[bi];
         const Rgb col = th_.palette[(bi - 1) % 5];
         const std::string tag = " data-body=\"" + xml(b.name) + "\"";
-        if (b.anchors.size() >= 2) {
+        // a body that carries a profile is drawn by its outline: its anchors (a wheel's slot-mouth corners, say) are
+        // not a linkage, so it gets a hub at its first anchor like a shaft
+        bool hasProfile = false;
+        for (const Profile& pr : m_.profiles) if (pr.body == (int)bi) hasProfile = true;
+        if (b.anchors.size() >= 2 && !hasProfile) {
             const Vec2 pa = m_.worldAnchor((int)bi, 0, q), pb = m_.worldAnchor((int)bi, 1, q);
             groupOpen(out, "rod", tag);
             line(out, pa, pb, th_.outline, 9.0, "", "", 1.0, true);
@@ -300,7 +304,7 @@ void SceneBuilder::pose(const std::vector<double>& q, std::vector<SceneItem>& ou
                 line(out, p0, p1, col, 7.0, "link", "", 1.0, true);
             }
             groupClose(out);
-        } else if (b.anchors.size() == 1) {
+        } else if (b.anchors.size() >= 1) {
             const Vec2 c = m_.worldAnchor((int)bi, 0, q);
             const double th = q[(size_t)b.qOffset];
             groupOpen(out, "shaft", tag);

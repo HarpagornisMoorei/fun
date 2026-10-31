@@ -22,3 +22,4 @@ $M render examples/slidingbead.mech --at 0.8 --span 0.8 --trace bead.g -o $O/sli
 $M render examples/rackpinion.mech  --frames 36 --span 3 -o $O/rackpinion.svg
 $M render examples/beltdrive.mech   --at 1 -o $O/beltdrive.svg
 $M render examples/rollingwheel.mech --frames 24 --span 0.6 -o $O/rollingwheel.svg
+$M render examples/geneva.mech      --frames 48 --span 6 -o $O/geneva.svg
