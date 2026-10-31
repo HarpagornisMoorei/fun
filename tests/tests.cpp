@@ -9394,6 +9394,11 @@ void testReport() {
             CHECK_APPROX(side->peakAt, T, 0.01);
             CHECK_APPROX(speed->peak, w, 1e-9);
             CHECK(mom->peak < 1e-9);                                  // the bead's mass is on its guide point: no moment
+            // the drive's mean torque over [0, T]: m r0^2 w^2 (cosh 2wT - 1) / (2 w T), and its mean power is w times that
+            const double meanT = mb * r0 * r0 * w * w * (std::cosh(2.0 * w * T) - 1.0) / (2.0 * w * T);
+            CHECK_APPROX(torque->mean, meanT, 3e-3 * meanT);
+            const ReportRow* pwr = find(r, "drive", "tube", "power");
+            CHECK(pwr != nullptr && std::fabs(pwr->mean - w * meanT) < 3e-3 * w * meanT);
             // RMS of the side force over [0, T]: 2 m r0 w^2 sqrt( (sinh 2wT / (4 w T)) - 1/2 )
             const double rms = 2.0 * mb * r0 * w * w * std::sqrt(std::sinh(2.0 * w * T) / (4.0 * w * T) - 0.5);
             CHECK_APPROX(side->rms, rms, 3e-3 * rms);
@@ -9449,6 +9454,54 @@ void testReport() {
             CHECK_APPROX(sp->peak, k * x0, 2e-3 * k * x0);
             CHECK_APPROX(sp->rms, k * x0 / std::sqrt(2.0), 3e-3 * k * x0);
             CHECK_APPROX(sp->peakAt, 0.0, period / 2.0 + 1e-9);          // at t = 0, or a half period later at the other extreme
+        }
+    }
+    // ---- ordering and bookkeeping: heaviest joint first, two slides keep their own rows, a damped spring adds its damping force
+    {
+        // a hanging two-link chain at rest: the upper pin carries both links (5 m g), the lower one its own link (m g)
+        const std::string chain = "mechanism ch { world { gravity: 9.81 step: 0.002 } ground frame { anchor p at (0, 0) } "
+            "body u { anchor A at (0, 0) anchor B at (0.4, 0) mass: 1 com: (0.2, 0) inertia: 0.01 from: -90 deg } "
+            "body l { anchor A at (0, 0) mass: 1 com: (0.2, 0) inertia: 0.01 from: -90 deg } "
+            "pin u.A -> frame.p pin l.A -> u.B }";
+        const Report rc = buildReport(buildFromText(chain.c_str()), 0.2);
+        std::vector<const ReportRow*> pins;
+        for (const ReportRow& row : rc.rows) if (row.group == "joint") pins.push_back(&row);
+        CHECK(pins.size() == 2);
+        if (pins.size() == 2) {
+            CHECK_APPROX(pins[0]->peak, 2.0 * 9.81, 1e-3);                 // sorted: the heavier load first
+            CHECK_APPROX(pins[1]->peak, 1.0 * 9.81, 1e-3);
+            CHECK(pins[0]->name == "u.A-frame.p");
+        }
+        // two slides with different loads: each reads its own multiplier (a mass on each of two parallel rails)
+        const std::string two = "mechanism tw { world { gravity: 9.81 step: 0.002 } ground frame { anchor r1 at (0, 0) dir (1, 0) anchor r2 at (0, 1) dir (1, 0) } "
+            "body a { anchor g at (0, 0) dir (1, 0) mass: 2 } body b { anchor g at (0, 0) dir (1, 0) mass: 5 } slide a.g -> frame.r1 slide b.g -> frame.r2 }";
+        const Report rt = buildReport(buildFromText(two.c_str()), 0.2);
+        const ReportRow* na = find(rt, "slide", "a.g", "side force");
+        const ReportRow* nb = find(rt, "slide", "b.g", "side force");
+        const ReportRow* ma = find(rt, "slide", "a.g", "moment");
+        const ReportRow* mb2 = find(rt, "slide", "b.g", "moment");
+        CHECK(na && nb && ma && mb2);
+        if (na && nb && ma && mb2) {
+            CHECK_APPROX(na->peak, 2.0 * 9.81, 1e-6);
+            CHECK_APPROX(nb->peak, 5.0 * 9.81, 1e-6);
+            CHECK(ma->peak < 1e-9 && mb2->peak < 1e-9);
+        }
+        // a spring with damping: a mass released from a stretch x0 has speed v, so the tension is k x + c v; at t = 0 it is k x0
+        // and the damped decay x0 e^(-zeta w t) shows in the peak at later times, so compare with and without the damping
+        const std::string base = "mechanism sp { world { gravity: 0 step: 0.001 } ground frame { anchor rail at (0.35, 0) dir (1, 0) anchor wall at (0, 0) } "
+            "body b { anchor g at (0, 0) dir (1, 0) mass: 1 } slide b.g -> frame.rail spring s frame.wall -> b.g { k: 100 rest: 0.3 damp: DAMP } "
+            "drive b.g at 0.2 m/s }";
+        auto withDamp = [&](const char* d) { std::string x = base; x.replace(x.find("DAMP"), 4, d); return x; };
+        const Report r0 = buildReport(buildFromText(withDamp("0").c_str()), 0.5);
+        const Report r1 = buildReport(buildFromText(withDamp("10").c_str()), 0.5);
+        const ReportRow* s0 = find(r0, "spring", "s", "tension");
+        const ReportRow* s1 = find(r1, "spring", "s", "tension");
+        CHECK(s0 && s1);
+        if (s0 && s1) {
+            // the guide is driven outward at 0.2 m/s from the rest length + 0.05 m: x = 0.05 + 0.2 t, v = 0.2, so at t = 0.5
+            // the tension is k x (+ c v)
+            CHECK_APPROX(s0->peak, 100.0 * (0.05 + 0.2 * 0.5), 1e-3);
+            CHECK_APPROX(s1->peak, 100.0 * (0.05 + 0.2 * 0.5) + 10.0 * 0.2, 1e-3);
         }
     }
     // ---- the command line
