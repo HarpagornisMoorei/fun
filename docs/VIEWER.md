@@ -53,3 +53,10 @@ If something looks wrong on your machine, a screenshot of the real window is the
 * No labels, dimensions or force arrows (as in the SVG).
 * The live view cannot show the future: a rail covers only the travel seen so far, and the camera fits the first pose
   (press **F** to refit).
+
+## Racks and belts (M16)
+
+The viewer draws a rack as a toothed bar along its pitch line and a belt as tangent runs and wrapped arcs with marks that
+travel with it, from the same scene as `mech render` (see `docs/RACKBELT.md`); `docs/img/viewer/rackpinion.png`,
+`beltdrive.png` and `rollingwheel.png` are taken with `scripts/viewer_shots.sh` on the software-GL shim, with the same
+caveat as the others: it shows the viewer's own geometry, not what a particular GPU does.
