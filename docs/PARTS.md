@@ -32,8 +32,8 @@ part plate_cam(lift = 0.012, base_r = 0.025, speed = 30) {
 ```
 
 * A part is declared at the top of the file, outside any `mechanism`, **before**
-  the mechanisms (or other parts) that use it. It is visible to every mechanism
-  in the file.
+  the mechanisms (or other parts) that use it, or brought in with `import` (section 5). It is
+  visible to every mechanism in the file.
 * The parenthesised list gives its **parameters** with defaults. Defaults are
   expressions (see `PARAMS.md`) and may use the parameters before them
   (`ext = len * 2`). `part p { ... }` with no list is a part with no parameters.
@@ -132,17 +132,42 @@ The inner part is mounted on the outer part's ground, whose own position is the
 sum of the offsets. A part can only use parts declared before it, which also rules
 out recursion (the error says so).
 
-## 5. What it does not do
+## 5. Importing parts
+
+```
+import "../lib/plate_cam.mech"
+```
+
+A statement at the top of a file, before the parts and mechanisms that use what it brings in. The
+named file's parts take the statement's place, as if they had been written there; nothing else about
+the language changes. The standard parts are in `lib/` (see `LIB.md`).
+
+* **Where it looks.** The path is resolved relative to the *importing* file (so a library can import
+  its neighbour by a plain name, whatever the working directory), then in each directory of the
+  `MECH_PATH` environment variable (colon-separated). The path must end in `.mech`. A file that cannot
+  be found is an error that lists every place tried.
+* **What a library holds.** Parts, and imports of other libraries, nothing else; a `mechanism` in a
+  library is an error.
+* **Once.** A file is spliced in once however many files import it, and however its path is spelled
+  (`c.mech`, `./c.mech`, `sub/../c.mech`). Two *different* files defining the same part name is the usual
+  "already declared" error, pointing at the second.
+* **Cycles.** A file that imports itself, directly or through others, is an error that names the chain.
+* **Errors point at the right file.** A mistake inside a library, a bad parameter that the library's
+  `cam` rejects, a typo in a part, is reported with the library's path and line, in `check`, `run` and
+  `sweep` alike. `mech check` lists what was imported.
+* **Not a module system.** There are no namespaces: imported parts share the file's one namespace. An
+  `import` inside a `mechanism` or `part` is not a statement.
+
+## 6. What it does not do
 
 * **No rotation or reflection** when mounting; no mounting on a moving body. To
   attach an instance to a moving body, give the part a ground-less body and pin it
   from the mechanism, as in the linkage example.
 * **No conditionals or loops**: the structure of an instance does not depend on
   its parameters (the numbers do). Five identical instances are five `use` lines.
-* **No import**: parts are file-local. Share one by copying it, for now.
 * A part cannot declare a `world`, and a file's mechanisms do not share instances.
 
-## 6. Errors
+## 7. Errors
 
 Errors inside a part carry the line of the part's own text, and the model builder
 names the instance:
@@ -156,7 +181,7 @@ argument the part does not have (listing the ones it does), an argument given
 twice, a ground-less part given `on ... at`, a part with a ground and no `on`, a
 mount that is not a ground declared before, a name already taken.
 
-## 7. How it is checked
+## 8. How it is checked
 
 * Two instances of the plate-cam part, with different lifts and speeds, run
   **bit for bit** like the flat file with the same bodies written out.

@@ -17,6 +17,7 @@
 #include "sweep.hpp"
 #include "lexer.hpp"
 #include "model.hpp"
+#include "loader.hpp"
 #include "parser.hpp"
 #include "viewer.hpp"
 #include "../tests/tests.hpp"
@@ -46,22 +47,32 @@ std::string readFile(const std::string& path) {
     return ss.str();
 }
 
-Program loadAndParse(const std::string& path, const ParamOverrides& overrides = {}) {
-    std::string src;
-    try {
-        src = readFile(path);
-    } catch (const ToolError& e) { throw; }
+// Source files of the program being processed (index 0 is the file named on the command
+// line); a token's line says which of them it came from (see loader.hpp).
+std::vector<std::string> g_sourceFiles;
 
-    std::vector<Token> toks;
+// A ToolError for a file-tagged line: the file it names, and the line in that file.
+ToolError located(const std::string& path, int taggedLine, int col, const std::string& msg) {
+    const size_t f = (size_t)fileOfLine(taggedLine);
+    const std::string file = f == 0 || f >= g_sourceFiles.size() ? path : g_sourceFiles[f];
+    return ToolError{file, taggedLine > 0 ? lineInFile(taggedLine) : 0, col, msg};
+}
+
+Program loadAndParse(const std::string& path, const ParamOverrides& overrides = {}) {
+    const std::string src = readFile(path);
+
+    LoadedSource ls;
     try {
-        toks = lex(src);
+        ls = loadSource(src, path, &g_sourceFiles);
     } catch (const LexError& e) {
-        throw ToolError{path, e.line, e.col, e.msg};
+        throw located(path, e.line, e.col, e.msg);
+    } catch (const ParseError& e) {
+        throw located(path, e.line, e.col, e.msg);
     }
     try {
-        return parse(toks, overrides);
+        return parse(ls.tokens, overrides);
     } catch (const ParseError& e) {
-        throw ToolError{path, e.line, e.col, e.msg};
+        throw located(path, e.line, e.col, e.msg);
     }
 }
 
@@ -69,7 +80,7 @@ Model buildOrThrow(const std::string& path, const MechanismDecl& decl) {
     try {
         return buildModel(decl);
     } catch (const SemanticError& e) {
-        throw ToolError{path, e.line, 0, e.msg};
+        throw located(path, e.line, 0, e.msg);
     }
 }
 
@@ -171,6 +182,11 @@ int cmdCheck(const std::string& path, const ParamOverrides& overrides = {}) {
         for (int i = 0; i < std::max(1, 46 - (int)m.name.size()); ++i) std:: putchar('-');
         std::printf("\n");
 
+        if (g_sourceFiles.size() > 1) {
+            std::printf("imports:");
+            for (size_t i = 1; i < g_sourceFiles.size(); ++i) std::printf("  %s", g_sourceFiles[i].c_str());
+            std::printf("\n");
+        }
         if (!decl.params.empty()) {
             std::printf("params:");
             for (const ParamDecl& pd : decl.params) {
@@ -783,9 +799,9 @@ int cmdSweep(const std::string& path, const std::vector<std::string>& setSpecs, 
     }
     SweepResult r;
     try {
-        r = runSweep(src, axes, opt);
-    } catch (const LexError& e) {
-        throw ToolError{path, e.line, e.col, e.msg};
+        SweepOptions o = opt;
+        o.path = path;
+        r = runSweep(src, axes, o);
     } catch (const std::runtime_error& e) {
         throw ToolError{path, 0, 0, e.what()};
     }

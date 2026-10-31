@@ -70,6 +70,7 @@ struct SweepOptions {
     double dt = 1.0 / 60.0;
     std::vector<std::string> reports;   // empty: a sensible default for the file
     std::vector<std::string> probes;
+    std::string path;                   // where the source came from: anchors relative `import`s
 };
 
 // Run the sweep over the full grid of axes (first axis slowest). Throws std::runtime_error

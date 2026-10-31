@@ -1,4 +1,5 @@
 // mech — sweep.cpp: design exploration over parameters (M8)
+#include "loader.hpp"
 #include "sweep.hpp"
 
 #include "kinematics.hpp"
@@ -202,7 +203,19 @@ SweepResult runSweep(const std::string& source, const std::vector<SweepAxis>& ax
         if (total > 5000) throw std::runtime_error("that grid is over 5000 runs");
         res.axisNames.push_back(a.name);
     }
-    const std::vector<Token> toks = lex(source);
+    std::vector<std::string> files;
+    std::vector<Token> toks;
+    try {
+        toks = loadSource(source, opt.path, &files).tokens;
+    } catch (const LexError& e) {
+        throw std::runtime_error(describeLine(files, e.line) + ":" + std::to_string(e.col) + ": " + e.msg);
+    } catch (const ParseError& e) {
+        throw std::runtime_error(describeLine(files, e.line) + ":" + std::to_string(e.col) + ": " + e.msg);
+    }
+    // an error inside an imported library says so (the line alone would point into the wrong file)
+    auto where = [&](int line, const std::string& msg) {
+        return fileOfLine(line) > 0 ? msg + " (" + describeLine(files, line) + ")" : msg;
+    };
 
     auto build = [&](const ParamOverrides& ov, std::string& err) -> bool {
         try {
@@ -210,8 +223,8 @@ SweepResult runSweep(const std::string& source, const std::vector<SweepAxis>& ax
             if (p.mechanisms.empty()) { err = "the file contains no mechanism"; return false; }
             (void)buildModel(p.mechanisms[0]);
             return true;
-        } catch (const ParseError& e) { err = e.msg; }
-        catch (const SemanticError& e) { err = e.msg; }
+        } catch (const ParseError& e) { err = where(e.line, e.msg); }
+        catch (const SemanticError& e) { err = where(e.line, e.msg); }
         return false;
     };
 
@@ -282,9 +295,9 @@ SweepResult runSweep(const std::string& source, const std::vector<SweepAxis>& ax
                 for (size_t k = 0; k < metrics.size(); ++k) row.metrics[k] = evalMetric(metrics[k], s);
             }
         } catch (const ParseError& e) {
-            row.error = e.msg;
+            row.error = where(e.line, e.msg);
         } catch (const SemanticError& e) {
-            row.error = e.msg;
+            row.error = where(e.line, e.msg);
         }
         res.rows.push_back(row);
     }

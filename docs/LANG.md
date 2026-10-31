@@ -1,4 +1,4 @@
-# The mech language — M9 specification
+# The mech language — M10 specification
 
 This document pins down the M6f kernel: lexical structure, grammar, static
 semantics, the kinematic solver's mathematical formulation, the
@@ -10,7 +10,7 @@ impact in dynamic ones), plate cams stated as displacement diagrams, and
 non-circular gear pairs (`mesh` between two profiles), and polygon profiles
 with filleted corners (ratchets and anything with teeth), and Coulomb friction at
 contacts, plus (M8) named parameters, numeric expressions and sweeps, and (M9) reusable
-parts. It is the contract
+parts, and (M10) `import` with a library of standard parts. It is the contract
 the implementation is tested against (`mech test`).
 
 ---
@@ -56,6 +56,7 @@ Four principles govern the design:
 * Identifiers: `[A-Za-z_][A-Za-z0-9_]*`.
 * Numbers: non-negative decimals (`3`, `1.5`, `0.8`). Unary minus is a parser
   concern: `-60` lexes as `-` then `60`.
+* Strings: `"text"` on one line, no escapes; used only for the path of an `import` (M10).
 * Units are reserved words: `deg/s`, `rpm`, `deg`.
 * Keywords: `mechanism ground rod anchor at pin drive length from body shaft
   gear mesh slide on world spring torque reduce hand dial mode profile touch`.
@@ -77,7 +78,8 @@ Four principles govern the design:
 ## 3. Grammar (M3)
 
 ```ebnf
-program     = { partDecl | mechanism } ;                (* parts before their first use *)
+program     = { importDecl | partDecl | mechanism } ;   (* parts before their first use *)
+importDecl  = "import" STRING ;                          (* M10: top level only *)
 
 mechanism   = "mechanism" IDENT "{" { stmt } "}" ;
 
@@ -239,6 +241,17 @@ Checks run at model build time, each error pointing at a source line:
   the escapement's pair (a wheel driven by a weight and locked by a pallet).
   One hold row exists per held body across the whole mechanism: two modes
   cannot hold the same body.
+
+**M10 import checks:**
+
+* `import "path.mech"` is a top-level statement, resolved before parsing on the token stream: the
+  named file's parts replace it. The path must end in `.mech`; it is looked for next to the importing
+  file and then in each directory of `MECH_PATH`.
+* A library file holds parts and imports only. A file is spliced once however it is spelled; a cycle
+  is an error naming the chain.
+* Every token carries its file (`line = file * 2^20 + line-in-file`), so parse and model errors from
+  inside a library are reported with the library's path and line. Specified in [`PARTS.md`](PARTS.md)
+  and the standard parts in [`LIB.md`](LIB.md).
 
 **M9 part checks:**
 
@@ -1041,7 +1054,7 @@ resistance, more than one contact point per `touch`, and compliant
 
 ## 8. Test matrix
 
-`mech test` (14792 checks) covers: lexer tokens/units/keywords/comments/errors;
+`mech test` (14886 checks) covers: lexer tokens/units/keywords/comments/errors;
 parser AST shapes for all M3 and M4 forms and all error classes; model checks,
 desugaring, gear radius arithmetic, module rules, mass derivation (rods,
 discs, compound assemblies, overrides), DOF arithmetic including tangent
@@ -1234,6 +1247,20 @@ and y, nested offsets, scope restoration, argument binding, override keys, the r
 guard, the definition-time check, and every name site (`mesh`, `reduce`, `via`, `hold`,
 mode guards and resets, `drive`, hand and gear hosts, touch profiles, mode and hand names).
 
+The M10 suite adds: the string token and its error; the standard parts against closed forms (gear
+ratio and centre distance for three tooth pairs, the slider-crank formula over a full turn with and
+without offset and its dead centres, Freudenstein's equation at every sample of a full crank turn,
+the cam's rest and peak heights); an imported part equal to the same part pasted in place; the
+loader's rules (not found, extension, the shape of the statement, parts only, direct and indirect
+cycles, once-only under three spellings, relative to the importing file, `MECH_PATH` after the file's
+own directory, no import inside a mechanism); errors inside a library carrying the library's file and
+line (lexical, syntax at the definition, semantic from the model with the instance's name); and the
+command line end to end (`check` listing imports and overrides, an error inside a library printed with
+its path and line, a missing import, `sweep` resolving an import relative to the file from another
+directory). Mutation checks cover the nesting depth, the parts-only rule, the extension, cycles, dedupe,
+canonical paths, line tagging, the search order, relative resolution, the lexer's string check, and the
+error plumbing in `check` and `sweep`.
+
 ## 9. Milestone history & reserved ground
 
 M1 walked the skeleton (lexer/parser/rods/pins/drives); M2 added shafts,
@@ -1302,6 +1329,10 @@ compared by running many of it. Reusable parts and composition remain open.
 M9 added reusable parts: `part` with parameters and `use ... as name on ground at (x, y)`
 (see `docs/PARTS.md`), expanded at parse time so the solver, dynamics and tooling are
 unchanged, and an instanced file runs bit for bit like the flat one.
+
+M10 added `import` and `lib/` (plate cam, slider-crank, four-bar, gear pair; see `docs/LIB.md`). Imports are
+resolved on the token stream, so nothing downstream changed: a part from a library runs like the part
+pasted in place.
 
 The rest is reserved: static friction proper (the regularization creeps at ~2 mm/s
 instead of sticking), tangential impact impulses, curve-against-curve contact (the

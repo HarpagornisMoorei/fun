@@ -6,6 +6,7 @@
 #include "../src/dynamics.hpp"
 #include "../src/kinematics.hpp"
 #include "../src/lexer.hpp"
+#include "../src/loader.hpp"
 #include "../src/model.hpp"
 #include "../src/parser.hpp"
 #include "../src/profile.hpp"
@@ -16,6 +17,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -6411,6 +6413,408 @@ mechanism two {
     }
 }
 
+// ============================================================================
+// M10 — imports and the standard parts in lib/. The library parts are tested against closed
+// forms (gear ratio, slider-crank, Freudenstein, cam stroke), and the loader against its rules.
+// ============================================================================
+
+Program loadParse(const std::string& src, const ParamOverrides& ov = {}, const std::string& path = "") {
+    return parse(loadSource(src, path).tokens, ov);
+}
+
+std::vector<std::vector<double>> runLoaded(const std::string& src, double seconds) {
+    const Model m = buildModel(loadParse(src).mechanisms[0]);
+    return simulate(m, seconds, 1.0 / 60.0, {}, 1).rows;
+}
+
+struct TempDir {
+    std::string dir;
+    TempDir() {
+        char tmpl[] = "/tmp/mech_imp_XXXXXX";
+        const char* d = mkdtemp(tmpl);
+        dir = d ? d : "";
+    }
+    ~TempDir() { if (!dir.empty()) std::filesystem::remove_all(dir); }
+    std::string put(const std::string& name, const std::string& text) const {
+        const std::string p = dir + "/" + name;
+        std::filesystem::create_directories(std::filesystem::path(p).parent_path());
+        std::ofstream(p) << text;
+        return p;
+    }
+};
+
+// Does loading this fail with a ParseError / LexError whose message contains `needle`?
+bool loadFails(const std::string& src, const char* needle, const std::string& path = "",
+               std::vector<std::string>* filesOut = nullptr, int* lineOut = nullptr) {
+    std::vector<std::string> files;
+    try {
+        (void)loadSource(src, path, &files);
+    } catch (const ParseError& e) {
+        if (filesOut) *filesOut = files;
+        if (lineOut) *lineOut = e.line;
+        return e.msg.find(needle) != std::string::npos;
+    } catch (const LexError& e) {
+        if (filesOut) *filesOut = files;
+        if (lineOut) *lineOut = e.line;
+        return e.msg.find(needle) != std::string::npos;
+    }
+    return false;
+}
+
+int lineOfText(const std::string& text, const std::string& needle) {
+    const size_t at = text.find(needle);
+    if (at == std::string::npos) return -1;
+    return 1 + (int)std::count(text.begin(), text.begin() + (long)at, '\n');
+}
+
+void testImports() {
+    std::printf("[imports M10]\n");
+
+    // ---- strings, and imports as the loader sees them -------------------------------------------
+    {
+        const std::vector<Token> t = lex("import \"lib/a.mech\" rod");
+        CHECK(t.size() == 4 && t[1].type == Tok::Str && t[1].text == "lib/a.mech" && t[2].text == "rod");
+        bool threw = false;
+        try { (void)lex("import \"oops\n"); } catch (const LexError& e) { threw = e.msg.find("unterminated string") != std::string::npos; }
+        CHECK(threw);
+        CHECK(fileOfLine(3 * kFileStride + 17) == 3 && lineInFile(3 * kFileStride + 17) == 17);
+        CHECK(fileOfLine(42) == 0 && lineInFile(42) == 42);                // a single file sees plain line numbers
+    }
+
+    // ---- the standard parts, against closed forms ----------------------------------------------------
+    // gear_pair: shaft sb turns at -teeth_a / teeth_b times sa, and the centres sit module*(Ta+Tb)/2 apart
+    for (const int ta : {20, 8, 30}) {
+        const int tb = ta == 20 ? 60 : ta == 8 ? 40 : 12;
+        const std::string src = "import \"lib/gear_pair.mech\"\nmechanism m { ground bench { anchor o at (0, 0) }\n"
+            "  use gear_pair(teeth_a = " + std::to_string(ta) + ", teeth_b = " + std::to_string(tb) +
+            ", module = 0.004) as gp on bench at (0, 0)\n  drive gp.sa at 60 rpm }";
+        const Model m = buildModel(loadParse(src).mechanisms[0]);
+        const int ia = m.bodyIndex("gp.sa"), ib = m.bodyIndex("gp.sb");
+        CHECK(ia > 0 && ib > 0);
+        const auto rows = simulate(m, 2.0, 1.0 / 60.0, {}, 1).rows;
+        double worst = 0.0;
+        const double a0 = rows[0][1 + 3 * (size_t)(ia - 1)], b0 = rows[0][1 + 3 * (size_t)(ib - 1)];   // the initial mesh phase
+        for (const auto& row : rows) {
+            const double tha = row[1 + 3 * (size_t)(ia - 1)] - a0, thb = row[1 + 3 * (size_t)(ib - 1)] - b0;
+            worst = std::max(worst, std::fabs(thb + tha * ta / (double)tb));
+        }
+        CHECK(worst < 1e-9);
+        CHECK(std::fabs(rows.back()[1 + 3 * (size_t)(ia - 1)] - a0) > 10.0);      // it did turn, twice
+        // the centre distance
+        double bx = -1.0;
+        for (const Anchor& a : m.bodies[0].anchors) if (a.name == "gp.frame.b") bx = a.local.x;
+        CHECK_APPROX(bx, 0.004 * (ta + tb) / 2.0, 1e-15);
+    }
+
+    // crank_slider: x(t) = r cos t + sqrt(l^2 - (r sin t - e)^2), the piston stays on y = e
+    for (const double e : {0.0, 0.04}) {
+        const std::string src = "import \"lib/crank_slider.mech\"\nmechanism m { ground bench { anchor o at (0, 0) }\n"
+            "  use crank_slider(crank_len = 0.1, rod_len = 0.3, offset = " + std::to_string(e) + ") as eng on bench at (0.2, 0.05)\n"
+            "  drive eng.crank at 90 deg/s from 20 deg }";
+        const Model m = buildModel(loadParse(src).mechanisms[0]);
+        const int ip = m.bodyIndex("eng.piston");
+        CHECK(ip > 0);
+        const auto rows = simulate(m, 4.0, 1.0 / 60.0, {}, 1).rows;     // a full turn
+        double worst = 0.0, worstY = 0.0, xmax = -1e9, xmin = 1e9;
+        for (const auto& row : rows) {
+            const double t = row[0], th = deg2rad(20.0) + deg2rad(90.0) * t;
+            const double r = 0.1, l = 0.3;
+            const double x = 0.2 + r * std::cos(th) + std::sqrt(l * l - (r * std::sin(th) - e) * (r * std::sin(th) - e));
+            const double px = row[1 + 3 * (size_t)(ip - 1) + 1], py = row[1 + 3 * (size_t)(ip - 1) + 2];
+            worst = std::max(worst, std::fabs(px - x));
+            worstY = std::max(worstY, std::fabs(py - (0.05 + e)));
+            xmax = std::max(xmax, px);
+            xmin = std::min(xmin, px);
+        }
+        CHECK(worst < 1e-9);
+        CHECK(worstY < 1e-9);
+        if (e == 0.0) {
+            CHECK_APPROX(xmax, 0.2 + 0.1 + 0.3, 1e-3);            // dead centres: l + r and l - r
+            CHECK_APPROX(xmin, 0.2 + 0.3 - 0.1, 1e-3);
+        }
+    }
+
+    // four_bar: Freudenstein's equation holds at every sampled crank angle, over a full turn
+    {
+        const double d = 0.4, a = 0.1, b = 0.35, c = 0.3;
+        const std::string src = "import \"lib/four_bar.mech\"\nmechanism m { ground bench { anchor o at (0, 0) }\n"
+            "  use four_bar as lk on bench at (1, 2)\n  drive lk.crank at 36 deg/s from 60 deg }";
+        const Model m = buildModel(loadParse(src).mechanisms[0]);
+        const int ic = m.bodyIndex("lk.crank"), ir = m.bodyIndex("lk.rocker");
+        CHECK(ic > 0 && ir > 0);
+        const auto rows = simulate(m, 10.0, 1.0 / 60.0, {}, 1).rows;   // 360 degrees
+        const double K3 = (a * a - b * b + c * c + d * d) / (2.0 * a * c);
+        double worst = 0.0, phiMin = 1e9, phiMax = -1e9;
+        for (const auto& row : rows) {
+            const double th = row[1 + 3 * (size_t)(ic - 1)], ph = row[1 + 3 * (size_t)(ir - 1)];
+            worst = std::max(worst, std::fabs(std::cos(th - ph) - (K3 + d / a * std::cos(ph) - d / c * std::cos(th))));
+            phiMin = std::min(phiMin, ph);
+            phiMax = std::max(phiMax, ph);
+        }
+        CHECK(worst < 1e-8);
+        CHECK(phiMax - phiMin > 0.5 && phiMax - phiMin < 2.5);          // it rocks, it does not circulate
+        // and the pivots sit where the mount puts them
+        double px = -1.0, py = -1.0;
+        for (const Anchor& an : m.bodies[0].anchors) if (an.name == "lk.frame.p2") { px = an.local.x; py = an.local.y; }
+        CHECK_APPROX(px, 1.0 + d, 1e-15);
+        CHECK_APPROX(py, 2.0, 1e-15);
+    }
+
+    // plate_cam: the roller centre peaks at base + roller + lift, and rests at base + roller
+    for (const double lift : {0.012, 0.03}) {
+        const std::string src = "import \"lib/plate_cam.mech\"\nmechanism m { ground bench { anchor o at (0, 0) }\n"
+            "  use plate_cam(lift = " + std::to_string(lift) + ", base_r = 0.03, roller_r = 0.008, rise_deg = 120, "
+            "dwell_deg = 30, return_deg = 150) as pc on bench at (0, 0)\n  drive pc.cam at 60 rpm }";
+        const Model m = buildModel(loadParse(src).mechanisms[0]);
+        const int iff = m.bodyIndex("pc.follower");
+        CHECK(iff > 0);
+        const auto rows = simulate(m, 1.0, 1.0 / 240.0, {}, 1).rows;
+        double top = 0.0, bottom = 1e9;
+        for (const auto& row : rows) {
+            top = std::max(top, row[1 + 3 * (size_t)(iff - 1) + 2]);
+            bottom = std::min(bottom, row[1 + 3 * (size_t)(iff - 1) + 2]);
+        }
+        CHECK_APPROX(top, 0.03 + 0.008 + lift, 1e-5);
+        CHECK_APPROX(bottom, 0.03 + 0.008, 1e-9);
+    }
+
+    // examples/camshaft.mech: library cams composed with gears from outside; imports resolve next to the file
+    {
+        const std::string path = "examples/camshaft.mech";
+        const std::string text = readFile(path.c_str());
+        CHECK(!text.empty());
+        const Model m = buildModel(parse(loadSource(text, path).tokens).mechanisms[0]);
+        const int i1 = m.bodyIndex("c1.cam"), i2 = m.bodyIndex("c2.cam");
+        const int f1 = m.bodyIndex("c1.follower"), f2 = m.bodyIndex("c2.follower");
+        CHECK(i1 > 0 && i2 > 0 && f1 > 0 && f2 > 0);
+        const auto rows = simulate(m, 4.0, 1.0 / 120.0, {}, 1).rows;
+        double top1 = 0.0, top2 = 0.0;
+        for (const auto& row : rows) {
+            top1 = std::max(top1, row[1 + 3 * (size_t)(f1 - 1) + 2]);
+            top2 = std::max(top2, row[1 + 3 * (size_t)(f2 - 1) + 2]);
+        }
+        const double ratio = (rows.back()[1 + 3 * (size_t)(i2 - 1)] - rows[0][1 + 3 * (size_t)(i2 - 1)]) /
+                             (rows.back()[1 + 3 * (size_t)(i1 - 1)] - rows[0][1 + 3 * (size_t)(i1 - 1)]);
+        CHECK_APPROX(ratio, -0.5, 1e-9);                            // 20 teeth driving 40
+        CHECK_APPROX(top1, 0.031 + 0.012, 1e-5);
+        CHECK_APPROX(top2, 0.031 + 0.020, 1e-5);
+    }
+
+    // ---- an imported part is the part pasted in place ------------------------------------------------------
+    {
+        const std::string lib = readFile("lib/plate_cam.mech");
+        CHECK(!lib.empty());
+        const std::string main = "mechanism m { ground bench { anchor o at (0, 0) }\n  use plate_cam(lift = 0.02) as c on bench at (0, 0)\n"
+                                 "  drive c.cam at 30 rpm }";
+        CHECK(runLoaded("import \"lib/plate_cam.mech\"\n" + main, 2.0) == runLoaded(lib + "\n" + main, 2.0));
+        // ... and any other parts in the file keep working beside it
+        const std::string both = "import \"lib/plate_cam.mech\"\npart bar(len = 0.5) { rod r { length: len } }\n"
+                                 "mechanism m { ground bench { anchor o at (0, 0) }\n use plate_cam as c on bench at (0, 0)\n use bar as b }";
+        CHECK(loadParse(both).mechanisms[0].instances.size() == 2);
+    }
+
+    // ---- the loader's rules ---------------------------------------------------------------------------
+    {
+        TempDir td;
+        const std::string main = td.dir + "/main.mech";
+        std::vector<std::string> files;
+        int line = 0;
+        // not found: says where it looked
+        CHECK(loadFails("import \"nowhere.mech\"\n", "cannot find \"nowhere.mech\"", main));
+        CHECK(loadFails("import \"nowhere.mech\"\n", td.dir.c_str(), main));
+        // the extension, and the shape of the statement
+        CHECK(loadFails("import \"data.txt\"\n", "must name a .mech file", main));
+        CHECK(loadFails("import foo\n", "quoted path", main));
+        CHECK(loadFails("import\n", "quoted path", main));
+        // a library holds parts only
+        td.put("m.mech", "mechanism x { }\n");
+        CHECK(loadFails("import \"m.mech\"\n", "parts only", main, &files, &line));
+        CHECK(files.size() == 2 && fileOfLine(line) == 1 && lineInFile(line) == 1);
+        // cycles, direct and through a second file, and a library that imports the importing file
+        td.put("a.mech", "import \"b.mech\"\npart pa { }\n");
+        td.put("b.mech", "import \"a.mech\"\npart pb { }\n");
+        CHECK(loadFails("import \"a.mech\"\n", "import cycle: a.mech -> b.mech -> a.mech", main));
+        td.put("self.mech", "import \"self.mech\"\n");
+        CHECK(loadFails("import \"self.mech\"\n", "import cycle: self.mech -> self.mech", main));
+        const std::string mainPath = td.put("main.mech", "import \"back.mech\"\nmechanism m { }\n");
+        td.put("back.mech", "import \"main.mech\"\npart pc { }\n");
+        CHECK(loadFails(readFile(mainPath.c_str()), "import cycle", mainPath));
+        // importing a file again, directly or through another library, splices it once
+        td.put("c.mech", "part pc { rod r { length: 1 } }\n");
+        td.put("d.mech", "import \"c.mech\"\npart pd { rod r { length: 2 } }\n");
+        const LoadedSource ls = loadSource("import \"c.mech\"\nimport \"d.mech\"\nimport \"c.mech\"\nmechanism m { ground g { anchor o at (0, 0) } use pc as x use pd as y }", main);
+        CHECK(ls.files.size() == 3);
+        const Program p = parse(ls.tokens);
+        CHECK(p.mechanisms[0].instances.size() == 2);
+        // the same file under another spelling is still the same file
+        {
+            const LoadedSource alt = loadSource("import \"c.mech\"\nimport \"sub/../c.mech\"\nimport \"./c.mech\"\n"
+                                                "mechanism m { ground g { anchor o at (0, 0) } use pc as x }", main);
+            CHECK(alt.files.size() == 2);
+            CHECK(parse(alt.tokens).mechanisms[0].instances.size() == 1);
+        }
+        // two different files defining the same part: the error names the second one
+        td.put("e.mech", "part pc { }\n");
+        {
+            std::vector<std::string> fs2;
+            bool caught = false;
+            try {
+                (void)parse(loadSource("import \"c.mech\"\nimport \"e.mech\"\nmechanism m { }", main, &fs2).tokens);
+            } catch (const ParseError& e) {
+                caught = e.msg.find("part 'pc' is already declared") != std::string::npos &&
+                         describeLine(fs2, e.line) == td.dir + "/e.mech:1";
+            }
+            CHECK(caught);
+        }
+        // relative to the importing file, not the working directory: a library in a subdirectory
+        // imports its neighbour by a plain name
+        td.put("sub/leaf.mech", "part leaf { rod r { length: 1 } }\n");
+        td.put("sub/branch.mech", "import \"leaf.mech\"\npart branch { use leaf as l }\n");
+        const Program q = parse(loadSource("import \"sub/branch.mech\"\nmechanism m { ground g { anchor o at (0, 0) } use branch as b }", main).tokens);
+        CHECK(q.mechanisms[0].instances.size() == 2 && q.mechanisms[0].instances[1].name == "b.l");
+        // MECH_PATH is searched after the importing file's own directory
+        TempDir other;
+        other.put("shared.mech", "part shared { rod r { length: 3 } }\n");
+        td.put("shared.mech", "part shared { rod r { length: 4 } }\n");
+        setenv("MECH_PATH", other.dir.c_str(), 1);
+        const Program here = parse(loadSource("import \"shared.mech\"\nmechanism m { ground g { anchor o at (0, 0) } use shared as s }", main).tokens);
+        double len = 0.0;
+        for (const BodyDecl& b : here.mechanisms[0].bodies) if (b.name == "s.r") len = b.props.at("length");
+        CHECK_APPROX(len, 4.0, 1e-15);                                           // next to the file wins
+        std::remove((td.dir + "/shared.mech").c_str());
+        const Program there = parse(loadSource("import \"shared.mech\"\nmechanism m { ground g { anchor o at (0, 0) } use shared as s }", main).tokens);
+        for (const BodyDecl& b : there.mechanisms[0].bodies) if (b.name == "s.r") len = b.props.at("length");
+        CHECK_APPROX(len, 3.0, 1e-15);                                           // ... then MECH_PATH
+        unsetenv("MECH_PATH");
+        // an import is a top-level statement; inside a mechanism it is not (and the loader leaves it alone)
+        {
+            bool notAStatement = false;
+            try {
+                (void)parse(loadSource("mechanism m { import \"x.mech\" }", main).tokens);
+            } catch (const ParseError& e) {
+                notAStatement = e.msg.find("expected a statement") != std::string::npos;
+            }
+            CHECK(notAStatement);
+        }
+        // a symlink to a file is that file: it is not spliced twice (needs the real path, not the spelling)
+        std::filesystem::create_symlink(td.dir + "/c.mech", td.dir + "/link_to_c.mech");
+        {
+            const LoadedSource sl = loadSource("import \"c.mech\"\nimport \"link_to_c.mech\"\n"
+                                               "mechanism m { ground g { anchor o at (0, 0) } use pc as x }", main);
+            CHECK(sl.files.size() == 2);
+            CHECK(parse(sl.tokens).mechanisms[0].instances.size() == 1);
+        }
+    }
+
+    // ---- errors inside a library point at the library --------------------------------------------------
+    {
+        TempDir td;
+        const std::string main = td.dir + "/main.mech";
+        // a lexical error
+        td.put("lex.mech", "part p { }\n\npart q { rod r { length: 1 } } @\n");
+        std::vector<std::string> files;
+        int line = 0;
+        CHECK(loadFails("import \"lex.mech\"\n", "unexpected character", main, &files, &line));
+        CHECK(files.size() == 2 && describeLine(files, line) == td.dir + "/lex.mech:3");
+        // a syntax error inside a part, reported at the definition although nothing uses the part
+        td.put("syn.mech", "// header\npart p {\n  ground g { anchor a at (0, 0) }\n  rod r on g.a { lenth: 1 }\n}\n");
+        files.clear();
+        bool caught = false;
+        try {
+            (void)parse(loadSource("import \"syn.mech\"\nmechanism m { }", main, &files).tokens);
+        } catch (const ParseError& e) {
+            caught = describeLine(files, e.line) == td.dir + "/syn.mech:4";
+        }
+        CHECK(caught);
+        // a semantic error, from the model: the library's own line, the instance's name
+        const std::string lib = readFile("lib/plate_cam.mech");
+        const int camLine = lineOfText(lib, "cam lobe on cam.A");
+        CHECK(camLine > 0);
+        const std::string src = "import \"lib/plate_cam.mech\"\nmechanism m { ground bench { anchor o at (0, 0) }\n"
+                                "  use plate_cam(base_r = -1) as pc on bench at (0, 0)\n  drive pc.cam at 30 rpm }";
+        files.clear();
+        const LoadedSource ls = loadSource(src, "", &files);
+        bool sem = false;
+        try {
+            (void)buildModel(parse(ls.tokens).mechanisms[0]);
+        } catch (const SemanticError& e) {
+            sem = e.msg.find("pc.lobe") != std::string::npos && fileOfLine(e.line) == 1 &&
+                  describeLine(files, e.line) == "lib/plate_cam.mech:" + std::to_string(camLine);
+        }
+        CHECK(sem);
+    }
+
+    // ---- sweeps and the command line through imports ------------------------------------------------------
+    {
+        const std::string src = "import \"lib/crank_slider.mech\"\nimport \"lib/plate_cam.mech\"\n"
+            "mechanism m { ground bench { anchor o at (0, 0) }\n"
+            "  use crank_slider(crank_len = 0.1, rod_len = 0.3) as eng on bench at (0, 0)\n"
+            "  use plate_cam as pc on bench at (0.5, 0)\n"
+            "  drive eng.crank at 360 deg/s\n  drive pc.cam at 60 rpm }";
+        SweepAxis a, b;
+        std::string err;
+        CHECK(parseAxis("eng.crank_len=0.05,0.1,0.15", a, err));
+        SweepOptions opt;
+        opt.seconds = 1.0;
+        opt.reports = {"max:eng.piston.x"};
+        const SweepResult r = runSweep(src, {a}, opt);
+        CHECK(r.rows.size() == 3);
+        for (size_t i = 0; i < r.rows.size(); ++i) {
+            CHECK(r.rows[i].error.empty());
+            CHECK_APPROX(r.rows[i].metrics[0], a.values[i] + 0.3, 2e-3);          // dead centre: crank + rod
+        }
+        // a design that cannot be cut: the error row names the library line
+        CHECK(parseAxis("pc.base_r=0.025,-1", b, err));
+        const SweepResult bad = runSweep(src, {b}, opt);
+        CHECK(bad.rows.size() == 2 && bad.rows[0].error.empty() && !bad.rows[1].error.empty());
+        CHECK(bad.rows[1].error.find("must be positive") != std::string::npos);
+        CHECK(bad.rows[1].error.find("lib/plate_cam.mech:") != std::string::npos);
+        // a missing library stops the whole sweep with the loader's message
+        bool threw = false;
+        try { (void)runSweep("import \"nope.mech\"\n" + src, {a}, opt); }
+        catch (const std::runtime_error& e) { threw = std::string(e.what()).find("cannot find \"nope.mech\"") != std::string::npos; }
+        CHECK(threw);
+
+        // the command line: a file in a directory of its own, importing the repository's library by an
+        // absolute path; --set into the instance, imports listed by `check`, and an error inside the library
+        TempDir td;
+        char cwd[4096];
+        CHECK(getcwd(cwd, sizeof cwd) != nullptr);
+        const std::string lib = std::string(cwd) + "/lib";
+        const std::string good = td.put("good.mech",
+            "import \"" + lib + "/gear_pair.mech\"\nmechanism m { ground bench { anchor o at (0, 0) }\n"
+            "  use gear_pair as gp on bench at (0, 0)\n  drive gp.sa at 60 rpm }\n");
+        const std::string outFile = td.dir + "/out.txt";
+        std::string cmd = "./mech check " + good + " --set gp.teeth_b=50 > " + outFile + " 2>&1";
+        CHECK(std::system(cmd.c_str()) == 0);
+        const std::string out = readFile(outFile.c_str());
+        CHECK(out.find("imports:  " + lib + "/gear_pair.mech") != std::string::npos);
+        CHECK(out.find("gp.teeth_b = 50 (set; the file says 40)") != std::string::npos);
+        const std::string bad2 = td.put("bad.mech",
+            "import \"" + lib + "/plate_cam.mech\"\nmechanism m { ground bench { anchor o at (0, 0) }\n"
+            "  use plate_cam(base_r = -1) as pc on bench at (0, 0)\n  drive pc.cam at 60 rpm }\n");
+        cmd = "./mech check " + bad2 + " > " + outFile + " 2>&1";
+        CHECK(std::system(cmd.c_str()) != 0);
+        const std::string eout = readFile(outFile.c_str());
+        const int camLine = lineOfText(readFile("lib/plate_cam.mech"), "cam lobe on cam.A");
+        CHECK(eout.find(lib + "/plate_cam.mech:" + std::to_string(camLine) + ":") != std::string::npos);   // the library's file and line
+        CHECK(eout.find("cam 'pc.lobe': 'base' must be positive") != std::string::npos);
+        // sweep from the command line: the import is relative to the file, wherever the shell is
+        td.put("rods.mech", "part rods(len = 1.0) { rod r { length: len } }\n");
+        const std::string sw2 = td.put("sw2.mech",
+            "import \"rods.mech\"\nmechanism m { ground g { anchor o at (0, 0) } use rods as x\n"
+            "  pin x.r.A -> g.o\n  drive x.r at 90 deg/s }\n");
+        cmd = "./mech sweep " + sw2 + " --set x.len=0.5,1 --time 1 --report final:x.r.theta > " + outFile + " 2>&1";
+        CHECK(std::system(cmd.c_str()) == 0);
+        CHECK(readFile(outFile.c_str()).find("1.5708") != std::string::npos);        // 90 degrees after 1 s
+        const std::string missing = td.put("missing.mech", "import \"zzz.mech\"\nmechanism m { }\n");
+        cmd = "./mech check " + missing + " > " + outFile + " 2>&1";
+        CHECK(std::system(cmd.c_str()) != 0);
+        CHECK(readFile(outFile.c_str()).find("missing.mech:1:") != std::string::npos);
+        CHECK(readFile(outFile.c_str()).find("cannot find \"zzz.mech\"") != std::string::npos);
+    }
+}
+
 } // namespace (anonymous)
 
 namespace mech {
@@ -6449,6 +6853,7 @@ int runAllTests() {
     testRecorder();
     testParams();
     testParts();
+    testImports();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

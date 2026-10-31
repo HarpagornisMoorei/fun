@@ -1,0 +1,28 @@
+// camshaft — two cams from the standard library, geared 2:1. The library part knows
+// nothing about gears; the mechanism puts a gear on each cam's shaft (`c1.cam`, `c2.cam`
+// are the instances' shafts) and meshes them, so the second cam turns at half the speed,
+// the other way round.
+//
+//   mech check examples/camshaft.mech
+//   mech run   examples/camshaft.mech --headless 4 --csv camshaft.csv
+//   mech sweep examples/camshaft.mech --set c2.lift=0.01:0.03:0.01 --time 4 --report max:c2.follower.y
+//
+// `import` is resolved next to this file; the library lives in ../lib.
+import "../lib/plate_cam.mech"
+
+mechanism camshaft {
+  param mod   = 0.002                   // gear module, m
+  param teeth = 20                      // teeth on the driving gear; the driven one has twice as many
+  param dist  = mod * (teeth + 2 * teeth) / 2     // centre distance of the pair
+
+  ground bench { anchor origin at (0, 0) }
+
+  use plate_cam(lift = 0.012) as c1 on bench at (0, 0)
+  use plate_cam(lift = 0.020) as c2 on bench at (dist, 0)
+
+  gear g1 { teeth: teeth,     module: mod } on c1.cam
+  gear g2 { teeth: 2 * teeth, module: mod } on c2.cam
+  mesh g1 g2
+
+  drive c1.cam at 60 rpm
+}

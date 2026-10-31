@@ -111,6 +111,19 @@ Everything inside is reached by the instance's name (`left.follower.tip`, `--set
 `--report max:left.follower.y`), and an instanced file runs bit for bit like the flat one.
 See [`docs/PARTS.md`](docs/PARTS.md).
 
+## Standard parts
+
+`lib/` has four parts, each checked against its closed form: `plate_cam`, `crank_slider`,
+`four_bar` and `gear_pair`.
+
+```
+import "../lib/plate_cam.mech"
+...
+use plate_cam(lift = 0.02) as c on bench at (0, 0)
+```
+
+See [`docs/LIB.md`](docs/LIB.md); `import` itself is in [`docs/PARTS.md`](docs/PARTS.md).
+
 ## Examples
 
 | file | shows |
@@ -121,6 +134,7 @@ See [`docs/PARTS.md`](docs/PARTS.md).
 | `ratchet` | a ratchet wheel and gravity pawl with friction: one click per tooth forward, locked and at rest in reverse; energy ledger closes |
 | `ellipgears` | a pair of elliptical gears: input steady, output surging between 3x and 1/3x |
 | `jumpcam` | the plate cam with mass, a spring and a contact that can let go — cam jump, impacts, energy ledger |
+| `camshaft` | two library cams geared 2:1 from outside the parts, `import`ed from `lib/` |
 | `twincam`, `linkage_parts` | parts: one cam-and-follower used twice with different numbers; a crank-slider assembled from one ground-less `link` part |
 | `pendulum`, `doublepend`, `flywheel`, `oscillator`, `orbit` | dynamics |
 | `clock`, `clockface` | the flagship: a complete weight-driven clock |
@@ -133,6 +147,6 @@ implementation against. [`docs/design/contact.md`](docs/design/contact.md)
 is the design for contact (cams, Geneva drives, ratchets, non-circular
 gears); M6a through M6f (profiles, cam synthesis, unilateral contact,
 non-circular gears, polygons and a ratchet, friction) are implemented, as are
-parameters and sweeps ([`docs/PARAMS.md`](docs/PARAMS.md)) and reusable parts
-([`docs/PARTS.md`](docs/PARTS.md)). `scripts/` holds offscreen-rendering harnesses for
+parameters and sweeps ([`docs/PARAMS.md`](docs/PARAMS.md)) reusable parts
+([`docs/PARTS.md`](docs/PARTS.md)) and a library of standard ones ([`docs/LIB.md`](docs/LIB.md)). `scripts/` holds offscreen-rendering harnesses for
 screenshots without a display.
