@@ -76,6 +76,20 @@ struct GearDecl {
 struct MeshDecl {
     std::string gearA, gearB;
     bool tangent = false;
+    // M16: `mesh pinion on rack.R` — the pinion rolls on a straight rack whose pitch line is the
+    // rack anchor's line (gearB is empty)
+    bool rack = false;       // (`tangent` may follow, as for gears)
+    std::string rackBody, rackAnchor;
+    int line = 0;
+};
+
+// M16: belt NAME g1 -> g2 -> g3 [reverse g2]  — a belt or chain looped over pulleys (gears used as
+// pulleys, at their pitch radii). Each pulley turns the same way as the one before it unless it is
+// listed after `reverse` (a crossed belt).
+struct BeltDecl {
+    std::string name;
+    std::vector<std::string> gears;
+    std::vector<std::string> reversed;
     int line = 0;
 };
 
@@ -297,6 +311,7 @@ struct MechanismDecl {
     std::vector<JointDecl> joints;
     std::vector<GearDecl> gears;
     std::vector<MeshDecl> meshes;
+    std::vector<BeltDecl> belts;       // M16
     std::vector<SpringDecl> springs;
     std::vector<DriveDecl> drives;
     std::vector<ReduceDecl> reduces;   // M4 intent layer

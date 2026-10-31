@@ -20,7 +20,8 @@
 //   worldDecl   := 'world' '{' ('gravity' | 'step') ':' num* '}'
 //   gearDecl    := 'gear' IDENT '{' gearProp* '}' 'on' ref
 //   gearProp    := ('teeth' | 'module' | 'radius' | 'mass') ':' num
-//   meshDecl    := 'mesh' IDENT IDENT [ 'tangent' ]
+//   meshDecl    := 'mesh' IDENT IDENT [ 'tangent' ] | 'mesh' IDENT 'on' IDENT '.' IDENT
+//   beltDecl    := 'belt' IDENT IDENT ( '->' IDENT )+ [ 'reverse' IDENT+ ]
 //   springDecl  := 'spring' IDENT ref '->' ref '{' springProp* '}'
 //   springProp  := ('k' | 'rest' | 'damp') ':' num
 //
@@ -721,6 +722,7 @@ private:
         else if (acceptKw("world")) worldDecl(m);
         else if (acceptKw("gear")) gearDecl(m);
         else if (acceptKw("mesh")) meshDecl(m);
+        else if (cur().type == Tok::Ident && cur().text == "belt") { next(); beltDecl(m); }
         else if (acceptKw("spring")) springDecl(m);
         else if (acceptKw("pin")) jointDecl(m, JointDecl::Kind::Pin);
         else if (acceptKw("slide")) jointDecl(m, JointDecl::Kind::Slide);
@@ -971,6 +973,13 @@ private:
         MeshDecl d;
         d.line = cur().line;
         d.gearA = qref();
+        if (acceptKw("on")) {                    // M16: a pinion on a rack
+            d.rack = true;
+            parseRef(d.rackBody, d.rackAnchor);
+            if (cur().type == Tok::Ident && cur().text == "tangent") { next(); d.tangent = true; }
+            m.meshes.push_back(d);
+            return;
+        }
         d.gearB = qref();
         if (cur().type == Tok::Ident) {
             if (cur().text == "tangent") {
@@ -982,6 +991,23 @@ private:
             }
         }
         m.meshes.push_back(d);
+    }
+
+    // M16 — belt b g1 -> g2 -> g3 [reverse g2 g3]
+    void beltDecl(MechanismDecl& m) {
+        BeltDecl b;
+        Token name = expectIdent();
+        b.name = declName(name);
+        b.line = name.line;
+        b.gears.push_back(qref());
+        while (acceptSym("->")) b.gears.push_back(qref());
+        if (cur().type == Tok::Ident && cur().text == "reverse") {
+            const int ln = cur().line;
+            next();
+            while (cur().type == Tok::Ident && cur().line == ln) b.reversed.push_back(qref());
+            if (b.reversed.empty()) fail("'reverse' needs at least one pulley name");
+        }
+        m.belts.push_back(b);
     }
 
     // M6 — profile lobe on cam.A { circle: 0.03 }

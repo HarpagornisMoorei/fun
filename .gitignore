@@ -7,3 +7,5 @@
 coupler.*
 *.ppm
 *.png
+!docs/img/**/*.png
+__pycache__/

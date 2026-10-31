@@ -30,6 +30,7 @@ Rgba g_color{1.0, 1.0, 1.0, 1.0};
 double g_lineW = 1.0;
 unsigned g_matrixMode = 0x1701;   // GL_PROJECTION by default
 bool g_inBegin = false;
+bool g_blend = false;             // glEnable(GL_BLEND): source-alpha blending, as the viewer asks for
 unsigned g_mode = 0;
 std::vector<double> g_vx, g_vy;      // current vertex batch (world coords)
 
@@ -39,9 +40,15 @@ double g_ol = 0, g_or = 1, g_ob = 0, g_ot = 1;
 inline void putPx(int x, int y, const Rgba& c) {
     if (x < 0 || y < 0 || x >= g_W || y >= g_H) return;
     unsigned char* p = g_pix + (size_t)((g_H - 1 - y) * g_W + x) * 3;  // GL flips Y
-    p[0] = (unsigned char)(std::max(0.0, std::min(255.0, c.r * 255.0)));
-    p[1] = (unsigned char)(std::max(0.0, std::min(255.0, c.g * 255.0)));
-    p[2] = (unsigned char)(std::max(0.0, std::min(255.0, c.b * 255.0)));
+    // GL_BLEND with (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA): the viewer's translucent fills and lines. (Without this
+    // every alpha was ignored and a 16%-opaque cam fill came out solid.)
+    const double a = g_blend ? std::max(0.0, std::min(1.0, c.a)) : 1.0;
+    auto mix = [&](double src, unsigned char dst) {
+        return (unsigned char)(std::max(0.0, std::min(255.0, src * 255.0 * a + (double)dst * (1.0 - a) + 0.5)));
+    };
+    p[0] = mix(c.r, p[0]);
+    p[1] = mix(c.g, p[1]);
+    p[2] = mix(c.b, p[2]);
 }
 
 void drawLine(double x0, double y0, double x1, double y1) {
@@ -145,7 +152,7 @@ void glClear(GLbitfield mask) {
     for (size_t i = 0; i < (size_t)g_W * g_H * 3; i += 3) g_pix[i] = c[0], g_pix[i + 1] = c[1], g_pix[i + 2] = c[2];
 }
 void glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { g_color = {r, g, b, a}; }
-void glEnable(GLenum) {}
+void glEnable(GLenum cap) { if (cap == GL_BLEND) g_blend = true; }
 void glBlendFunc(GLenum, GLenum) {}
 void glLineWidth(GLfloat w) { g_lineW = (double)w; }
 void glMatrixMode(GLenum mode) { g_matrixMode = mode; }

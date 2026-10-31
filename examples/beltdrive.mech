@@ -1,0 +1,35 @@
+// beltdrive — a belt over three pulleys, the last one crossed. The small drive pulley (20 mm) turns
+// at 150 deg/s; a belt of fixed length makes every pulley's rim move at the same speed, so
+//
+//   output = input * r_in / r_out        (opposite sign for a pulley the belt crosses)
+//
+// B (50 mm) turns at 60 deg/s the same way, C (30 mm, crossed) at 100 deg/s the other way.
+//
+//   mech run examples/beltdrive.mech --headless 2
+//
+// Pulleys are `gear`s used at their pitch radii; `belt NAME a -> b -> c` loops a belt over them.
+// Unlike a gear mesh, the pulleys need not touch: only their centres' fixed shafts matter.
+mechanism beltdrive {
+  world { gravity: 0  step: 0.001 }
+
+  ground frame {
+    anchor a at (0, 0)
+    anchor b at (0.12, 0)
+    anchor c at (0.06, 0.09)
+  }
+
+  body pa { anchor s at (0, 0)  mass: 0.1 }
+  body pb { anchor s at (0, 0)  mass: 0.4 }
+  body pc { anchor s at (0, 0)  mass: 0.2 }
+  pin pa.s -> frame.a
+  pin pb.s -> frame.b
+  pin pc.s -> frame.c
+
+  gear ga { radius: 0.02 } on pa.s
+  gear gb { radius: 0.05 } on pb.s
+  gear gc { radius: 0.03 } on pc.s
+
+  belt strap ga -> gb -> gc reverse gc
+
+  drive pa at 150 deg/s
+}

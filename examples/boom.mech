@@ -9,6 +9,10 @@
 // boom at angle phi (the eye at distance b from its pivot, the pivots a apart on the ground):
 //   L^2 = (a_x - b cos phi)^2 + (a_y - b sin phi)^2 ... the law of cosines.
 // `drive piston.guide at 0.02 m/s from 0.50 m` makes L(t) = 0.50 + 0.02 t.
+//
+// The geometry limits the stroke: the eye is 0.25 m from the boom's pivot and the cylinder's base 0.41 m from it, so the
+// actuator can be no longer than 0.66 m. At 20 mm/s that is 8 s in; after that the boom is at full stretch and the
+// drive can no longer be followed (the live window then shows a mechanism that cannot assemble). Run it for a few seconds.
 mechanism boom {
   ground frame {
     anchor pivot at (0, 0)                    // the boom's pivot
