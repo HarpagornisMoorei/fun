@@ -19,6 +19,7 @@
 #include "model.hpp"
 #include "loader.hpp"
 #include "parser.hpp"
+#include "render.hpp"
 #include "viewer.hpp"
 #include "../tests/tests.hpp"
 
@@ -119,7 +120,19 @@ void printHelp() {
         "  mech run <file.mech> [options]      animate in an OpenGL window\n"
         "  mech sweep <file.mech> --set name=a:b:step [options]\n"
         "                                      run the design over a range of `param` values\n"
+        "  mech render <file.mech> -o out.svg  draw a pose, or an animation, as an SVG (no window)\n"
         "  mech test                           run unit tests\n"
+        "\n"
+        "render options:\n"
+        "  -o <file>           the SVG to write (\"-\" for standard output); required\n"
+        "  --at <sec>          the time of the still, or of the first frame (default 0)\n"
+        "  --frames <n>        n > 1: an animation that loops, n frames spread over --span\n"
+        "  --span <sec>        simulated seconds covered by the animation, or by the trace\n"
+        "  --speed <x>         playback speed of the animation (default 1)\n"
+        "  --trace <b.a>       draw the path of body b's anchor a over [--at, --at + --span]\n"
+        "  --width <px>        drawing width (default 800)\n"
+        "  --dark              the viewer's dark theme instead of a white page\n"
+        "  --set <name=value>  (repeatable) replace a `param` without editing the file\n"
         "\n"
         "run options:\n"
         "  --headless <sec>    simulate <sec> seconds without a window, print residuals\n"
@@ -783,6 +796,26 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
 } // namespace
 
 // mech sweep <file> --set name=range ... [--time s] [--dt s] [--report m]... [--probe b.a] [--csv f]
+// mech render <file> -o out.svg [--at s] [--frames n --span s] [--trace b.a] [--width px] [--dark]
+int cmdRender(const std::string& path, const RenderOptions& opt, const ParamOverrides& set,
+              const std::string& outPath) {
+    Program prog = loadAndParse(path, set);
+    if (prog.mechanisms.empty()) throw ToolError{path, 0, 0, "file contains no mechanism"};
+    Model m = buildOrThrow(path, prog.mechanisms[0]);
+    const RenderResult r = renderSvg(m, opt);
+    if (!r.ok) throw ToolError{path, 0, 0, r.error};
+    if (outPath == "-") {
+        std::fputs(r.svg.c_str(), stdout);
+    } else {
+        std::ofstream f(outPath, std::ios::binary);
+        if (!f) throw ToolError{outPath, 0, 0, "cannot write the SVG here"};
+        f << r.svg;
+        std::printf("wrote %s: %s, %d %s\n", outPath.c_str(), m.name.c_str(), r.frames,
+                    r.frames == 1 ? "pose" : "frames");
+    }
+    return 0;
+}
+
 int cmdSweep(const std::string& path, const std::vector<std::string>& setSpecs, const SweepOptions& opt,
              const std::string& csvPath) {
     const std::string src = readFile(path);
@@ -870,6 +903,39 @@ int main(int argc, char** argv) {
                 }
             }
             return cmdCheck(argv[2], ov);
+        }
+        if (cmd == "render") {
+            if (argc < 3) {
+                std::fprintf(stderr, "usage: mech render <file.mech> -o out.svg [--at s] [--frames n --span s] "
+                                     "[--trace b.a] [--width px] [--dark]\n");
+                return 1;
+            }
+            RenderOptions ro;
+            ParamOverrides set;
+            std::string outPath;
+            for (int i = 3; i < argc; ++i) {
+                const std::string a = argv[i];
+                if (a == "-o" && i + 1 < argc) outPath = argv[++i];
+                else if (a == "--at" && i + 1 < argc) ro.at = std::atof(argv[++i]);
+                else if (a == "--frames" && i + 1 < argc) ro.frames = std::atoi(argv[++i]);
+                else if (a == "--span" && i + 1 < argc) ro.span = std::atof(argv[++i]);
+                else if (a == "--speed" && i + 1 < argc) ro.speed = std::atof(argv[++i]);
+                else if (a == "--width" && i + 1 < argc) ro.width = std::atof(argv[++i]);
+                else if (a == "--trace" && i + 1 < argc) ro.trace = argv[++i];
+                else if (a == "--dark") ro.dark = true;
+                else if (a == "--set" && i + 1 < argc) {
+                    std::string err;
+                    if (!parseSetArg(argv[++i], set, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+                } else { std::fprintf(stderr, "unknown option '%s'\n", a.c_str()); return 1; }
+            }
+            if (outPath.empty()) { std::fprintf(stderr, "mech render needs -o <file.svg> (or -o - for standard output)\n"); return 1; }
+            if (ro.at < 0.0 || ro.span < 0.0 || !(ro.speed > 0.0) || !(ro.width >= 100.0 && ro.width <= 10000.0)) {
+                std::fprintf(stderr, "--at and --span must be >= 0, --speed > 0, --width between 100 and 10000\n");
+                return 1;
+            }
+            if (ro.frames < 1 || ro.frames > 600) { std::fprintf(stderr, "--frames must be between 1 and 600\n"); return 1; }
+            if (ro.frames > 1 && !(ro.span > 0.0)) { std::fprintf(stderr, "an animation needs --span <sec>\n"); return 1; }
+            return cmdRender(argv[2], ro, set, outPath);
         }
         if (cmd == "sweep") {
             if (argc < 3) {
