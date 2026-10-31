@@ -6,9 +6,9 @@
 CXX      ?= g++
 CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -Isrc
 
-CORE_SRC := src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/sweep.cpp src/kinematics.cpp src/dynamics.cpp
+CORE_SRC := src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/loader.cpp src/sweep.cpp src/kinematics.cpp src/dynamics.cpp
 CORE_HDR := src/geom.hpp src/ast.hpp src/lexer.hpp src/parser.hpp src/linalg.hpp \
-            src/model.hpp src/profile.hpp src/cam.hpp src/record.hpp src/sweep.hpp src/kinematics.hpp src/dynamics.hpp src/viewer.hpp tests/tests.hpp
+            src/model.hpp src/profile.hpp src/cam.hpp src/record.hpp src/loader.hpp src/sweep.hpp src/kinematics.hpp src/dynamics.hpp src/viewer.hpp tests/tests.hpp
 
 HAVE_GLFW := $(shell pkg-config --exists glfw3 && echo 1 || echo 0)
 

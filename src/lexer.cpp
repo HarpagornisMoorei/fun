@@ -102,6 +102,22 @@ std::vector<Token> lex(const std::string& src) {
             continue;
         }
 
+        // "text": a string, for the path of an `import`. No escapes, no line breaks.
+        if (c == '"') {
+            advance();
+            const size_t s0 = i;
+            while (i < src.size() && src[i] != '"' && src[i] != '\n') advance();
+            if (i >= src.size() || src[i] != '"')
+                throw LexError{tl, tc, "unterminated string (a string ends with '\"' on the same line)"};
+            Token t;
+            t.type = Tok::Str;
+            t.text = src.substr(s0, i - s0);
+            t.line = tl; t.col = tc;
+            advance();
+            out.push_back(t);
+            continue;
+        }
+
         // arrow before single '-'
         if (src.compare(i, 2, "->") == 0) {
             Token t; t.type = Tok::Sym; t.text = "->"; t.line = tl; t.col = tc;

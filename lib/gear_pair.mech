@@ -1,0 +1,23 @@
+// gear_pair — two meshing spur gears on parallel shafts, the centre distance set from the
+// teeth and module: module * (teeth_a + teeth_b) / 2.
+//
+//   import "../lib/gear_pair.mech"
+//   use gear_pair(teeth_a = 20, teeth_b = 60) as gp on bench at (0, 0)
+//   drive gp.sa at 60 rpm
+//
+// Ports:
+//   sa, sb            the two shafts (sa at the instance origin, sb on the +x axis)
+//   ga, gb            the gears, if the mechanism wants to mesh something else with them
+// Shaft sb turns at -teeth_a / teeth_b times the speed of sa.
+part gear_pair(teeth_a = 20, teeth_b = 40, module = 0.005) {
+  ground frame {
+    anchor a at (0, 0)
+    anchor b at (module * (teeth_a + teeth_b) / 2, 0)
+  }
+
+  shaft sa at frame.a
+  shaft sb at frame.b
+  gear ga { teeth: teeth_a, module: module } on sa
+  gear gb { teeth: teeth_b, module: module } on sb
+  mesh ga gb
+}

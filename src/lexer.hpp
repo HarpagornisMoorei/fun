@@ -14,6 +14,7 @@ enum class Tok : int {
     UnitDegPerSec,  // deg/s
     UnitRpm,        // rpm
     UnitDeg,        // deg
+    Str,            // "text" (M10: the path of an import); text holds the contents
 };
 
 struct Token {

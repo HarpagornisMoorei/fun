@@ -1,0 +1,28 @@
+// crank_slider — a slider-crank: a crank of length crank_len, a connecting rod of length
+// rod_len, and a piston sliding along a horizontal rail `offset` above the crank axle.
+//
+//   import "../lib/crank_slider.mech"
+//   use crank_slider(crank_len = 0.1, rod_len = 0.3) as eng on bench at (0, 0)
+//   drive eng.crank at 90 deg/s from 30 deg
+//
+// Ports:
+//   crank             the crank rod; A on the axle, B the crank pin
+//   conrod            the connecting rod; A on the crank pin, B on the piston
+//   piston            the piston body; piston.guide is the wrist pin (it slides on the rail)
+// With the crank at angle t, the piston's x is
+//   x(t) = crank_len cos t + sqrt(rod_len^2 - (crank_len sin t - offset)^2)
+// (the branch with the piston on the +x side of the axle).
+part crank_slider(crank_len = 0.3, rod_len = 1.0, offset = 0) {
+  ground frame {
+    anchor main at (0, 0)
+    anchor rail at (0, offset) dir (1, 0)
+  }
+
+  rod crank on frame.main { length: crank_len }
+  rod conrod { length: rod_len }
+  body piston { anchor guide at (0, 0) dir (1, 0) }
+
+  pin conrod.A -> crank.B
+  pin conrod.B -> piston.guide
+  slide piston.guide -> frame.rail
+}

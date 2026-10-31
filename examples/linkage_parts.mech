@@ -1,0 +1,36 @@
+// linkage_parts — the crank-slider of crankslider.mech, built from a part with no
+// ground of its own. `link` is just a rod with a length; `use` twice makes the
+// crank and the connecting rod, and the mechanism joins them with ordinary pins
+// by their qualified names (crank.r.B is anchor B of rod r inside instance crank).
+// A part without a ground needs no `on ... at`.
+//
+//   mech run examples/linkage_parts.mech --headless 2 --csv /tmp/ls.csv
+//
+// It builds the same model as crankslider.mech (the bodies are declared in the same
+// order), so the two files produce the same numbers: the CSV rows are identical.
+part link(len = 1.0) {
+  rod r { length: len }
+}
+
+mechanism linkage_parts {
+  ground base {
+    anchor main at (0, 0)
+    anchor rail at (0.9, 0) dir (1, 0)
+  }
+
+  use link(len = 0.3) as crank
+
+  body piston {
+    anchor guide at (0, 0) dir (1, 0)
+    anchor wrist at (0.22, 0)
+  }
+
+  use link(len = 1.0) as conrod
+
+  pin crank.r.A -> base.main
+  pin conrod.r.A -> crank.r.B
+  pin conrod.r.B -> piston.wrist
+  slide piston.guide -> base.rail
+
+  drive crank.r at 90 deg/s from 45 deg
+}

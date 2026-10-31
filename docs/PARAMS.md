@@ -150,6 +150,8 @@ degrees of the lift. Pick a window that covers the event you care about.
 
 ## 6. Limits
 
+* Parts (`docs/PARTS.md`, M9) give each instance its own parameters, addressed as `instance.name`
+  in `--set` and in sweep axes (`--set left.lift=0.012:0.036:0.008`).
 * Parameters are numbers. There are no parameter-valued strings, lists, or
   conditionals; structure cannot depend on a parameter.
 * Command-line overrides are literals.

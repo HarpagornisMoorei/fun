@@ -1,0 +1,30 @@
+// four_bar — a four-bar linkage: a ground link of length ground_len, a crank, a coupler and
+// a rocker. Crank pivot at the origin of the instance, rocker pivot at (ground_len, 0).
+//
+//   import "../lib/four_bar.mech"
+//   use four_bar(crank_len = 0.1) as lk on bench at (0, 0)
+//   drive lk.crank at 36 deg/s from 60 deg
+//
+// Ports:
+//   crank, coupler, rocker      the three moving rods (A and B ends as usual)
+// The defaults are a crank-rocker (Grashof: shortest + longest < the other two). With the crank
+// at angle theta and the rocker at angle phi (both measured from the ground link; the rocker from
+// its A end, the ground pivot, up to B), the closed loop gives Freudenstein's equation
+//   cos(theta - phi) = K3 + (d/a) cos(phi) - (d/c) cos(theta),
+//   K3 = (a^2 - b^2 + c^2 + d^2) / (2 a c)
+// with d = ground_len, a = crank_len, b = coupler_len, c = rocker_len.
+part four_bar(ground_len = 0.4, crank_len = 0.1, coupler_len = 0.35, rocker_len = 0.3) {
+  ground frame {
+    anchor p1 at (0, 0)
+    anchor p2 at (ground_len, 0)
+  }
+
+  rod crank   { length: crank_len }
+  rod coupler { length: coupler_len }
+  rod rocker  { length: rocker_len }
+
+  pin crank.A   -> frame.p1
+  pin coupler.A -> crank.B
+  pin rocker.A  -> frame.p2
+  pin coupler.B -> rocker.B
+}

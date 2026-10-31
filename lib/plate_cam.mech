@@ -1,0 +1,36 @@
+// plate_cam — a plate cam with a translating roller follower, cut from a displacement
+// diagram: the follower rises `lift` over `rise_deg` degrees (cycloidal), dwells for
+// `dwell_deg`, returns over `return_deg` (modified trapezoid), and dwells the rest of the turn.
+//
+//   import "../lib/plate_cam.mech"
+//   use plate_cam(lift = 0.02) as c on bench at (0, 0)
+//   drive c.cam at 30 rpm
+//
+// Ports (what the mechanism can reach, as <instance>.<name>):
+//   cam               the shaft the cam turns on; drive it, or put a gear on it
+//   lobe              the cam surface (touch / profile name)
+//   follower          the follower body; follower.tip is the roller centre
+// The follower rail is vertical through the axle. The roller centre rests at
+// base_r + roller_r above the axle and reaches base_r + roller_r + lift at the top.
+// The part carries no drive of its own, so the mechanism decides what turns it.
+part plate_cam(lift = 0.012, base_r = 0.025, roller_r = 0.006,
+               rise_deg = 100, dwell_deg = 60, return_deg = 140, rail_h = 0.09) {
+  ground frame {
+    anchor axle at (0, 0)
+    anchor rail at (0, rail_h) dir (0, 1)     // the follower's line of travel
+  }
+
+  shaft cam at frame.axle
+  cam lobe on cam.A {
+    base   base_r
+    roller roller_r
+    rise lift over rise_deg deg cycloidal
+    dwell dwell_deg deg
+    return over return_deg deg modtrap
+    dwell
+  }
+
+  body follower { anchor tip at (0, 0) dir (1, 0) }
+  slide follower.tip -> frame.rail
+  touch follower.tip on lobe
+}
