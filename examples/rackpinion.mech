@@ -1,0 +1,29 @@
+// rackpinion — a pinion driving a rack. The pinion (module 2 mm, 30 teeth, pitch radius 30 mm) turns
+// at 60 deg/s; the rack, held to a rail on the frame, advances r * theta = 31.4 mm per second.
+//
+//   mech run examples/rackpinion.mech --headless 2 --csv rack.csv
+//
+// `mesh pinion on rack.G` rolls the pinion's pitch circle on the straight line through the rack's
+// anchor G (its direction is the rack's). Swap the drive: `drive rack.G at 0.05 m/s` turns the
+// pinion instead, and the tool reports the same ratio the other way round.
+mechanism rackpinion {
+  world { gravity: 0  step: 0.001 }
+
+  ground frame {
+    anchor hub at (0, 0.03)
+    anchor rail  at (0, 0) dir (1, 0)
+  }
+
+  body wheel { anchor C at (0, 0)  mass: 0.2 }
+  pin wheel.C -> frame.hub
+  gear pinion { teeth: 30  module: 0.002 } on wheel.C
+
+  body rack {
+    anchor G at (0, 0) dir (1, 0)
+    mass: 0.5
+  }
+  slide rack.G -> frame.rail
+  mesh pinion on rack.G
+
+  drive wheel at 60 deg/s
+}

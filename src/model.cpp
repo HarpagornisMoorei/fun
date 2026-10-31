@@ -1,5 +1,6 @@
 // mech — model.cpp: AST -> runtime model, with static checks and desugaring
 #include "model.hpp"
+#include "kinematics.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -121,6 +122,12 @@ DofReport Model::dofReport() const {
     r.nProfiles = (int)profiles.size();
     r.nTouches = (int)touches.size();
     r.nPolarMeshes = (int)polarMeshes.size();
+    r.nRacks = (int)racks.size();
+    r.nTangentRacks = 0;
+    for (const RackMesh& rm : racks) if (rm.tangent) ++r.nTangentRacks;
+    r.nBelts = (int)belts.size();
+    r.nBeltRows = 0;
+    for (const Belt& b : belts) r.nBeltRows += (int)b.gears.size() - 1;
     r.nDrives = 0;
     for (const Drive& d : drives) if (d.enabled) ++r.nDrives;
     r.nTorques = (int)torques.size();
@@ -140,7 +147,7 @@ DofReport Model::dofReport() const {
     // one DOF each while engaged (the report shows the initial states).
     const int j = r.nPins + r.nSlides;
     r.freeDof = 3 * (r.nBodies - 1) - 2 * j - r.nSlots - r.nMeshes - r.nTangentMeshes - r.nTouches -
-                 r.nPolarMeshes;
+                 r.nPolarMeshes - r.nRacks - r.nTangentRacks - r.nBeltRows;
     r.residualDof = r.freeDof - r.nDrives - r.nLinearRate;     // a slot removes one DOF, a linear rate drive one
     return r;
 }
@@ -303,6 +310,15 @@ std::vector<std::string> Model::assemble(std::vector<double>& q) const {
             const int ha = gears[mm.gearA].body, hb = gears[mm.gearB].body;
             if (placed[ha] || placed[hb]) { meshLinked[ha] = 1; meshLinked[hb] = 1; }
         }
+        for (const RackMesh& rm : racks) {                       // M16: a pinion on a rack links their bodies
+            const int hp = gears[rm.gear].body, hr = rm.geom.railBody;
+            if (placed[hp] || placed[hr]) { meshLinked[hp] = 1; meshLinked[hr] = 1; }
+        }
+        for (const Belt& b : belts) {
+            bool any = false;
+            for (int g : b.gears) any = any || placed[gears[g].body];
+            if (any) for (int g : b.gears) meshLinked[gears[g].body] = 1;
+        }
         // M6: a contact links the touching body to the profile's host
         for (const TouchJoint& tj : touches) {
             const int hb = profiles[(size_t)tj.profile].body;
@@ -360,6 +376,28 @@ std::vector<std::string> Model::assemble(std::vector<double>& q) const {
         }
         mm.rollConst = ga.radius * thA + s * gb.radius * thB
                        - (ga.radius + s * gb.radius) * mm.psiTrack;
+    }
+
+    // M16: a rack captures which side the pinion is on and the rolling constant; a belt captures its
+    // link constants (the belt is taken to be at rest in the assembled pose).
+    for (const RackMesh& rm : racks) {
+        const SlideGeom g = slideGeom(*this, rm.geom, q);
+        const Gear& gr = gears[rm.gear];
+        const Vec2 v = g.pA - g.pB;
+        rm.side = crossz(g.u, v) >= 0.0 ? 1 : -1;
+        const double thP = bodies[gr.body].qOffset >= 0 ? q[bodies[gr.body].qOffset] : 0.0;
+        const double thR = rm.geom.railBody > 0 ? q[bodies[rm.geom.railBody].qOffset] : 0.0;
+        rm.K = dot(g.u, v) + rm.side * gr.radius * (thP - thR);
+    }
+    for (const Belt& b : belts) {
+        b.K.assign(b.gears.size() - 1, 0.0);
+        for (size_t i = 0; i + 1 < b.gears.size(); ++i) {
+            const Gear& ga = gears[b.gears[i]];
+            const Gear& gb = gears[b.gears[i + 1]];
+            const double thA = bodies[ga.body].qOffset >= 0 ? q[bodies[ga.body].qOffset] : 0.0;
+            const double thB = bodies[gb.body].qOffset >= 0 ? q[bodies[gb.body].qOffset] : 0.0;
+            b.K[i] = b.sign[i] * ga.radius * thA - b.sign[i + 1] * gb.radius * thB;
+        }
     }
 
     // Springs whose rest length was not given capture the assembled length.
@@ -444,6 +482,40 @@ std::vector<std::string> Model::validateAssembly(const std::vector<double>& q) c
                 mm.sgn < 0 ? "internal" : "external", d, std::fabs(want),
                 std::fabs(d - std::fabs(want)));
             errs.push_back(buf);
+        }
+    }
+    for (const RackMesh& rm : racks) {
+        const SlideGeom g = slideGeom(*this, rm.geom, q);
+        const Gear& gr = gears[rm.gear];
+        const double dist = std::fabs(crossz(g.u, g.pA - g.pB));
+        if (std::fabs(dist - gr.radius) > 1e-6 * std::max(1.0, gr.radius)) {
+            char buf[420];
+            std::snprintf(buf, sizeof buf,
+                "pinion '%s' is %.6f m from the rack line, but its pitch radius is %.6f — move the "
+                "pinion's host anchor or the rack's anchor so the pitch circle touches the pitch line",
+                gr.name.c_str(), dist, gr.radius);
+            errs.push_back(buf);
+        }
+    }
+    for (const Belt& b : belts) {                  // a belt needs a free tangent between neighbouring pulleys
+        const size_t n = b.gears.size();
+        double area = 0.0;
+        for (size_t i = 0; i < n; ++i) area += crossz(gearCenter(b.gears[i], q), gearCenter(b.gears[(i + 1) % n], q));
+        const double circ = area >= 0.0 ? 1.0 : -1.0;
+        for (size_t i = 0; i < (n == 2 ? 1 : n); ++i) {      // two pulleys have one tangent pair, not two
+            const size_t j = (i + 1) % n;
+            const Gear& gi = gears[(size_t)b.gears[i]];
+            const Gear& gj = gears[(size_t)b.gears[j]];
+            const double L = vlen(gearCenter(b.gears[j], q) - gearCenter(b.gears[i], q));
+            const double k = circ * (b.sign[j] * gj.radius - b.sign[i] * gi.radius);
+            if (L <= std::fabs(k) + 1e-9) {
+                char buf[420];
+                std::snprintf(buf, sizeof buf,
+                    "belt '%s': pulleys '%s' and '%s' are nested (centres %.4f m apart, radii %.4f and %.4f) — no "
+                    "belt can run between them; move the shafts apart or choose smaller pulleys",
+                    b.name.c_str(), gi.name.c_str(), gj.name.c_str(), L, gi.radius, gj.radius);
+                errs.push_back(buf);
+            }
         }
     }
     for (const PolarMesh& pm : polarMeshes) {
@@ -1248,6 +1320,43 @@ Model buildModel(const MechanismDecl& decl) {
 
     // --- meshes ---------------------------------------------------------------
     for (const MeshDecl& md : decl.meshes) {
+        if (md.rack) {                                  // M16: a pinion on a rack
+            RackMesh rm;
+            rm.line = md.line;
+            rm.tangent = md.tangent;
+            rm.gear = m.gearIndex(md.gearA);
+            if (rm.gear < 0) throw SemanticError{md.line, "mesh refers to unknown gear '" + md.gearA + "'"};
+            const Gear& gp = m.gears[(size_t)rm.gear];
+            const int rb = m.bodyIndex(md.rackBody);
+            if (rb < 0) throw SemanticError{md.line, "rack refers to unknown body '" + md.rackBody + "'"};
+            const int ra = m.anchorIndex(rb, md.rackAnchor);
+            if (ra < 0) throw SemanticError{md.line, "body '" + md.rackBody + "' has no anchor '" + md.rackAnchor + "'"};
+            const Anchor& rail = m.bodies[(size_t)rb].anchors[(size_t)ra];
+            if (rb == gp.body) {
+                throw SemanticError{md.line, "pinion '" + gp.name + "' sits on the rack's own body '" + md.rackBody + "'"};
+            }
+            if (!rail.hasDir) {
+                throw SemanticError{md.line, "rack anchor '" + md.rackBody + "." + md.rackAnchor +
+                    "' needs a direction — e.g. anchor R at (0, 0) dir (1, 0); the rack's pitch line runs along it"};
+            }
+            if (m.bodies[(size_t)gp.body].isGround) {
+                throw SemanticError{md.line, "pinion '" + gp.name + "' is on ground, and so is nothing to roll — put the "
+                    "pinion on a moving body (a ground rack with a moving pinion is fine)"};
+            }
+            rm.geom.guideBody = gp.body;
+            rm.geom.guideAnchor = gp.hostAnchor;
+            rm.geom.lockDir = false;
+            if (m.bodies[(size_t)rb].isGround) {
+                rm.geom.railPos = rail.local;
+                rm.geom.railDir = rail.dirLocal;
+            } else {
+                rm.geom.railBody = rb;
+                rm.geom.railAnchor = ra;
+            }
+            rm.geom.line = md.line;
+            m.racks.push_back(rm);
+            continue;
+        }
         // M6d: two profiles instead of two gears -> a non-circular gear pair
         const int pa = m.profileIndex(md.gearA), pb = m.profileIndex(md.gearB);
         const bool bothGears = m.gearIndex(md.gearA) >= 0 && m.gearIndex(md.gearB) >= 0;
@@ -1380,6 +1489,51 @@ Model buildModel(const MechanismDecl& decl) {
             throw SemanticError{md.line, buf};
         }
         m.meshes.push_back(mm);
+    }
+
+    // --- M16 belts -------------------------------------------------------------
+    {
+        std::unordered_set<std::string> beltNames;
+        for (const BeltDecl& bd : decl.belts) {
+            if (!beltNames.insert(bd.name).second) throw SemanticError{bd.line, "duplicate belt name '" + bd.name + "'"};
+            if (bd.gears.size() < 2) throw SemanticError{bd.line, "belt '" + bd.name + "' needs at least two pulleys"};
+            Belt b;
+            b.name = bd.name;
+            b.line = bd.line;
+            for (const std::string& gn : bd.gears) {
+                const int gi = m.gearIndex(gn);
+                if (gi < 0) throw SemanticError{bd.line, "belt '" + bd.name + "' refers to unknown pulley '" + gn + "'"};
+                for (int other : b.gears)
+                    if (other == gi) throw SemanticError{bd.line, "belt '" + bd.name + "' lists pulley '" + gn + "' twice"};
+                const Gear& gp = m.gears[(size_t)gi];
+                if (m.bodies[(size_t)gp.body].isGround)
+                    throw SemanticError{bd.line, "pulley '" + gn + "' of belt '" + bd.name + "' is on ground — nothing can turn"};
+                bool pinned = false;       // the centre must be a fixed point: the host pinned to ground there
+                for (const PinJoint& p : m.pins) {
+                    if (p.bodyA == gp.body && p.anchA == gp.hostAnchor && m.bodies[(size_t)p.bodyB].isGround) pinned = true;
+                    if (p.bodyB == gp.body && p.anchB == gp.hostAnchor && m.bodies[(size_t)p.bodyA].isGround) pinned = true;
+                }
+                if (!pinned) {
+                    throw SemanticError{bd.line, "pulley '" + gn + "' of belt '" + bd.name + "' is not on a fixed shaft — "
+                        "a belt needs its pulleys' centres pinned to ground (at the gear's anchor)"};
+                }
+                b.gears.push_back(gi);
+                b.sign.push_back(1);
+            }
+            for (const std::string& rn : bd.reversed) {
+                const int gi = m.gearIndex(rn);
+                bool found = false;
+                for (size_t k = 0; k < b.gears.size(); ++k)
+                    if (b.gears[k] == gi) { b.sign[k] = -1; found = true; }
+                if (!found) throw SemanticError{bd.line, "belt '" + bd.name + "' cannot reverse '" + rn + "': it is not one of its pulleys"};
+            }
+            for (size_t k = 0; k < b.gears.size(); ++k)
+                for (size_t l = k + 1; l < b.gears.size(); ++l)
+                    if (m.gears[(size_t)b.gears[k]].body == m.gears[(size_t)b.gears[l]].body)
+                        throw SemanticError{bd.line, "pulleys '" + m.gears[(size_t)b.gears[k]].name + "' and '" +
+                            m.gears[(size_t)b.gears[l]].name + "' of belt '" + bd.name + "' sit on one shaft — they cannot be joined by a belt"};
+            m.belts.push_back(b);
+        }
     }
 
     // --- M6 touches: a point rides a profile -------------------------------------

@@ -153,6 +153,90 @@ static void spring(const Theme& th, double px, std::vector<SceneItem>& out, Vec2
     polyline(out, pts, th.spring, 1.8, 0.95, "spring");
 }
 
+std::vector<RailSpan> newRackSpans(const Model& m) {
+    return std::vector<RailSpan>(m.racks.size());
+}
+
+void growRackSpans(const Model& m, const std::vector<double>& q, std::vector<RailSpan>& spans) {
+    for (size_t k = 0; k < m.racks.size() && k < spans.size(); ++k) {
+        const SlideGeom g = slideGeom(m, m.racks[k].geom, q);
+        const double t = dot(g.u, g.pA - g.pB);
+        spans[k].t0 = std::min(spans[k].t0, t);
+        spans[k].t1 = std::max(spans[k].t1, t);
+    }
+}
+
+namespace {
+
+// One run of a belt's closed path: a straight line or an arc of a pulley.
+struct BeltLeg {
+    bool arc = false;
+    Vec2 a, b;                   // line: end points
+    Vec2 c;                      // arc: centre
+    double r = 0.0, phi0 = 0.0, sweep = 0.0;   // arc: radius, start angle, signed sweep
+    double len = 0.0;
+    Vec2 at(double s) const {
+        if (!arc) return len > 0.0 ? a + (b - a) * (s / len) : a;
+        const double ang = phi0 + (sweep >= 0.0 ? 1.0 : -1.0) * s / r;
+        return c + Vec2{std::cos(ang), std::sin(ang)} * r;
+    }
+};
+
+// The path of a belt over its pulleys (tangent lines and wrapped arcs). Pulley i is wrapped counter-clockwise
+// when w_i = +1: w_i is the belt's circulation (the sign of the centres' polygon) times the pulley's sign, so a
+// crossed pulley is wrapped the other way and the tangent between unlike wraps is an inner (crossing) one.
+// For the run from pulley 1 to pulley 2 with direction angle alpha, the belt leaves and meets the circles at
+// c - w r perp(t); the run is straight when perp(t).d = w2 r2 - w1 r1, i.e. alpha = beta - asin(k / L).
+bool beltPath(const Model& m, const Belt& b, const std::vector<double>& q, std::vector<BeltLeg>& legs) {
+    const size_t n = b.gears.size();
+    std::vector<Vec2> c(n);
+    std::vector<double> r(n), w(n);
+    double area = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        c[i] = m.gearCenter(b.gears[i], q);
+        r[i] = m.gears[(size_t)b.gears[i]].radius;
+    }
+    for (size_t i = 0; i < n; ++i) area += crossz(c[i], c[(i + 1) % n]);
+    const double circ = area >= 0.0 ? 1.0 : -1.0;
+    for (size_t i = 0; i < n; ++i) w[i] = circ * b.sign[i];
+    std::vector<double> alpha(n);
+    for (size_t i = 0; i < n; ++i) {
+        const size_t j = (i + 1) % n;
+        const Vec2 d = c[j] - c[i];
+        const double L = vlen(d);
+        const double k = w[j] * r[j] - w[i] * r[i];
+        if (L <= std::fabs(k) + 1e-12) return false;          // pulleys nested: no belt between them
+        alpha[i] = std::atan2(d.y, d.x) - std::asin(k / L);
+    }
+    legs.clear();
+    for (size_t i = 0; i < n; ++i) {
+        const size_t j = (i + 1) % n, h = (i + n - 1) % n;
+        const Vec2 t{std::cos(alpha[i]), std::sin(alpha[i])};
+        BeltLeg run;
+        run.a = c[i] - perp(t) * (w[i] * r[i]);
+        run.b = c[j] - perp(t) * (w[j] * r[j]);
+        run.len = vlen(run.b - run.a);
+        // the arc on pulley i: from where the previous run arrives to where this one leaves
+        const Vec2 tin{std::cos(alpha[h]), std::sin(alpha[h])};
+        const Vec2 pin = c[i] - perp(tin) * (w[i] * r[i]), pout = run.a;
+        BeltLeg arc;
+        arc.arc = true;
+        arc.c = c[i];
+        arc.r = r[i];
+        arc.phi0 = std::atan2(pin.y - c[i].y, pin.x - c[i].x);
+        const double phi1 = std::atan2(pout.y - c[i].y, pout.x - c[i].x);
+        double sw = w[i] * (phi1 - arc.phi0);
+        sw -= 2.0 * kPi * std::floor(sw / (2.0 * kPi));
+        arc.sweep = w[i] * sw;
+        arc.len = r[i] * sw;
+        legs.push_back(arc);
+        legs.push_back(run);
+    }
+    return true;
+}
+
+} // namespace
+
 void SceneBuilder::pose(const std::vector<double>& q, std::vector<SceneItem>& out) const {
     const Rgb none{0, 0, 0};
     // gears
@@ -243,6 +327,82 @@ void SceneBuilder::pose(const std::vector<double>& q, std::vector<SceneItem>& ou
         line(out, g.pB + g.u * t0, g.pB + g.u * t1, th_.hub, 4.5, sj.lockDir ? "slide" : "slot", tag, 1.0, true);
         line(out, g.pB + g.u * t0, g.pB + g.u * t1, col, 4.5, "", "", 0.45, true);
     }
+    // M16: racks — a toothed bar along the pitch line, on the side away from the pinion, riding its body
+    for (size_t k = 0; k < m_.racks.size(); ++k) {
+        const RackMesh& rm = m_.racks[k];
+        const Gear& gp = m_.gears[(size_t)rm.gear];
+        const SlideGeom g = slideGeom(m_, rm.geom, q);
+        const double cur = dot(g.u, g.pA - g.pB);
+        double t0 = cur, t1 = cur;
+        if (k < racks_.size() && racks_[k].t1 >= racks_[k].t0) { t0 = racks_[k].t0; t1 = racks_[k].t1; }
+        const double margin = std::max(0.03 * extent_, 2.5 * gp.radius);
+        t0 -= margin; t1 += margin;
+        const double tooth = gp.module > 0.0 ? gp.module : std::max(0.08 * gp.radius, 3.0 * px_);
+        const double pitch = kPi * tooth;
+        const Vec2 n = perp(g.u) * (double)rm.side;            // toward the pinion
+        const Rgb col = th_.palette[(size_t)(rm.geom.railBody > 0 ? rm.geom.railBody - 1 : 0) % 5];
+        const std::string tag = " data-name=\"" + xml(gp.name) + "\"";
+        groupOpen(out, "rack", tag);
+        const double depth = 3.0 * tooth + 6.0 * px_;
+        polygon(out, {g.pB + g.u * t0, g.pB + g.u * t1, g.pB + g.u * t1 - n * depth, g.pB + g.u * t0 - n * depth},
+                col, 0.16, col, 2.0, "bar", tag);
+        line(out, g.pB + g.u * t0, g.pB + g.u * t1, col, 2.0, "pitch", tag, 0.6);
+        groupOpen(out, "teeth");
+        for (long i = (long)std::ceil(t0 / pitch); (double)i * pitch <= t1; ++i) {
+            const Vec2 p = g.pB + g.u * ((double)i * pitch);
+            line(out, p + n * (0.12 * tooth), p - n * (1.1 * tooth), col, 1.5, "tooth", "", 0.9);
+        }
+        groupClose(out);
+        groupClose(out);
+    }
+    // M16: belts — tangent runs, wrapped arcs, and marks that travel with the belt
+    for (const Belt& b : m_.belts) {
+        std::vector<BeltLeg> legs;
+        if (!beltPath(m_, b, q, legs)) continue;
+        double total = 0.0;
+        for (const BeltLeg& l : legs) total += l.len;
+        const std::string tag = " data-name=\"" + xml(b.name) + "\"";
+        const Rgb col = th_.spring;
+        groupOpen(out, "belt", tag);
+        for (const BeltLeg& l : legs) {
+            if (!l.arc) {
+                line(out, l.a, l.b, col, 3.0, "run", tag, 0.95, true);
+            } else if (l.len > 0.0) {
+                std::vector<Vec2> pts;
+                const int steps = std::max(2, (int)std::ceil(std::fabs(l.sweep) / (kPi / 36.0)));
+                for (int i = 0; i <= steps; ++i) pts.push_back(l.at(l.len * i / steps));
+                polyline(out, pts, col, 3.0, 0.95, "wrap", tag);
+            }
+        }
+        // marks: spaced round the belt, advanced by the first pulley's rim travel (circulation: forward is the
+        // direction the belt is drawn in, which is the direction of the pulley whose wrap sense matches its spin)
+        const Gear& g0 = m_.gears[(size_t)b.gears.front()];
+        const double th0 = m_.bodies[(size_t)g0.body].qOffset >= 0 ? q[(size_t)m_.bodies[(size_t)g0.body].qOffset] : 0.0;
+        double area = 0.0;
+        for (size_t i = 0; i < b.gears.size(); ++i)
+            area += crossz(m_.gearCenter(b.gears[i], q), m_.gearCenter(b.gears[(i + 1) % b.gears.size()], q));
+        const double circ = area >= 0.0 ? 1.0 : -1.0;
+        const double travel = circ * b.sign.front() * g0.radius * th0;          // arclength moved forward
+        const double spacing = std::max(total / 24.0, 1e-6);
+        groupOpen(out, "marks");
+        for (double s = std::fmod(travel, spacing) - spacing; s < total + spacing; s += spacing) {
+            double sc = s - total * std::floor(s / total);
+            for (const BeltLeg& l : legs) {
+                if (sc <= l.len) {
+                    const Vec2 p = l.at(sc), p2 = l.at(std::min(sc + 1e-4 * total, l.len));
+                    Vec2 dir = p2 - p;
+                    if (vlen(dir) < 1e-12) { const Vec2 pm = l.at(std::max(sc - 1e-4 * total, 0.0)); dir = p - pm; }
+                    if (vlen(dir) < 1e-12) break;
+                    const Vec2 nn = perp(normalize(dir));
+                    line(out, p - nn * (4.0 * px_), p + nn * (4.0 * px_), th_.outline, 2.0, "mark");
+                    break;
+                }
+                sc -= l.len;
+            }
+        }
+        groupClose(out);
+        groupClose(out);
+    }
     // springs
     for (const SpringJoint& sp : m_.springs)
         spring(th_, px_, out, m_.worldAnchor(sp.bodyA, sp.anchA, q), m_.worldAnchor(sp.bodyB, sp.anchB, q));
@@ -325,6 +485,10 @@ void SceneBuilder::fixed(std::vector<SceneItem>& out) const {
     }
     for (const Anchor& a : g.anchors) {
         if (!a.hasDir) continue;
+        bool rackLine = false;                    // M16: a ground rack draws its own toothed bar
+        for (const RackMesh& rm : m_.racks)
+            if (rm.geom.railBody == 0 && vlen(rm.geom.railPos - a.local) < 1e-9 && vlen(rm.geom.railDir - a.dirLocal) < 1e-9) rackLine = true;
+        if (rackLine) continue;
         double t0 = -0.06 * extent_, t1 = 0.06 * extent_;          // no slide uses it: a short stub
         for (const RailSpan& r : rails_) {
             if (vlen(r.pos - a.local) > 1e-9 || vlen(r.dir - a.dirLocal) > 1e-9 || r.t1 < r.t0) continue;

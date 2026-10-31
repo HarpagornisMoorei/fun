@@ -4030,8 +4030,9 @@ double biasDrift(const char* src, int* trials) {
             for (size_t i = 0; i < q.size(); ++i) qh[i] = q[i] + h * qd[i] + 0.5 * h * h * qdd[i];
             sys.residuals(qh, t + h, c);
             double mx = 0.0;
-            for (size_t i = 0; i < c.size(); ++i)
+            for (size_t i = 0; i < c.size(); ++i) {
                 mx = std::max(mx, std::fabs(c[i] - c0[i] - h * c1[i]));
+            }
             return mx;
         };
         double speed = 0.0;
@@ -8513,6 +8514,349 @@ void testSlides() {
 
 namespace mech {
 
+// ============================================================================
+// M16 — a pinion on a rack, and a belt over pulleys. Closed forms: the rack advances r theta (side +1) or
+// -r theta (pinion below the line); a rolling disc on an incline accelerates at g sin(a) / (1 + I/(m r^2)) with
+// a tangential force of (I/(m r^2)) m g sin(a) / (1 + I/(m r^2)); a belt makes every rim move alike, so the
+// speed ratio is r_in / r_out; and a loaded belt drive's inertia is I1 + I2 (r1/r2)^2. The drawing is read back
+// from the SVG: runs are tangent to their pulleys and have the length sqrt(L^2 - (r1 -+ r2)^2).
+// ============================================================================
+
+void testRackBelt() {
+    std::printf("[rack and belt M16]\n");
+    auto buildFails = [](const std::string& src, const char* needle) {
+        try { (void)buildModel(parse(lex(src)).mechanisms[0]); }
+        catch (const SemanticError& e) { return e.msg.find(needle) != std::string::npos; }
+        return false;
+    };
+    auto col = [](const SimSeries& s, const char* name) {
+        int i = colOf(s.columns, name);
+        if (i < 0)                                        // a column without a unit (maxRes)
+            for (size_t k = 0; k < s.columns.size(); ++k) if (s.columns[k] == name) i = (int)k;
+        CHECK(i > 0);
+        return i;
+    };
+
+    // ---- the language ----------------------------------------------------------------------------------------------
+    {
+        const Program p = parse(lex("mechanism x { ground g { anchor r at (0,0) dir (1,0) } body w { anchor c at (0,0) } "
+            "gear a { radius: 0.02 } on w.c  gear b { radius: 0.03 } on w.c  mesh a on g.r tangent  belt s a -> b  belt t a -> b -> a reverse b a }"));
+        const MechanismDecl& d = p.mechanisms[0];
+        CHECK(d.meshes.size() == 1 && d.meshes[0].rack && d.meshes[0].gearA == "a" && d.meshes[0].rackBody == "g" &&
+              d.meshes[0].rackAnchor == "r" && d.meshes[0].tangent && d.meshes[0].gearB.empty());
+        CHECK(d.belts.size() == 2 && d.belts[0].gears.size() == 2 && d.belts[1].gears.size() == 3);
+        CHECK(d.belts[1].reversed.size() == 2 && d.belts[1].reversed[0] == "b" && d.belts[1].reversed[1] == "a");
+        CHECK(d.belts[0].reversed.empty());
+        // `reverse` stops at the end of its line
+        const Program q = parse(lex("mechanism x { ground g { anchor r at (0,0) } belt s a -> b reverse b\n gear z { radius: 1 } on g.r }"));
+        CHECK(q.mechanisms[0].belts[0].reversed.size() == 1 && q.mechanisms[0].gears.size() == 1);
+        CHECK(parseFails("mechanism x { ground g { } belt s a -> b reverse }", "'reverse' needs"));
+    }
+
+    // ---- refusals --------------------------------------------------------------------------------------------------------
+    {
+        const std::string pre = "mechanism m { ground g { anchor hub at (0, 0.03) anchor rail at (0,0) dir (1,0) anchor nodir at (0,0) anchor h2 at (0.2, 0.03) } "
+                                "body w { anchor c at (0,0) } body w2 { anchor c at (0,0) } body slider { anchor G at (0,0) dir (1,0) } body bare { anchor c at (0,0) } "
+                                "pin w.c -> g.hub  pin w2.c -> g.h2  slide slider.G -> g.rail "
+                                "gear a { radius: 0.03 } on w.c  gear b { radius: 0.05 } on w2.c  gear loose { radius: 0.03 } on bare.c  gear onground { radius: 0.03 } on g.hub  "
+                                "gear twin { radius: 0.02 } on w.c ";
+        CHECK(!buildFails(pre + "mesh a on slider.G }", ""));
+        CHECK(buildFails(pre + "mesh nobody on slider.G }", "unknown gear"));
+        CHECK(buildFails(pre + "mesh a on nobody.G }", "unknown body"));
+        CHECK(buildFails(pre + "mesh a on slider.nowhere }", "has no anchor"));
+        CHECK(buildFails(pre + "mesh a on g.nodir }", "needs a direction"));
+        CHECK(buildFails(pre + "mesh a on w.c }", "own body"));
+        CHECK(buildFails(pre + "mesh onground on slider.G }", "is on ground"));
+        CHECK(!buildFails(pre + "belt s a -> b }", ""));
+        CHECK(buildFails(pre + "belt s a }", "at least two"));
+        CHECK(buildFails(pre + "belt s a -> nobody }", "unknown pulley"));
+        CHECK(buildFails(pre + "belt s a -> b -> a }", "twice"));
+        CHECK(buildFails(pre + "belt s a -> b reverse loose }", "not one of its pulleys"));
+        CHECK(buildFails(pre + "belt s a -> loose }", "not on a fixed shaft"));       // the shaft is not pinned to ground
+        CHECK(buildFails(pre + "belt s a -> onground }", "is on ground"));
+        CHECK(buildFails(pre + "belt s a -> twin }", "one shaft"));
+        CHECK(buildFails(pre + "belt s a -> b belt s b -> a }", "duplicate belt"));
+        // a pinion that does not touch the rack line is rejected when the model is assembled
+        Model off = buildFromText((pre + "mesh a on slider.G }").c_str());
+        std::vector<double> q;
+        off.assemble(q);
+        CHECK(off.validateAssembly(q).empty());                                       // 0.03 above the line: tangent
+        Model far = buildFromText("mechanism m { ground g { anchor hub at (0, 0.04) anchor rail at (0,0) dir (1,0) } body w { anchor c at (0,0) } "
+                                  "body s { anchor G at (0,0) dir (1,0) } pin w.c -> g.hub slide s.G -> g.rail gear a { radius: 0.03 } on w.c mesh a on s.G }");
+        std::vector<double> q2;
+        far.assemble(q2);
+        const auto errs = far.validateAssembly(q2);
+        CHECK(errs.size() == 1 && errs[0].find("from the rack line") != std::string::npos);
+        // pulleys that overlap so far that no belt runs between them
+        Model nest = buildFromText("mechanism m { ground g { anchor a at (0,0) anchor b at (0.01, 0) } body p { anchor s at (0,0) } body r { anchor s at (0,0) } "
+                                   "pin p.s -> g.a pin r.s -> g.b gear gp { radius: 0.05 } on p.s gear gr { radius: 0.02 } on r.s belt k gp -> gr }");
+        std::vector<double> q3;
+        nest.assemble(q3);
+        const auto e3 = nest.validateAssembly(q3);
+        CHECK(e3.size() == 1 && e3[0].find("nested") != std::string::npos);
+    }
+
+    // ---- counting: a rolling row removes one DOF, a tangent rack one more, a belt one per link ------------------------------------
+    {
+        const Model m = modelFromFile("examples/rackpinion.mech");
+        const DofReport d = m.dofReport();
+        CHECK(d.nRacks == 1 && d.nTangentRacks == 0 && d.freeDof == 1 && d.residualDof == 0);
+        CHECK(ConstraintSystem(m).rowCount() == 2 + 2 + 1 + 1);                       // pin, slide, drive, rolling
+        const Model w = modelFromFile("examples/rollingwheel.mech");
+        CHECK(w.dofReport().nTangentRacks == 1 && w.dofReport().freeDof == 1);          // 3 - 2 rows
+        CHECK(ConstraintSystem(w).rowCount() == 2);
+        const Model b = modelFromFile("examples/beltdrive.mech");
+        const DofReport db = b.dofReport();
+        CHECK(db.nBelts == 1 && db.nBeltRows == 2 && db.freeDof == 1 && db.residualDof == 0);
+        CHECK(ConstraintSystem(b).rowCount() == 6 + 2 + 1);                           // three pins, two links, one drive
+    }
+
+    // ---- kinematics: x = r theta above the line, x = -r theta below it ------------------------------------------------------------
+    for (int below = 0; below < 2; ++below) {
+        const std::string src = std::string("mechanism k { ground g { anchor hub at (0, ") + (below ? "-0.03" : "0.03") + ") anchor rail at (0,0) dir (1,0) } "
+            "body w { anchor c at (0,0) } body s { anchor G at (0,0) dir (1,0) } pin w.c -> g.hub slide s.G -> g.rail "
+            "gear a { radius: 0.03 } on w.c mesh a on s.G drive w at 90 deg/s }";
+        const Model m = buildFromText(src.c_str());
+        const SimSeries s = simulate(m, 3.0, 1.0 / 30.0, {}, 1);
+        const int ix = col(s, "s.x"), itw = col(s, "w.theta");
+        double worst = 0.0, span = 0.0;
+        for (const auto& row : s.rows) {
+            const double th = row[(size_t)itw] - s.rows[0][(size_t)itw];
+            worst = std::max(worst, std::fabs(row[(size_t)ix] - s.rows[0][(size_t)ix] - (below ? -1.0 : 1.0) * 0.03 * th));
+            span = std::max(span, std::fabs(row[(size_t)ix] - s.rows[0][(size_t)ix]));
+        }
+        CHECK(worst < 1e-9);
+        CHECK(span > 0.14);                                                           // 0.03 * 1.5 pi: 270 degrees of turn
+    }
+    // the rack drives the pinion instead: a linear drive on the rack turns the pinion at v / r
+    {
+        const Model m = buildFromText("mechanism k { ground g { anchor hub at (0, 0.03) anchor rail at (0,0) dir (1,0) } "
+            "body w { anchor c at (0,0) } body s { anchor G at (0,0) dir (1,0) } pin w.c -> g.hub slide s.G -> g.rail "
+            "gear a { radius: 0.03 } on w.c mesh a on s.G drive s.G at 0.06 m/s }");
+        const SimSeries s = simulate(m, 2.0, 1.0 / 30.0, {}, 1);
+        const int itw = col(s, "w.theta");
+        const double dth = s.rows.back()[(size_t)itw] - s.rows[0][(size_t)itw];
+        CHECK_APPROX(dth, 0.06 * 2.0 / 0.03, 1e-8);
+    }
+    // a rack on a turning body: pinion and rack share a pin, so the pinion follows the rack's turn exactly
+    // (this is the rack's own rotation cancelling out of the rolling row)
+    for (int dyn = 0; dyn < 2; ++dyn) {
+        const std::string head = dyn ? "mechanism k { world { gravity: 0 step: 0.0005 } " : "mechanism k { ";
+        const std::string src = head + "ground g { anchor o at (0,0) } "
+            "body w { anchor c at (0,0) mass: 1 inertia: 0.01 } body r { anchor o at (0,0) anchor R at (0.0, 0.03) dir (1, 0) mass: 1 inertia: 0.01 } "
+            "pin w.c -> g.o  pin r.o -> g.o gear a { radius: 0.03 } on w.c mesh a on r.R " + (dyn ? "drive r torque 0.2 }" : "drive r at 120 deg/s }");
+        const Model m = buildFromText(src.c_str());
+        const SimSeries s = simulate(m, 1.0, 1.0 / 60.0, {}, 1);
+        const int ip = col(s, "w.theta"), ir = col(s, "r.theta");
+        double worst = 0.0, moved = 0.0;
+        for (const auto& row : s.rows) {
+            worst = std::max(worst, std::fabs((row[(size_t)ip] - row[(size_t)ir]) - (s.rows[0][(size_t)ip] - s.rows[0][(size_t)ir])));
+            moved = std::max(moved, std::fabs(row[(size_t)ir] - s.rows[0][(size_t)ir]));
+        }
+        CHECK(worst < 1e-9);
+        CHECK(moved > 0.1);
+        if (dyn) {
+            // torque 0.2 on two coupled discs: (I_r + I_w) alpha = 0.2, inertias taken from the model
+            const double I = m.mass[1].inertia + m.mass[2].inertia;
+            CHECK_APPROX(s.rows.back()[(size_t)col(s, "r.omega")] , 0.2 / I * 1.0, 1e-6 * 0.2 / I);
+        }
+    }
+
+    // ---- a disc rolling down a slope: the closed form for the acceleration, the friction force, and energy -------------------------
+    for (double a : {20.0, 30.0, 55.0}) {
+        ParamOverrides ov;
+        ov["a"] = a;
+        const Model m = modelFromFile("examples/rollingwheel.mech", ov);
+        const double mass = m.mass[1].mass, I = m.mass[1].inertia, r = 0.02;
+        const double k = I / (mass * r * r), sa = std::sin(deg2rad(a));
+        const SimSeries s = simulate(m, 0.6, 1.0 / 60.0, {}, 1);
+        const int iw = col(s, "wheel.omega"), ifr = col(s, "tyre.rack"), ile = col(s, "ledger.residual"), imr = col(s, "maxRes");
+        double worstOmega = 0.0, worstForce = 0.0, worstLedger = 0.0, worstRes = 0.0;
+        for (const auto& row : s.rows) {
+            const double t = row[0];
+            worstOmega = std::max(worstOmega, std::fabs(std::fabs(row[(size_t)iw]) - 9.81 * sa / (1.0 + k) / r * t));
+            worstForce = std::max(worstForce, std::fabs(std::fabs(row[(size_t)ifr]) - mass * 9.81 * sa * k / (1.0 + k)));
+            worstLedger = std::max(worstLedger, std::fabs(row[(size_t)ile]));
+            worstRes = std::max(worstRes, row[(size_t)imr]);
+        }
+        CHECK(worstOmega < 1e-6 * 9.81 / r);                 // omega is exact in time: well under a part per million
+        CHECK(worstForce < 1e-6);
+        CHECK(worstLedger < 1e-6);
+        CHECK(worstRes < 1e-9);
+        // and it moves the right way: down the slope (towards -x), turning counter-clockwise
+        CHECK(s.rows.back()[(size_t)iw] > 0.0);
+    }
+    // the same disc with no slope never moves (a level rack: the wheel just sits there, held by the rolling row)
+    {
+        ParamOverrides ov;
+        ov["a"] = 0.0;
+        const Model m = modelFromFile("examples/rollingwheel.mech", ov);
+        const SimSeries s = simulate(m, 0.3, 1.0 / 60.0, {}, 1);
+        CHECK(std::fabs(s.rows.back()[(size_t)col(s, "wheel.omega")]) < 1e-9);
+    }
+    // the Jacobian and the velocity bias of the rack rows (tangent, rotating rack, moving centre) against finite differences
+    {
+        int n = 0;
+        // third derivatives are large here, so what shows a correct bias is how the drift scales (8x per halving of h)
+        CHECK(biasScalingRatio(readFile("examples/rollingwheel.mech").c_str(), &n) > 6.5 && n > 3);
+        const char* spin = "mechanism k { world { gravity: 0 step: 0.0005 } ground g { anchor o at (0,0) } "
+            "body w { anchor c at (0,0) mass: 1 inertia: 0.01 } body r { anchor o at (0,0) anchor R at (0.0, 0.03) dir (1, 0) mass: 1 inertia: 0.01 } "
+            "pin w.c -> g.o  pin r.o -> g.o gear a { radius: 0.03 } on w.c mesh a on r.R }";
+        n = 0;
+        CHECK(biasDrift(spin, &n) < 2e-9 && n > 3);
+    }
+
+    // ---- belts: every rim moves alike --------------------------------------------------------------------------------------------
+    {
+        const Model m = modelFromFile("examples/beltdrive.mech");
+        const SimSeries s = simulate(m, 2.0, 1.0 / 60.0, {}, 1);
+        const int ia = col(s, "pa.theta"), ib = col(s, "pb.theta"), ic = col(s, "pc.theta");
+        double worst = 0.0;
+        for (const auto& row : s.rows) {
+            const double da = row[(size_t)ia] - s.rows[0][(size_t)ia];
+            worst = std::max({worst, std::fabs(row[(size_t)ib] - s.rows[0][(size_t)ib] - 0.02 / 0.05 * da),
+                                     std::fabs(row[(size_t)ic] - s.rows[0][(size_t)ic] + 0.02 / 0.03 * da)});
+        }
+        CHECK(worst < 1e-9);
+        CHECK_APPROX(s.rows.back()[(size_t)ia] - s.rows[0][(size_t)ia], deg2rad(300.0), 1e-9);   // 150 deg/s for 2 s
+    }
+    // dynamics: a torque on the small pulley, a flywheel on the big one. The reflected inertia is I1 + I2 (r1/r2)^2, and the belt
+    // carries T = I2 alpha2 / r2 between them
+    {
+        const std::string src = "mechanism k { world { gravity: 0 step: 0.0005 } ground g { anchor a at (0,0) anchor b at (0.15, 0) } "
+            "body p { anchor s at (0,0) mass: 0.5 inertia: 0.004 } body q { anchor s at (0,0) mass: 2 inertia: 0.03 } pin p.s -> g.a pin q.s -> g.b "
+            "gear ga { radius: 0.03 } on p.s gear gb { radius: 0.08 } on q.s belt k ga -> gb drive p torque 0.5 }";
+        const Model m = buildFromText(src.c_str());
+        const double I1 = m.mass[1].inertia, I2 = m.mass[2].inertia, r1 = 0.03, r2 = 0.08;
+        const double alpha1 = 0.5 / (I1 + I2 * r1 * r1 / (r2 * r2));
+        const SimSeries s = simulate(m, 1.0, 1.0 / 60.0, {}, 1);
+        const int i1 = col(s, "p.omega"), i2 = col(s, "q.omega"), il = col(s, "k.link1"), ile = col(s, "ledger.residual");
+        double w1 = 0.0, w2 = 0.0, lk = 0.0, le = 0.0;
+        for (const auto& row : s.rows) {
+            w1 = std::max(w1, std::fabs(row[(size_t)i1] - alpha1 * row[0]));
+            w2 = std::max(w2, std::fabs(row[(size_t)i2] - alpha1 * r1 / r2 * row[0]));
+            lk = std::max(lk, std::fabs(std::fabs(row[(size_t)il]) - I2 * alpha1 * r1 / r2 / r2));
+            le = std::max(le, std::fabs(row[(size_t)ile]));
+        }
+        CHECK(w1 < 1e-6 * alpha1 && w2 < 1e-6 * alpha1);
+        CHECK(lk < 1e-6);
+        CHECK(le < 1e-9);
+    }
+
+    // ---- the drawing: read back from the SVG --------------------------------------------------------------------------------------
+    {
+        const Model m = modelFromFile("examples/beltdrive.mech");
+        RenderOptions opt;
+        opt.at = 0.7;
+        const RenderResult r = renderSvg(m, opt);
+        CHECK(r.ok);
+        const auto tags = svgTags(r.svg);
+        const auto runs = withClass(tags, "run", "line");
+        CHECK(runs.size() == 3);
+        std::vector<Vec2> centre{{0.0, 0.0}, {0.12, 0.0}, {0.06, 0.09}};
+        const double rad[3] = {0.02, 0.05, 0.03};
+        const int sgn[3] = {1, 1, -1};
+        double worstTan = 0.0, worstLen = 0.0;
+        for (size_t i = 0; i < 3; ++i) {
+            const size_t j = (i + 1) % 3;
+            const Vec2 a{runs[i].n("x1"), runs[i].n("y1")}, b{runs[i].n("x2"), runs[i].n("y2")};
+            // each end is on its pulley's pitch circle, and the run is perpendicular to the radius there
+            const Vec2 t = normalize(b - a);
+            worstTan = std::max({worstTan, std::fabs(vlen(a - centre[i]) - rad[i]), std::fabs(vlen(b - centre[j]) - rad[j]),
+                                 std::fabs(dot(t, a - centre[i])) , std::fabs(dot(t, b - centre[j]))});
+            // length: sqrt(L^2 - k^2), k = r_j (+-) r_i : the outer tangent for the same sense, the inner one for unlike senses
+            const double L = vlen(centre[j] - centre[i]);
+            const double k = sgn[i] == sgn[j] ? rad[j] - rad[i] : rad[j] + rad[i];
+            worstLen = std::max(worstLen, std::fabs(vlen(b - a) - std::sqrt(L * L - k * k)));
+        }
+        CHECK(worstTan < 1e-6);
+        CHECK(worstLen < 1e-6);
+        // the wraps close the loop: every arc point is on its pulley, and each arc starts where the run before it ended
+        const auto wraps = withClass(tags, "wrap", "polyline");
+        CHECK(wraps.size() == 3);
+        for (const SvgTag& w : wraps) {
+            const std::vector<Vec2> pts = svgPoints(w.s("points"));
+            CHECK(pts.size() >= 3);
+            int owner = -1;
+            for (int i = 0; i < 3; ++i) if (std::fabs(vlen(pts[0] - centre[(size_t)i]) - rad[i]) < 1e-6) owner = i;
+            CHECK(owner >= 0);
+            for (const Vec2& p : pts) CHECK(std::fabs(vlen(p - centre[(size_t)owner]) - rad[owner]) < 1e-6);
+            // continuity with the run that arrives (the one before) and the one that leaves
+            const Vec2 prevEnd{runs[(size_t)(owner + 2) % 3].n("x2"), runs[(size_t)(owner + 2) % 3].n("y2")};
+            const Vec2 nextStart{runs[(size_t)owner].n("x1"), runs[(size_t)owner].n("y1")};
+            CHECK(vlen(pts.front() - prevEnd) < 1e-6 && vlen(pts.back() - nextStart) < 1e-6);
+        }
+        // the marks travel with the belt: turning the input pulley by one mark spacing leaves the picture alone,
+        // by a fraction moves them by exactly r theta along the belt
+        const auto marks0 = withClass(tags, "mark", "line");
+        CHECK(marks0.size() >= 20);
+        // the same drawing a short time later (the drive turns 150 deg/s): every mark is on the belt, and a mark on a straight run has moved
+        // along it by r_a * delta-theta
+        RenderOptions later = opt;
+        later.at = 0.7 + 0.01;
+        const auto marks1 = withClass(svgTags(renderSvg(m, later).svg), "mark", "line");
+        CHECK(marks1.size() == marks0.size());
+        const double travel = 0.02 * deg2rad(150.0) * 0.01;
+        // pick the marks on the first run (between pulleys a and b): mid-points near that line
+        const Vec2 ra{runs[0].n("x1"), runs[0].n("y1")}, rb{runs[0].n("x2"), runs[0].n("y2")};
+        const Vec2 dir = normalize(rb - ra);
+        int checked = 0;
+        for (const SvgTag& mk : marks0) {
+            const Vec2 p{0.5 * (mk.n("x1") + mk.n("x2")), 0.5 * (mk.n("y1") + mk.n("y2"))};
+            const double along = dot(p - ra, dir), off = crossz(dir, p - ra);
+            if (std::fabs(off) > 1e-6 || along < 0.005 || along > vlen(rb - ra) - 0.005) continue;
+            double best = 1e9;
+            for (const SvgTag& m1 : marks1) {
+                const Vec2 p1{0.5 * (m1.n("x1") + m1.n("x2")), 0.5 * (m1.n("y1") + m1.n("y2"))};
+                if (std::fabs(crossz(dir, p1 - ra)) > 1e-6) continue;
+                const double d = dot(p1 - ra, dir) - along - travel;
+                if (std::fabs(d) < std::fabs(best)) best = d;
+            }
+            CHECK(std::fabs(best) < 1e-6);
+            ++checked;
+        }
+        CHECK(checked >= 3);
+    }
+    {
+        // a rack: the pitch line is at distance r from the pinion's centre, the bar is on the far side, and the teeth ride the rack
+        const Model m = modelFromFile("examples/rackpinion.mech");
+        RenderOptions o0, o1;
+        o0.at = 0.5;
+        o1.at = 0.5 + 0.1;
+        const auto t0 = svgTags(renderSvg(m, o0).svg), t1 = svgTags(renderSvg(m, o1).svg);
+        const auto pl = withClass(t0, "pitch", "line");
+        CHECK(pl.size() == 1);
+        CHECK_APPROX(pl[0].n("y1"), 0.0, 5e-6);
+        CHECK_APPROX(pl[0].n("y2"), 0.0, 5e-6);
+        const auto bar = withClass(t0, "bar", "polygon");
+        CHECK(bar.size() == 1);
+        for (const Vec2& p : svgPoints(bar[0].s("points"))) CHECK(p.y <= 1e-9);           // the pinion is above (y = +0.03): the bar below the line
+        // teeth: every tooth is at a multiple of pi * module from the rack anchor, which has moved by r * theta
+        const double pitch = kPi * 0.002, adv = 0.03 * deg2rad(60.0) * 0.1;
+        auto toothX = [&](const std::vector<SvgTag>& tags) {
+            std::vector<double> xs;
+            bool in = false;
+            for (const SvgTag& t : tags) {
+                if (t.name == "g" && t.s("class") == "teeth") in = true;
+                else if (t.name == "g") in = false;
+                if (in && t.name == "line" && t.s("class") == "tooth") xs.push_back(t.n("x1"));
+            }
+            return xs;
+        };
+        const std::vector<double> x0 = toothX(t0), x1 = toothX(t1);
+        CHECK(x0.size() > 10 && !x1.empty());
+        const double anchor0 = 0.03 * deg2rad(60.0) * 0.5, anchor1 = anchor0 + adv;       // x of the rack anchor
+        double w0 = 0.0, w1 = 0.0;
+        for (double x : x0) { const double u = (x - anchor0) / pitch; w0 = std::max(w0, std::fabs(u - std::round(u))); }
+        for (double x : x1) { const double u = (x - anchor1) / pitch; w1 = std::max(w1, std::fabs(u - std::round(u))); }
+        CHECK(w0 < 1e-3 && w1 < 1e-3);
+        // a ground rack draws its own bar instead of the hatched rail
+        const Model w = modelFromFile("examples/rollingwheel.mech");
+        const auto tw = svgTags(renderSvg(w, o0).svg);
+        CHECK(withClass(tw, "rail").empty() && withClass(tw, "rack").size() == 1);
+    }
+}
+
 int runAllTests() {
     testLexer();
     testParser();
@@ -8552,6 +8896,7 @@ int runAllTests() {
     testLoops();
     testRender();
     testSlides();
+    testRackBelt();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

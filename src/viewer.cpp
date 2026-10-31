@@ -282,7 +282,9 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
         spans[si].pos = m.slides[si].railPos;
         spans[si].dir = m.slides[si].railDir;
     }
+    std::vector<RailSpan> rackSpans = newRackSpans(m);
     auto updateSpans = [&]() {
+        growRackSpans(m, q, rackSpans);
         for (size_t si = 0; si < m.slides.size(); ++si) {
             const SlideGeom g = slideGeom(m, m.slides[si], q);
             const double t = m.slides[si].railBody == 0 ? dot(g.u, g.pA - m.slides[si].railPos) : dot(g.u, g.pA - g.pB);
@@ -478,7 +480,7 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
             std::vector<RailSpan> groundSpans;
             for (size_t si = 0; si < m.slides.size(); ++si)
                 if (m.slides[si].railBody == 0) groundSpans.push_back(spans[si]);
-            const SceneBuilder scene(m, darkTheme(), pxWorld, 2.0 * cam.halfH * std::max(aspect, 1.0), groundSpans, spans);
+            const SceneBuilder scene(m, darkTheme(), pxWorld, 2.0 * cam.halfH * std::max(aspect, 1.0), groundSpans, spans, rackSpans);
             std::vector<SceneItem> items;
             scene.fixed(items);
             drawItems(items, pxWorld);

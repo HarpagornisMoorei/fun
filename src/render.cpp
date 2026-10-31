@@ -245,8 +245,11 @@ RenderResult renderSvg(const Model& m, const RenderOptions& opt) {
         if (sj.railBody == 0) rails.push_back(r);
     }
 
+    std::vector<RailSpan> rackSpans = newRackSpans(m);
+    for (size_t k = 0; k < times.size(); ++k) growRackSpans(m, poses[k], rackSpans);
+
     const Theme th = opt.dark ? darkTheme() : lightTheme();
-    const SceneBuilder sb(m, th, pxWorld, std::max(ex, ey), rails, movingRails);
+    const SceneBuilder sb(m, th, pxWorld, std::max(ex, ey), rails, movingRails, rackSpans);
     auto scene = [&](const std::vector<double>& q) {
         std::vector<SceneItem> items;
         sb.pose(q, items);

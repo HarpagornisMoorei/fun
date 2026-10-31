@@ -72,6 +72,9 @@ public:
 
     // M14: the force (N, along the rail) each linear rate drive transmits into its guide; 0 for a force drive.
     const std::vector<double>& linearReactions() const { return lastLinReaction_; }
+    // M16: the tangential force between each pinion and its rack (N), and the force of each belt link (N)
+    const std::vector<double>& rackForces() const { return lastRackForce_; }
+    const std::vector<double>& beltForces() const { return lastBeltForce_; }
 
     // M6c: the normal force (N) of each touch from the last acceleration
     // solve; 0 for a contact that is not engaged.
@@ -130,6 +133,7 @@ private:
 
     mutable std::vector<double> lastReaction_;
     mutable std::vector<double> lastLinReaction_;
+    mutable std::vector<double> lastRackForce_, lastBeltForce_;
     mutable std::vector<double> lastContact_;
     mutable double lastDriveWork_ = 0.0;   // J of the last integrate() call
     mutable double lastFrictionLoss_ = 0.0; // J dissipated by friction in the last integrate()

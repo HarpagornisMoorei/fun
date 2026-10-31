@@ -114,6 +114,8 @@ int ConstraintSystem::rowCount() const {
     rows += (int)m.polarMeshes.size();
     for (const TouchJoint& tj : m.touches)
         if (tj.engaged) ++rows;        // M6c: a lifted-off contact adds no row
+    for (const RackMesh& rm : m.racks) rows += rm.tangent ? 2 : 1;   // M16: rolling (+ tangency) per pinion on a rack
+    for (const Belt& b : m.belts) rows += (int)b.gears.size() - 1;
     for (const LinearDrive& d : m.linDrives)
         if (!d.isForce) ++rows;        // M14: a linear rate drive is one row (a force is not a constraint)
     return rows;
@@ -181,6 +183,22 @@ void ConstraintSystem::residuals(const std::vector<double>& q, double t,
     for (const TouchJoint& tj : m.touches) {
         if (!tj.engaged) continue;
         c[r++] = m.touchState(tj, q).gap - tj.roller;
+    }
+    for (const RackMesh& rm : m.racks) {                       // M16
+        const SlideGeom g = slideGeom(m, rm.geom, q);
+        const Gear& gr = m.gears[(size_t)rm.gear];
+        const Vec2 v = g.pA - g.pB;
+        const double thP = q[(size_t)g.oA], thR = g.oB >= 0 ? q[(size_t)g.oB] : 0.0;
+        if (rm.tangent) c[r++] = crossz(g.u, v) - rm.side * gr.radius;
+        c[r++] = dot(g.u, v) + rm.side * gr.radius * (thP - thR) - rm.K;
+    }
+    for (const Belt& b : m.belts) {
+        for (size_t i = 0; i + 1 < b.gears.size(); ++i) {
+            const Gear& ga = m.gears[(size_t)b.gears[i]];
+            const Gear& gb = m.gears[(size_t)b.gears[i + 1]];
+            c[r++] = b.sign[i] * ga.radius * q[(size_t)m.bodies[(size_t)ga.body].qOffset] -
+                     b.sign[i + 1] * gb.radius * q[(size_t)m.bodies[(size_t)gb.body].qOffset] - b.K[i];
+        }
     }
     for (const LinearDrive& ld : m.linDrives) {                // M14: travel along the rail follows s0 + rate t
         if (ld.isForce) continue;
@@ -298,6 +316,42 @@ void ConstraintSystem::jacobian(const std::vector<double>& q,
         if (!tj.engaged) continue;
         touchRow(tj, q, &J[(size_t)r * cols]);
         ++r;
+    }
+    for (const RackMesh& rm : m.racks) {                       // M16
+        const SlideGeom g = slideGeom(m, rm.geom, q);
+        const Gear& gr = m.gears[(size_t)rm.gear];
+        const Vec2 v = g.pA - g.pB;
+        if (rm.tangent) {                                   // tangency: the slide offset row
+            addJ(J, cols, r, g.oA + 0, crossz(g.u, perp(g.rA)));
+            addJ(J, cols, r, g.oA + 1, -g.u.y);
+            addJ(J, cols, r, g.oA + 2,  g.u.x);
+            if (g.oB >= 0) {
+                addJ(J, cols, r, g.oB + 0, crossz(perp(g.u), v) - crossz(g.u, perp(g.rB)));
+                addJ(J, cols, r, g.oB + 1,  g.u.y);
+                addJ(J, cols, r, g.oB + 2, -g.u.x);
+            }
+            ++r;
+        }
+        // rolling: the linear row u.v plus side*r*(thP - thR)
+        const double sr = rm.side * gr.radius;
+        addJ(J, cols, r, g.oA + 0, dot(g.u, perp(g.rA)) + sr);
+        addJ(J, cols, r, g.oA + 1, g.u.x);
+        addJ(J, cols, r, g.oA + 2, g.u.y);
+        if (g.oB >= 0) {
+            addJ(J, cols, r, g.oB + 0, dot(perp(g.u), v) - dot(g.u, perp(g.rB)) - sr);
+            addJ(J, cols, r, g.oB + 1, -g.u.x);
+            addJ(J, cols, r, g.oB + 2, -g.u.y);
+        }
+        ++r;
+    }
+    for (const Belt& b : m.belts) {
+        for (size_t i = 0; i + 1 < b.gears.size(); ++i) {
+            const Gear& ga = m.gears[(size_t)b.gears[i]];
+            const Gear& gb = m.gears[(size_t)b.gears[i + 1]];
+            addJ(J, cols, r, m.bodies[(size_t)ga.body].qOffset, b.sign[i] * ga.radius);
+            addJ(J, cols, r, m.bodies[(size_t)gb.body].qOffset, -b.sign[i + 1] * gb.radius);
+            ++r;
+        }
     }
     for (const LinearDrive& ld : m.linDrives) {                // M14: d (u . (pA - pB))
         if (ld.isForce) continue;

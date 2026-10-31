@@ -220,6 +220,8 @@ int cmdCheck(const std::string& path, const ParamOverrides& overrides = {}) {
         if (d.nSlots > 0) std::printf("  ·  slots %d", d.nSlots);
         std::printf("  ·  gears %d  ·  meshes %d", d.nGears, d.nMeshes);
         if (d.nTangentMeshes > 0) std::printf(" (%d tangent)", d.nTangentMeshes);
+        if (d.nRacks > 0) std::printf("  ·  racks %d", d.nRacks);
+        if (d.nBelts > 0) std::printf("  ·  belts %d", d.nBelts);
         if (d.nTouches > 0) std::printf("  ·  profiles %d  ·  touches %d", d.nProfiles, d.nTouches);
         else if (d.nPolarMeshes > 0) std::printf("  ·  profiles %d  ·  non-circular meshes %d",
                                                   d.nProfiles, d.nPolarMeshes);
@@ -236,7 +238,8 @@ int cmdCheck(const std::string& path, const ParamOverrides& overrides = {}) {
         const int j = d.nPins + d.nSlides;
         std::printf("Grubler-Kutzbach (planar): F = 3(n-1) - 2j - k = 3*%d - 2*%d - %d = %d\n",
                     d.nBodies - 1, j,
-                    d.nSlots + d.nMeshes + d.nTangentMeshes + d.nTouches + d.nPolarMeshes, d.freeDof);   // k counts slots too
+                    d.nSlots + d.nMeshes + d.nTangentMeshes + d.nTouches + d.nPolarMeshes +
+                        d.nRacks + d.nTangentRacks + d.nBeltRows, d.freeDof);   // k counts slots, rack rows and belt links too
         if (d.residualDof == 0) {
             std::printf("residual DOF after drives: 0  ->  fully determined [ok]\n");
         } else if (d.residualDof > 0) {
@@ -397,6 +400,22 @@ int cmdCheck(const std::string& path, const ParamOverrides& overrides = {}) {
                         ratio,
                         internal ? "same direction" : "direction reversed (external)");
         }
+        for (const RackMesh& rm : m.racks) {
+            const Gear& gp = m.gears[(size_t)rm.gear];
+            std::printf("rack  %-8s on %s.%s  pitch radius %.4g  ->  rack travels %.4g m per radian of the pinion\n",
+                        gp.name.c_str(), m.bodies[(size_t)rm.geom.railBody].name.c_str(),
+                        rm.geom.railBody > 0 ? m.bodies[(size_t)rm.geom.railBody].anchors[(size_t)rm.geom.railAnchor].name.c_str() : "(ground)",
+                        gp.radius, gp.radius);
+        }
+        for (const Belt& b : m.belts) {
+            std::printf("belt  %-8s over", b.name.c_str());
+            for (size_t k = 0; k < b.gears.size(); ++k)
+                std::printf("%s %s%s", k ? " ->" : "", m.gears[(size_t)b.gears[k]].name.c_str(), b.sign[k] < 0 ? " (crossed)" : "");
+            const Gear& g0 = m.gears[(size_t)b.gears.front()];
+            const Gear& g1 = m.gears[(size_t)b.gears.back()];
+            std::printf("  ->  last pulley turns x%.4g of the first, %s\n", g0.radius / g1.radius,
+                        b.sign.front() * b.sign.back() > 0 ? "same direction" : "opposite direction");
+        }
         for (const TouchJoint& tj : m.touches) {
             const Body& tb = m.bodies[(size_t)tj.body];
             const ContactState cs = m.touchState(tj, q);
@@ -535,6 +554,7 @@ int cmdCheck(const std::string& path, const ParamOverrides& overrides = {}) {
         std::vector<std::string> geomErrs = m.validateAssembly(q);
         if (geomErrs.empty()) {
             if (!m.meshes.empty()) std::printf("mesh tangency: all %d meshes ok\n", d.nMeshes);
+            if (!m.racks.empty()) std::printf("racks: all %d pinions tangent to their rack line\n", d.nRacks);
             if (!m.polarMeshes.empty())
                 std::printf("non-circular meshes: all %d in rolling contact\n", d.nPolarMeshes);
             if (!m.touches.empty()) std::printf("contacts: all %d touches closed\n", d.nTouches);

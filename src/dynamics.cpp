@@ -343,6 +343,26 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
         const double Om = wA + cs.kappa * u;
         bias[r++] = dot(cs.normal, (-wB * wB) * rB + (wA * wA) * rA) + wA * u + Om * tw;
     }
+    // M16: a pinion on a rack. The tangency row is the slide offset row, the rolling row the linear row
+    // u.v (plus theta terms, which are linear): same biases as the slide and the linear drive. A belt's
+    // rows are linear in the angles of fixed shafts: bias 0.
+    std::vector<int> rackRoll;                // row of each rack's rolling constraint
+    for (const RackMesh& rm : m.racks) {
+        const SlideJoint& s = rm.geom;
+        const SlideGeom g = slideGeom(m, s, q);
+        const double wA = bodyW(s.guideBody), wB = s.railBody ? bodyW(s.railBody) : 0.0;
+        const Vec2 vA = anchorVel(s.guideBody, s.guideAnchor);
+        const Vec2 vB = s.railBody ? anchorVel(s.railBody, s.railAnchor) : Vec2{0.0, 0.0};
+        const Vec2 v = g.pA - g.pB, vdot = vA - vB;
+        if (rm.tangent)
+            bias[r++] = crossz((-wB * wB) * g.u, v) + 2.0 * crossz(wB * perp(g.u), vdot) +
+                        crossz(g.u, (-wA * wA) * g.rA + (wB * wB) * g.rB);
+        rackRoll.push_back(r);
+        bias[r++] = dot((-wB * wB) * g.u, v) + 2.0 * wB * dot(perp(g.u), vdot) +
+                    dot(g.u, (-wA * wA) * g.rA + (wB * wB) * g.rB);
+    }
+    const int beltRow0 = r;
+    for (const Belt& b : m.belts) r += (int)b.gears.size() - 1;
     // M14: linear rate drives. s = u . v, so s'' = J qdd + bias with
     //   bias = dot(-wB^2 u, v) + 2 wB dot(perp(u), vdot) + dot(u, -wA^2 rA + wB^2 rB)
     const int linRow0 = r;
@@ -500,6 +520,14 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
             ++rr;
         }
     }
+
+    // M16: rack tangential force (the rolling row's multiplier, N) and belt link forces
+    lastRackForce_.assign(m.racks.size(), 0.0);
+    for (size_t k = 0; k < m.racks.size(); ++k)
+        if (rackRoll[k] < (int)lam.size()) lastRackForce_[k] = lam[rackRoll[k]];
+    lastBeltForce_.clear();
+    for (int rr = beltRow0; rr < linRow0; ++rr)
+        lastBeltForce_.push_back(rr < (int)lam.size() ? lam[rr] : 0.0);
 
     // M14: the force each linear rate drive transmits (the multiplier of its row)
     lastLinReaction_.assign(m.linDrives.size(), 0.0);

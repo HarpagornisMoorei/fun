@@ -134,6 +134,35 @@ struct MeshJoint {
     int line = 0;
 };
 
+// M16 — a pinion rolling on a straight rack. The rack's pitch line is the line of its anchor (position
+// and direction ride the rack's body, which may be ground). With u that direction, v = pinion centre
+// minus rack anchor and r the pitch radius, two rows keep the pinion on the line and rolling on it:
+//   tangency:  crossz(u, v) - side*r                       = 0   (the centre stays at distance r;
+//                                                               only with `tangent`, like a gear mesh)
+//   rolling:   u.v + side*r*(thetaP - thetaR) - K          = 0   (no slip; K captured at assembly)
+// `side` (+1: the centre is on the left of u) and K are captured at assembly. The rack's own
+// rotation cancels out of the rolling derivative, so a rack on a rotating body is exact too.
+struct RackMesh {
+    int gear = -1;
+    SlideJoint geom;                  // guide: the pinion's centre; rail: the rack anchor (lockDir false)
+    bool tangent = false;             // also enforce the tangency row (else the joints are trusted to keep it)
+    mutable int side = 0;
+    mutable double K = 0.0;
+    int line = 0;
+};
+
+// M16 — a belt or chain over pulleys (gears used at their pitch radii) whose centres are fixed. A
+// closed belt of fixed length moves like a gear train: s_i r_i dTheta_i is the same for every pulley
+// (s_i = -1 for a pulley the belt crosses over). One row per link:
+//   s_i r_i theta_i - s_{i+1} r_{i+1} theta_{i+1} - K_i = 0
+struct Belt {
+    std::string name;
+    std::vector<int> gears;
+    std::vector<int> sign;            // +1 / -1 per pulley
+    mutable std::vector<double> K;    // per link, captured at assembly
+    int line = 0;
+};
+
 // M6d — a non-circular gear pair: two star-shaped profiles (circle, polar,
 // ellipse) on shafts pinned to ground, rolling on each other. The contact
 // point always lies on the line of centers, at distance r_A(phi_A) from A and
@@ -390,6 +419,10 @@ struct DofReport {
     int nHolds = 0;          // M5: hold rows enabled in the initial states
     int nProfiles = 0;       // M6: contact curves
     int nPolarMeshes = 0;    // M6d: non-circular gear pairs (one row each)
+    int nRacks = 0;          // M16: pinions on racks (one rolling row each)
+    int nTangentRacks = 0;   // M16: racks that also carry a tangency row
+    int nBelts = 0;          // M16: belts
+    int nBeltRows = 0;       // M16: one row per link
     int nTouches = 0;        // M6: point-on-curve contact rows
     int freeDof = 0;      // Grubler-Kutzbach mobility before drives
     int residualDof = 0;  // mobility left over after rate drives
@@ -418,6 +451,8 @@ public:
     std::vector<TouchJoint> touches;  // M6: point-on-curve contacts
     std::vector<CamInfo> cams;        // M6b: synthesized plate cams
     std::vector<PolarMesh> polarMeshes;   // M6d: non-circular gear pairs
+    std::vector<RackMesh> racks;          // M16
+    std::vector<Belt> belts;              // M16
 
     int nq() const { return 3 * (int)(bodies.size() - 1); }
 

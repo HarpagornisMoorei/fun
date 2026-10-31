@@ -46,14 +46,20 @@ struct RailSpan {
     double t0 = 1e30, t1 = -1e30;
 };
 
+// M16: where along each rack the pinion has been, measured from the rack's anchor along its line, so the
+// rack is drawn as long as the motion needs. One span per RackMesh.
+std::vector<RailSpan> newRackSpans(const Model& m);
+void growRackSpans(const Model& m, const std::vector<double>& q, std::vector<RailSpan>& spans);
+
 class SceneBuilder {
 public:
     // pxWorld: world units per screen pixel. extent: the size of the view in metres (rails and marks are
     // scaled by it). rails: spans of the slides whose rail is on the ground; movingRails: one span per slide
     // (used for the slides whose rail rides a moving body).
     SceneBuilder(const Model& m, const Theme& th, double pxWorld, double extent, std::vector<RailSpan> rails,
-                 std::vector<RailSpan> movingRails)
-        : m_(m), th_(th), px_(pxWorld), extent_(extent), rails_(std::move(rails)), moving_(std::move(movingRails)) {}
+                 std::vector<RailSpan> movingRails, std::vector<RailSpan> rackSpans = {})
+        : m_(m), th_(th), px_(pxWorld), extent_(extent), rails_(std::move(rails)), moving_(std::move(movingRails)),
+          racks_(std::move(rackSpans)) {}
 
     // what does not move: dials and the ground
     void fixed(std::vector<SceneItem>& out) const;
@@ -66,6 +72,7 @@ private:
     double px_, extent_;
     std::vector<RailSpan> rails_;
     std::vector<RailSpan> moving_;
+    std::vector<RailSpan> racks_;
 };
 
 } // namespace mech

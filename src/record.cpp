@@ -62,6 +62,11 @@ Recorder::Recorder(const Model& m, const DynamicsSystem* dyn, std::vector<Probe>
             if (d.enabled) cols_.push_back("drive." + m.bodies[(size_t)d.body].name + "[N*m]");
         for (const LinearDrive& ld : m.linDrives)           // the force each linear drive delivers along its rail
             cols_.push_back(slideLabel(m, m.slides[(size_t)ld.slide]) + ".force[N]");
+        for (const RackMesh& rm : m.racks)                  // M16: the tangential force between a pinion and its rack
+            cols_.push_back(m.gears[(size_t)rm.gear].name + ".rack[N]");
+        for (const Belt& b : m.belts)                       // M16: the force carried across each link of a belt
+            for (size_t i = 0; i + 1 < b.gears.size(); ++i)
+                cols_.push_back(b.name + ".link" + std::to_string(i + 1) + "[N]");
         cols_.push_back("KE[J]");
         cols_.push_back("PE[J]");
         cols_.push_back("E[J]");
@@ -120,6 +125,8 @@ std::vector<double> Recorder::sample(double t, const std::vector<double>& q,
             if (m_.drives[di].enabled) r.push_back(dyn_->driveReactions()[di]);
         for (size_t li = 0; li < m_.linDrives.size(); ++li)
             r.push_back(m_.linDrives[li].isForce ? m_.linDrives[li].force : dyn_->linearReactions()[li]);
+        for (size_t k = 0; k < m_.racks.size(); ++k) r.push_back(dyn_->rackForces()[k]);
+        for (double f : dyn_->beltForces()) r.push_back(f);
         const double KE = dyn_->kinetic(q, qd), PE = dyn_->potential(q);
         const HybridStats& hs = dyn_->hybridStats();
         r.push_back(KE);
