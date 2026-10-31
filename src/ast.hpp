@@ -37,6 +37,7 @@ struct BodyDecl {
     std::map<std::string, double> props;  // rod: { length, mass, from }
                                           // free body: { mass }
     // attach sugar: "rod crank on base.p1 { ... }" / "shaft a at frame.p1"
+    double frameRot = 0.0;                // M11: rotation (rad) of the part it was written in (rods, bodies)
     bool hasAttach = false;
     std::string attachBody, attachAnchor;
     int line = 0;
@@ -96,6 +97,7 @@ struct DriveDecl {
     bool hasFrom = false;
     bool isTorque = false;   // M3: torque drive (a force, not a constraint)
     double torque = 0.0;     // N*m, applied about the body's frame origin
+    double frameRot = 0.0;   // M11: rotation (rad) of the part this drive was written in
     bool isWeight = false;   // M5: weight drive (a bounded energy source)
     double weightMass = 0.0; // kg
     int weightSign = 1;      // +1: unwinds ccw (+theta); -1: 'cw'

@@ -32,7 +32,7 @@ part plate_cam(lift = 0.012, base_r = 0.025, speed = 30) {
 ```
 
 * A part is declared at the top of the file, outside any `mechanism`, **before**
-  the mechanisms (or other parts) that use it, or brought in with `import` (section 5). It is
+  the mechanisms (or other parts) that use it, or brought in with `import` (section 6). It is
   visible to every mechanism in the file.
 * The parenthesised list gives its **parameters** with defaults. Defaults are
   expressions (see `PARAMS.md`) and may use the parameters before them
@@ -59,7 +59,7 @@ mechanism twincam {
 }
 ```
 
-`use PART [ (arg = expr, ...) ] as NAME [ on GROUND at (x, y) ]`
+`use PART [ (arg = expr, ...) ] as NAME [ on GROUND at (x, y) [ rotate A deg ] ]`
 
 * Arguments are expressions evaluated in the **caller's** scope (they may use the
   mechanism's own `param`s). Arguments not given take the part's defaults.
@@ -74,7 +74,7 @@ mechanism twincam {
   the instance is mounted `on`, shifted by `at (x, y)`, and named
   `left.frame.axle`, `left.frame.rail`. Inside the part you keep writing
   `frame.axle`; the prefix and the shift are applied for you. The shift is a
-  translation: parts cannot be rotated when mounted. A ground-less part needs no
+  translation, unless `rotate` turns the part (section 3). A ground-less part needs no
   `on ... at`, and giving one is an error; a part with a ground that is used
   without it is an error too.
 * An instance name cannot be reused, and cannot be the name of a body.
@@ -89,7 +89,41 @@ use link(len = 1.0) as conrod
 pin conrod.r.A -> crank.r.B
 ```
 
-## 3. Parameters of an instance
+## 3. Rotating a mount
+
+```
+use plate_cam(lift = 0.02) as east on bench at (0.04, 0) rotate -90 deg
+```
+
+`rotate A deg` turns the part rigidly by `A` (counter-clockwise, an expression, so it can be a
+parameter and be swept) about the mount point `(x, y)`. Everything the part contributes to the ground
+turns with it: the positions of its ground anchors and their `dir`. That is what lets a
+vertical-rail cam point its follower any way you like.
+
+What else turns, and what does not:
+
+| in the part | with `rotate` |
+|---|---|
+| ground anchors: position and `dir` | turn about the mount point |
+| a rod's or body's `from:` angle | gains `A` |
+| a rate drive on a **rod or body**, `drive r at ... from 20 deg` (the start angle) | gains `A` |
+| a rate drive on a **shaft** | unchanged: a shaft's angle is measured against what it carries |
+| a cam's `start` (where its rail lies in the cam frame) | gains `A`: the cam is cut for the rail that turned with the part, so its lift against the shaft angle is the same whichever way the rail points |
+| the default starting guess of the solver for rods and bodies | turns with the part, so a rotated copy assembles on the same branch |
+| gravity | does **not** turn |
+| a drive written *outside* the part (`drive c.cam ...`) | is a world-frame statement and is not adjusted |
+
+A part with a `mode` cannot be rotated (an error at the `mode`, inside the part): its guards are angles
+in the gravity field, and a rotated clock is a different clock. Rotations nest: an inner `rotate` is in
+the outer part's frame, and the angles add (`rotate 90` inside `rotate 90` is 180).
+
+What this gives you, and what is tested: for kinematic parts, a rotated instance is the unrotated one turned
+about the mount point. Every body's position turns with it and the angles of rods shift by `A`, at any
+angle, for the slider-crank, four-bar, gear pair and plate cam; a dynamic part (a pendulum, for
+instance) equals the flat file with the turned numbers written out, bit for bit; `rotate 0 deg` is no
+rotation, bit for bit.
+
+## 4. Parameters of an instance
 
 Each instance has its own copy of the part's parameters, named `instance.param`
 (`left.lift`). These are the parameters of `PARAMS.md`:
@@ -112,7 +146,7 @@ mech sweep examples/twincam.mech --set left.lift=0.012:0.036:0.008 --time 2 \
   outer argument flows into the inner one (`lift = lift * 2`), and an override of
   the outer parameter reaches both.
 
-## 4. Parts in parts
+## 5. Parts in parts
 
 ```
 part pair(lift = 0.012) {
@@ -132,7 +166,7 @@ The inner part is mounted on the outer part's ground, whose own position is the
 sum of the offsets. A part can only use parts declared before it, which also rules
 out recursion (the error says so).
 
-## 5. Importing parts
+## 6. Importing parts
 
 ```
 import "../lib/plate_cam.mech"
@@ -158,16 +192,19 @@ the language changes. The standard parts are in `lib/` (see `LIB.md`).
 * **Not a module system.** There are no namespaces: imported parts share the file's one namespace. An
   `import` inside a `mechanism` or `part` is not a statement.
 
-## 6. What it does not do
+## 7. What it does not do
 
-* **No rotation or reflection** when mounting; no mounting on a moving body. To
+* **No reflection** when mounting (rotation is supported, mirroring is not); no mounting on a moving body. To
   attach an instance to a moving body, give the part a ground-less body and pin it
   from the mechanism, as in the linkage example.
 * **No conditionals or loops**: the structure of an instance does not depend on
   its parameters (the numbers do). Five identical instances are five `use` lines.
+* **Rotation is about the part's mount point and only for what the part owns.** It does not rotate gravity,
+  and refuses a part with a `mode`. A drive you write outside the part is in the world frame: when you
+  drive a rod of a rotated part from outside, add the rotation yourself (`from 20 + A deg`).
 * A part cannot declare a `world`, and a file's mechanisms do not share instances.
 
-## 7. Errors
+## 8. Errors
 
 Errors inside a part carry the line of the part's own text, and the model builder
 names the instance:
@@ -176,12 +213,12 @@ names the instance:
 error: cam 'left.lobe': 'base' must be positive      (line 8, inside the part)
 ```
 
-Misuse is caught at the `use`: unknown part (listing the declared ones), an
+Misuse is caught at the `use` (a `rotate` without a mount, without `deg`, or on a part containing a `mode` included): unknown part (listing the declared ones), an
 argument the part does not have (listing the ones it does), an argument given
 twice, a ground-less part given `on ... at`, a part with a ground and no `on`, a
 mount that is not a ground declared before, a name already taken.
 
-## 8. How it is checked
+## 9. How it is checked
 
 * Two instances of the plate-cam part, with different lifts and speeds, run
   **bit for bit** like the flat file with the same bodies written out.
@@ -194,6 +231,11 @@ mount that is not a ground declared before, a name already taken.
   energy-ledger residuals.
 * Nested parts equal the flat file, with the mount offsets added as the flat file
   adds them.
+* Rotated mounts: covariance (positions turn about the mount point, rod angles shift by the
+  rotation) at four angles for the slider-crank, four-bar and gear pair, and the plate cam's lift
+  along the turned rail equal to the unrotated one; a drive inside a rotated part equals the same
+  drive written outside with the angle added; a rotated pendulum equals the flat file with the
+  turned numbers written out, bit for bit; nested rotations add; `rotate 0 deg` changes nothing.
 * Mutation checks: breaking prefixing, the ground merge, the mount offset, the
   scope of parameters, argument binding, override keys, the recursion guard, the
   definition-time check, or any one of the name sites (`mesh`, `reduce`, `via`,

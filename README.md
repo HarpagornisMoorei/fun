@@ -122,7 +122,10 @@ import "../lib/plate_cam.mech"
 use plate_cam(lift = 0.02) as c on bench at (0, 0)
 ```
 
-See [`docs/LIB.md`](docs/LIB.md); `import` itself is in [`docs/PARTS.md`](docs/PARTS.md).
+Mounts can be rotated: `use plate_cam as east on bench at (0.04, 0) rotate -90 deg` turns the part about its
+mount point, so a library part written upright can point any way.
+
+See [`docs/LIB.md`](docs/LIB.md); `import` and rotation are in [`docs/PARTS.md`](docs/PARTS.md).
 
 ## Examples
 
@@ -134,6 +137,7 @@ See [`docs/LIB.md`](docs/LIB.md); `import` itself is in [`docs/PARTS.md`](docs/P
 | `ratchet` | a ratchet wheel and gravity pawl with friction: one click per tooth forward, locked and at rest in reverse; energy ledger closes |
 | `ellipgears` | a pair of elliptical gears: input steady, output surging between 3x and 1/3x |
 | `jumpcam` | the plate cam with mass, a spring and a contact that can let go — cam jump, impacts, energy ledger |
+| `camstar` | four library cams on a hub, each turned with `rotate` so its follower pushes radially outward |
 | `camshaft` | two library cams geared 2:1 from outside the parts, `import`ed from `lib/` |
 | `twincam`, `linkage_parts` | parts: one cam-and-follower used twice with different numbers; a crank-slider assembled from one ground-less `link` part |
 | `pendulum`, `doublepend`, `flywheel`, `oscillator`, `orbit` | dynamics |

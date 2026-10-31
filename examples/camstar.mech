@@ -1,0 +1,40 @@
+// camstar — four plate cams around one driver gear, each follower pushing radially outward.
+// The library cam's follower rail is vertical; `rotate` turns each instance about its own
+// axle so the rail points away from the hub, and the part's ground (axle and rail) turns with it.
+//
+//   mech check examples/camstar.mech
+//   mech run   examples/camstar.mech --headless 4 --csv camstar.csv
+//   mech sweep examples/camstar.mech --set east.lift=0.01:0.03:0.01 --time 4 --report max:east.follower.x
+//
+// The four cams are driven through gears, 1:1, so their lifts are in step; the driver turns at
+// 60 rpm and all four cams turn the opposite way (each one meshes the driver). A cam is cut for a
+// rail at a fixed angle in its own frame; `rotate` turns that with the part, so every cam keeps its
+// lift against its own shaft angle, whichever way its rail points.
+import "../lib/plate_cam.mech"
+
+mechanism camstar {
+  param mod   = 0.002                      // gear module, m
+  param teeth = 20                         // all five gears
+  param dist  = mod * teeth                // hub-to-cam centre distance of a pair of equal gears
+
+  ground bench { anchor hub at (0, 0) }
+
+  shaft driver at bench.hub
+  gear gd { teeth: teeth, module: mod } on driver
+
+  use plate_cam(lift = 0.012) as east  on bench at ( dist,  0)    rotate -90 deg   // rail (0,1) -> (1,0)
+  use plate_cam(lift = 0.012) as north on bench at ( 0,  dist)    rotate   0 deg   // rail stays (0,1)
+  use plate_cam(lift = 0.012) as west  on bench at (-dist,  0)    rotate  90 deg   // rail -> (-1,0)
+  use plate_cam(lift = 0.012) as south on bench at ( 0, -dist)    rotate 180 deg   // rail -> (0,-1)
+
+  gear ge { teeth: teeth, module: mod } on east.cam
+  gear gn { teeth: teeth, module: mod } on north.cam
+  gear gw { teeth: teeth, module: mod } on west.cam
+  gear gs { teeth: teeth, module: mod } on south.cam
+  mesh gd ge
+  mesh gd gn
+  mesh gd gw
+  mesh gd gs
+
+  drive driver at 60 rpm
+}

@@ -61,6 +61,7 @@ struct Body {
     std::string name;
     bool isGround = false;
     bool isShaft = false;        // zero-extent rotational body (M4 flag)
+    double frameRot = 0.0;       // M11: rotation of the part it came from; turns the default start tilt
     std::vector<Anchor> anchors;
     double length = 0.0;        // rods: distance between anchors A and B
     double beatSeconds = 0.0;   // M4: > 0 when the length came from 'beat:'

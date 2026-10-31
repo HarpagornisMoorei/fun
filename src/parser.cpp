@@ -82,7 +82,7 @@
 // M9 ('part' at top level and 'use' at statement start are contextual; 'as' too):
 //   partDecl    := 'part' IDENT [ '(' IDENT '=' expr { ',' IDENT '=' expr } ')' ] '{' stmt* '}'
 //   useDecl     := 'use' IDENT [ '(' IDENT '=' expr { ',' IDENT '=' expr } ')' ] 'as' IDENT
-//                  [ 'on' IDENT 'at' '(' expr ',' expr ')' ]
+//                  [ 'on' IDENT 'at' '(' expr ',' expr ')' [ 'rotate' expr 'deg' ] ]     (M11: rotate)
 //   ref         := qname '.' IDENT        qname := IDENT { '.' IDENT } while the prefix names an instance
 // A part is expanded at parse time: its body is re-parsed once per instance with every
 // name qualified by the instance ('left.follower'), so the model sees a flat mechanism.
@@ -151,8 +151,15 @@ private:
         std::vector<PartParam> params;
         size_t bodyPos = 0;                      // first token after '{'
     };
-    struct GroundAlias { std::string target; std::string anchorPrefix; Vec2 off; };
-    struct Mount { std::string target; Vec2 off; bool used = false; };
+    struct GroundAlias { std::string target; std::string anchorPrefix; Vec2 off; double rot = 0.0; };
+    struct Mount { std::string target; Vec2 off; double rot = 0.0; bool used = false; };
+
+    // p turned by `a` radians about the origin; a = 0 returns p untouched, bit for bit
+    static Vec2 turned(Vec2 p, double a) {
+        if (a == 0.0) return p;
+        const double c = std::cos(a), s = std::sin(a);
+        return Vec2{c * p.x - s * p.y, s * p.x + c * p.y};
+    }
     std::map<std::string, PartDef> parts_;
     std::vector<std::string> expanding_;         // parts being expanded (recursion guard)
     std::set<std::string> instances_;            // qualified instance names of this mechanism
@@ -485,10 +492,21 @@ private:
             expectSym(",");
             const double y = parseNum();
             expectSym(")");
+            double turn = 0.0;                                   // 'rotate A deg': the part, turned about (x, y)
+            if (cur().type == Tok::Ident && cur().text == "rotate") {
+                next();
+                const double v = checkFinite(parseNum());
+                if (cur().type != Tok::UnitDeg) fail("expected 'deg' after the rotation angle, got '" + cur().text + "'");
+                next();
+                turn = deg2rad(v);
+            }
             auto al = aliases_.find(g);
             if (al != aliases_.end()) {
+                // a mount on a part's own ground is in that part's frame: carry it into the world's
+                const Vec2 d = turned(Vec2{x, y}, al->second.rot);
                 mt.target = al->second.target;
-                mt.off = Vec2{al->second.off.x + x, al->second.off.y + y};
+                mt.off = Vec2{al->second.off.x + d.x, al->second.off.y + d.y};
+                mt.rot = al->second.rot + turn;
             } else {
                 bool isGround = false;
                 for (const BodyDecl& b : m.bodies) isGround = isGround || (b.name == g && b.kind == BodyDecl::Kind::Ground);
@@ -496,8 +514,11 @@ private:
                     throw ParseError{gt.line, gt.col, "'" + g + "' is not a ground declared before this 'use'"};
                 mt.target = g;
                 mt.off = Vec2{x, y};
+                mt.rot = turn;
             }
             mounted = true;
+        } else if (cur().type == Tok::Ident && cur().text == "rotate") {
+            fail("'rotate' goes with a mount: 'use ... as name on <ground> at (x, y) rotate A deg'");
         }
         const size_t endPos = pos_;
         instances_.insert(full);
@@ -579,10 +600,12 @@ private:
                              "mounted: 'use ... as name on <ground> at (x, y)'"};
         for (AnchorDecl a : g.anchors) {
             a.name = g.name + "." + a.name;
-            a.pos = Vec2{a.pos.x + mount_.off.x, a.pos.y + mount_.off.y};
+            const Vec2 r = turned(a.pos, mount_.rot);
+            a.pos = Vec2{r.x + mount_.off.x, r.y + mount_.off.y};
+            if (a.hasDir) a.dir = turned(a.dir, mount_.rot);
             target->anchors.push_back(a);
         }
-        aliases_[g.name] = GroundAlias{mount_.target, g.name + ".", mount_.off};
+        aliases_[g.name] = GroundAlias{mount_.target, g.name + ".", mount_.off, mount_.rot};
         mount_.used = true;
     }
 
@@ -637,6 +660,7 @@ private:
         b.kind = kind;
         Token name = expectIdent();
         b.name = declName(name);
+        if (kind == BodyDecl::Kind::Free) b.frameRot = mount_.rot;
         b.line = name.line;
         expectSym("{");
 
@@ -652,7 +676,7 @@ private:
                 // release angle, as for a rod: assembly seeds this body at the angle
                 next();
                 expectSym(":");
-                b.props["from"] = parseNum();
+                b.props["from"] = parseNum() + rad2deg(mount_.rot);   // a turned part's angles turn with it
                 if (cur().type == Tok::UnitDeg) { next(); }
                 else fail("expected 'deg' after the body's release angle, got '" + cur().text + "'");
             } else {
@@ -735,6 +759,7 @@ private:
         b.kind = BodyDecl::Kind::Rod;
         Token name = expectIdent();
         b.name = declName(name);
+        b.frameRot = mount_.rot;
         b.line = name.line;
         parseAttach(b);               // 'rod r on A.p { ... }'
         expectSym("{");
@@ -763,7 +788,7 @@ private:
                 // release angle: assembly seeds this body at the given angle
                 next();
                 expectSym(":");
-                b.props["from"] = parseNum();
+                b.props["from"] = parseNum() + rad2deg(mount_.rot);   // a turned part's angles turn with it
                 if (cur().type == Tok::UnitDeg) { next(); }
                 else fail("expected 'deg' after rod release angle, got '" + cur().text + "'");
             } else if (cur().type == Tok::Ident && cur().text == "mass") {
@@ -1018,6 +1043,7 @@ private:
             }
             skipSeparators();
         }
+        c.spec.startRad += mount_.rot;    // the cam is cut for a rail that turns with its part
         if (!hasHost && acceptKw("on")) host();
         if (!hasHost) {
             throw ParseError{name.line, name.col, "cam '" + c.name +
@@ -1160,6 +1186,7 @@ private:
             if (cur().type == Tok::UnitDeg) { next(); }
             else fail("expected 'deg' after initial angle, got '" + cur().text + "'");
         }
+        d.frameRot = mount_.rot;    // the model turns a rod's or body's start angle with its part (not a shaft's)
         m.drives.push_back(d);
     }
 
@@ -1319,6 +1346,9 @@ private:
     // 'state', 'when', 'hold', 'impulse', 'maintain' are contextual
     // identifiers, so they remain usable as ordinary names elsewhere.
     void modeDecl(MechanismDecl& m) {
+        if (mount_.rot != 0.0)
+            fail("a part with a 'mode' cannot be rotated: its guards are angles in the gravity field, "
+                 "which does not turn with the part");
         ModeDecl md;
         Token name = expectIdent();
         md.name = declName(name);

@@ -59,6 +59,14 @@ Two spur gears on parallel shafts, centres `module × (teeth_a + teeth_b)/2` apa
 Closed form checked for three tooth pairs: `Δθb = −(teeth_a/teeth_b) Δθa` (the gears start at a mesh
 phase the compiler picks, so the comparison is of changes), and the centre distance.
 
+## Placing them at an angle
+
+Every library part is written upright (a vertical cam rail, a ground link along +x) and is placed
+with a rotated mount: `use plate_cam as east on bench at (0.04, 0) rotate -90 deg`. The rotation
+turns the part's ground and the angles inside it (see `PARTS.md`, section 3); a cam keeps its lift
+against its own shaft angle whichever way its rail points. `examples/camstar.mech` mounts four cams
+around a hub with their followers pushing outward.
+
 ## Using them together
 
 `examples/camshaft.mech` imports `plate_cam` once and uses it twice, then puts a gear on each

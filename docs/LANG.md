@@ -1,4 +1,4 @@
-# The mech language — M10 specification
+# The mech language — M11 specification
 
 This document pins down the M6f kernel: lexical structure, grammar, static
 semantics, the kinematic solver's mathematical formulation, the
@@ -10,7 +10,7 @@ impact in dynamic ones), plate cams stated as displacement diagrams, and
 non-circular gear pairs (`mesh` between two profiles), and polygon profiles
 with filleted corners (ratchets and anything with teeth), and Coulomb friction at
 contacts, plus (M8) named parameters, numeric expressions and sweeps, and (M9) reusable
-parts, and (M10) `import` with a library of standard parts. It is the contract
+parts, and (M10) `import` with a library of standard parts, and (M11) rotated mounts. It is the contract
 the implementation is tested against (`mech test`).
 
 ---
@@ -111,7 +111,7 @@ paramDecl   = "param" IDENT "=" expr ;                       (* M8 *)
 partDecl    = "part" IDENT [ "(" paramInit { "," paramInit } ")" ] "{" { stmt } "}" ;   (* M9 *)
 paramInit   = IDENT "=" expr ;
 useDecl     = "use" IDENT [ "(" paramInit { "," paramInit } ")" ] "as" IDENT
-              [ "on" IDENT "at" "(" expr "," expr ")" ] ;
+              [ "on" IDENT "at" "(" expr "," expr ")" [ "rotate" expr "deg" ] ] ;     (* rotate: M11 *)
 (* A reference to a name is `qname`: IDENT { "." IDENT }, followed through while the prefix
    names an instance (`left.follower.tip`); `ref = qname "." IDENT`. *)
 (* Everywhere this grammar writes `num`, M8 accepts an expression that evaluates to one. *)
@@ -241,6 +241,14 @@ Checks run at model build time, each error pointing at a source line:
   the escapement's pair (a wheel driven by a weight and locked by a pallet).
   One hold row exists per held body across the whole mechanism: two modes
   cannot hold the same body.
+
+**M11 rotation checks:**
+
+* `rotate A deg` after the mount turns the part rigidly about the mount point: its ground anchors
+  (position and `dir`), the `from:` of its rods and bodies, the start angle of a rate drive on a rod or
+  body, a cam's `start`, and the solver's default starting guess for its rods and bodies. A drive on a
+  shaft, gravity, and anything written outside the part do not turn. Rotations nest and add; `rotate 0 deg`
+  is bit-for-bit no rotation. A part containing a `mode` cannot be rotated. See [`PARTS.md`](PARTS.md).
 
 **M10 import checks:**
 
@@ -1054,7 +1062,7 @@ resistance, more than one contact point per `touch`, and compliant
 
 ## 8. Test matrix
 
-`mech test` (14886 checks) covers: lexer tokens/units/keywords/comments/errors;
+`mech test` (14961 checks) covers: lexer tokens/units/keywords/comments/errors;
 parser AST shapes for all M3 and M4 forms and all error classes; model checks,
 desugaring, gear radius arithmetic, module rules, mass derivation (rods,
 discs, compound assemblies, overrides), DOF arithmetic including tangent
@@ -1261,6 +1269,19 @@ directory). Mutation checks cover the nesting depth, the parts-only rule, the ex
 canonical paths, line tagging, the search order, relative resolution, the lexer's string check, and the
 error plumbing in `check` and `sweep`.
 
+The M11 suite adds: covariance of rotated library parts at four angles (positions turn about the mount
+point, rod angles shift by the rotation, a slider's angle is compared modulo pi, shaft angles do not shift);
+the plate cam's lift along the turned rail equal to the unrotated lift and its shaft angle unchanged; a drive
+written inside a rotated part equal to the same drive written outside with the angle added, and a shaft's
+drive left alone; a rotated dynamic part (a pendulum under gravity) equal to the flat file with the turned
+numbers written out, bit for bit; `rotate 0 deg` identical to no rotation and `rotate 360 deg` equal to it to 1e-9;
+nested rotations adding (the inner mount carried into the world, the rail turned 180 degrees); an angle that is
+an expression and sweeps; `examples/camstar.mech` (four followers on four radial lines); and the refusals
+(missing `deg`, `rotate` without a mount, a division by zero in the angle, a `mode` at one and at two levels
+down). Mutation checks cover the rotation's sign, the ground positions and directions, `from:` on rods and
+bodies, the drive rule for rods and shafts, a cam's `start`, the default starting guess, nested angle and
+offset, the stored rotation of a ground, the `mode` refusal and the syntax checks.
+
 ## 9. Milestone history & reserved ground
 
 M1 walked the skeleton (lexer/parser/rods/pins/drives); M2 added shafts,
@@ -1329,6 +1350,9 @@ compared by running many of it. Reusable parts and composition remain open.
 M9 added reusable parts: `part` with parameters and `use ... as name on ground at (x, y)`
 (see `docs/PARTS.md`), expanded at parse time so the solver, dynamics and tooling are
 unchanged, and an instanced file runs bit for bit like the flat one.
+
+M11 added `rotate A deg` to a mount (see `docs/PARTS.md`): a part can be placed at any angle, and for
+kinematic parts the result is the unrotated one turned, which the tests check as covariance.
 
 M10 added `import` and `lib/` (plate cam, slider-crank, four-bar, gear pair; see `docs/LIB.md`). Imports are
 resolved on the token stream, so nothing downstream changed: a part from a library runs like the part
