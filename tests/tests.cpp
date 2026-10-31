@@ -5936,6 +5936,481 @@ void testParams() {
     }
 }
 
+// ============================================================================
+// M9 — parts and instances. The oracle throughout is the flat file: an instanced
+// mechanism must build the same model, and run the same numbers bit for bit, as the
+// mechanism written out by hand — the part machinery is expansion and nothing else.
+// ============================================================================
+
+std::vector<std::vector<double>> runRows(const std::string& src, double seconds, const ParamOverrides& ov = {}) {
+    const Model m = buildModel(parse(lex(src), ov).mechanisms[0]);
+    return simulate(m, seconds, 1.0 / 60.0, {}, 1).rows;
+}
+
+std::string readFile(const char* path) {
+    std::ifstream in(path);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+// The body of a file's only mechanism with its `world { ... }` block cut out, and that block.
+void splitMechanism(const std::string& src, std::string& body, std::string& world) {
+    const size_t mk = src.find("mechanism ");
+    const size_t nb = src.find('{', mk);
+    if (mk == std::string::npos || nb == std::string::npos) { body.clear(); return; }
+    body = src.substr(nb + 1, src.rfind('}') - nb - 1);
+    const size_t w = body.find("world {");
+    if (w != std::string::npos) {
+        const size_t e = body.find('}', w);
+        world = body.substr(w, e - w + 1);
+        body.erase(w, e - w + 1);
+    }
+}
+
+std::string wrapAsPart(const std::string& body, const std::string& world, const std::string& use) {
+    return "part unit {" + body + "}\nmechanism wrapped {\n " + world +
+           "\n ground mount { anchor o at (0, 0) }\n " + use + "\n}\n";
+}
+
+const char* kPlatePart = R"(
+part plate_cam(lift = 0.012, base_r = 0.025) {
+  ground frame {
+    anchor axle at (0, 0)
+    anchor rail at (0, 0.09) dir (0, 1)
+  }
+  shaft cam at frame.axle
+  cam lobe on cam.A {
+    base base_r
+    roller 0.006
+    rise lift over 100 deg cycloidal
+    dwell 60 deg
+    return over 140 deg modtrap
+    dwell
+  }
+  body follower { anchor tip at (0, 0) dir (1, 0) }
+  slide follower.tip -> frame.rail
+  touch follower.tip on lobe
+}
+)";
+
+bool partsFail(const std::string& src, const char* needle, int* lineOut = nullptr) {
+    try {
+        (void)parse(lex(src));
+    } catch (const ParseError& e) {
+        if (lineOut) *lineOut = e.line;
+        return e.msg.find(needle) != std::string::npos;
+    }
+    return false;
+}
+
+void testParts() {
+    std::printf("[parts M9]\n");
+
+    // ---- two instances equal the flat file, bit for bit ----------------------------------------
+    {
+        const std::string inst = std::string(kPlatePart) + R"(
+mechanism two {
+  ground base { anchor origin at (0, 0) }
+  use plate_cam(lift = 0.02) as left  on base at (0, 0)
+  use plate_cam              as right on base at (0.2, 0)
+  drive left.cam at 30 rpm
+  drive right.cam at 60 rpm
+})";
+        const std::string flat = R"(
+mechanism two {
+  ground base {
+    anchor origin at (0, 0)
+    anchor l_axle at (0, 0)
+    anchor l_rail at (0, 0.09) dir (0, 1)
+    anchor r_axle at (0.2, 0)
+    anchor r_rail at (0.2, 0.09) dir (0, 1)
+  }
+  shaft l_cam at base.l_axle
+  cam l_lobe on l_cam.A { base 0.025 roller 0.006 rise 0.02 over 100 deg cycloidal dwell 60 deg
+                          return over 140 deg modtrap dwell }
+  body l_follower { anchor tip at (0, 0) dir (1, 0) }
+  slide l_follower.tip -> base.l_rail
+  touch l_follower.tip on l_lobe
+  shaft r_cam at base.r_axle
+  cam r_lobe on r_cam.A { base 0.025 roller 0.006 rise 0.012 over 100 deg cycloidal dwell 60 deg
+                          return over 140 deg modtrap dwell }
+  body r_follower { anchor tip at (0, 0) dir (1, 0) }
+  slide r_follower.tip -> base.r_rail
+  touch r_follower.tip on r_lobe
+  drive l_cam at 30 rpm
+  drive r_cam at 60 rpm
+})";
+        const Program pi = parse(lex(inst));
+        const MechanismDecl& d = pi.mechanisms[0];
+        CHECK(d.instances.size() == 2 && d.instances[0].name == "left" && d.instances[0].part == "plate_cam");
+        CHECK(d.bodies.size() == 5);                                    // base + 2 x (cam, follower)
+        const Model m = buildModel(d);
+        const int il = m.bodyIndex("left.follower"), ir = m.bodyIndex("right.follower");
+        CHECK(il > 0 && ir > 0);                                        // names are qualified by the instance
+        const auto a = runRows(inst, 3.0), b = runRows(flat, 3.0);
+        CHECK(a.size() == b.size() && a.size() > 100);
+        CHECK(a == b);                                                  // every number of every row, exactly
+        // the two instances are independent: the left rises 20 mm, the right 12
+        double hl = 0.0, hr = 0.0;
+        for (const auto& row : a) {
+            hl = std::max(hl, row[1 + 3 * (size_t)(il - 1) + 2]);
+            hr = std::max(hr, row[1 + 3 * (size_t)(ir - 1) + 2]);
+        }
+        CHECK_APPROX(hl, 0.031 + 0.02, 1e-6);
+        CHECK_APPROX(hr, 0.031 + 0.012, 1e-6);
+    }
+
+    // ---- a whole dynamic file as one part: the clock, 30 s of hybrid dynamics ------------------
+    {
+        const std::string clock = readFile("examples/clock.mech");
+        std::string body, world;
+        splitMechanism(clock, body, world);
+        if (body.empty()) {
+            std::fprintf(stderr, "note: examples/clock.mech not found (cwd?)\n");
+        } else {
+            const auto flat = runRows(clock, 30.0);
+            const auto wrapped = runRows(wrapAsPart(body, world, "use unit as c on mount at (0, 0)"), 30.0);
+            CHECK(flat.size() > 1000);
+            CHECK(flat == wrapped);       // escapement, reductions, hands, dials, weight drive: every row identical
+            // moved elsewhere in the world it is still the same clock
+            const auto moved = runRows(wrapAsPart(body, world, "use unit as c on mount at (5, -3)"), 30.0);
+            CHECK(moved.size() == flat.size());
+            bool same = true;
+            for (size_t r = 0; r < flat.size(); ++r)
+                same = same && std::fabs(flat[r].back() - moved[r].back()) < 1e-9;   // pendulum omega
+            CHECK(same);
+        }
+    }
+
+    // ---- a dynamic part with parameters: the jumping cam, overridden through the instance ------
+    {
+        const std::string jump = readFile("examples/jumpcam.mech");
+        std::string body, world;
+        splitMechanism(jump, body, world);
+        if (!body.empty()) {
+            const std::string wrapped = wrapAsPart(body, world, "use unit as u on mount at (0, 0)");
+            // part-internal parameters carry the instance's name: --set u.speed
+            ParamOverrides flatOv, wrapOv;
+            flatOv["speed"] = 300.0;
+            wrapOv["u.speed"] = 300.0;
+            CHECK(runRows(jump, 0.3, flatOv) == runRows(wrapped, 0.3, wrapOv));
+            CHECK(runRows(jump, 0.3) == runRows(wrapped, 0.3));
+            CHECK(runRows(jump, 0.3, flatOv) != runRows(jump, 0.3));               // the override does something
+            CHECK(!parseFails(wrapped, "no such parameter", wrapOv));
+            CHECK(parseFails(wrapped, "u.speed", ParamOverrides{{"speed", 300.0}}));   // the bare name is not a parameter
+            // and a sweep over the instance's parameter finds the same lift-off counts and ledger as the flat one
+            SweepAxis af, aw;
+            std::string err;
+            CHECK(parseAxis("speed=300,600", af, err));
+            CHECK(parseAxis("u.speed=300,600", aw, err));
+            SweepOptions opt;
+            opt.seconds = 0.15;
+            opt.reports = {"liftoffs", "ledger"};
+            const SweepResult rf = runSweep(jump, {af}, opt);
+            const SweepResult rw = runSweep(wrapped, {aw}, opt);
+            CHECK(rf.rows.size() == 2 && rw.rows.size() == 2);
+            for (size_t i = 0; i < 2 && i < rw.rows.size(); ++i) {
+                CHECK(rw.rows[i].error.empty());
+                CHECK(rw.rows[i].metrics[0] == rf.rows[i].metrics[0]);
+                CHECK(rw.rows[i].metrics[1] == rf.rows[i].metrics[1]);
+            }
+            CHECK(rw.rows[0].metrics[0] == 0.0 && rw.rows[1].metrics[0] > 0.0);
+        }
+    }
+
+    // ---- part parameters: defaults, arguments, overrides ---------------------------------------
+    {
+        const std::string src = R"(
+part link(len = 0.1, ext = len * 2, n = 3) {
+  param total = len + ext + n * 0.001
+  ground g { anchor p at (0, 0) }
+  rod r on g.p { length: total }
+}
+mechanism m {
+  ground frame { anchor o at (0, 0) }
+  param bs = 0.05
+  use link as a on frame at (0, 0)
+  use link(len = bs * 2) as b on frame at (1, 0)
+  use link(len = 1, ext = 2, n = 0) as c on frame at (2, 0)
+})";
+        auto lengthOf = [](const Program& p, const char* body) {
+            for (const BodyDecl& b : p.mechanisms[0].bodies) if (b.name == body) return b.props.at("length");
+            return -1.0;
+        };
+        const Program p = parse(lex(src));
+        const MechanismDecl& d = p.mechanisms[0];
+        CHECK_APPROX(lengthOf(p, "a.r"), 0.1 + 0.2 + 0.003, 1e-15);    // ext defaults from len, n from its default
+        CHECK_APPROX(lengthOf(p, "b.r"), 0.1 + 0.2 + 0.003, 1e-15);    // argument evaluated in the caller's scope (base * 2 = 0.1)
+        CHECK_APPROX(lengthOf(p, "c.r"), 3.0, 1e-15);
+        auto param = [&](const Program& pr, const char* n) -> const ParamDecl* {
+            for (const ParamDecl& q : pr.mechanisms[0].params) if (q.name == n) return &q;
+            return nullptr;
+        };
+        CHECK(param(p, "a.len") && param(p, "a.len")->value == 0.1 && !param(p, "a.len")->overridden);
+        CHECK(param(p, "c.total") && param(p, "c.total")->value == 3.0);
+        CHECK(param(p, "bs") && !param(p, "len"));                    // a part's names do not leak out
+        CHECK(d.params.size() == 1 + 3 * 4);                           // base + (len, ext, n, total) per instance
+
+        // --set reaches an instance's parameter, and what depends on it follows
+        const Program q = parse(lex(src), ParamOverrides{{"a.len", 0.5}, {"c.n", 10.0}});
+        CHECK_APPROX(lengthOf(q, "a.r"), 0.5 + 1.0 + 0.003, 1e-15);   // ext = len * 2 followed
+        CHECK_APPROX(lengthOf(q, "b.r"), 0.1 + 0.2 + 0.003, 1e-15);   // the other instances untouched
+        CHECK_APPROX(lengthOf(q, "c.r"), 3.0 + 0.010, 1e-15);
+        CHECK(param(q, "a.len") && param(q, "a.len")->overridden && param(q, "a.len")->declared == 0.1);
+        // an override beats an argument too
+        const Program r = parse(lex(src), ParamOverrides{{"c.len", 5.0}});
+        CHECK_APPROX(lengthOf(r, "c.r"), 7.0, 1e-15);
+        // an unknown instance is an error that lists the real parameters
+        CHECK(parseFails(src, "a.len", ParamOverrides{{"zz.len", 1.0}}));
+    }
+
+    // ---- parts inside parts ----------------------------------------------------------------------
+    {
+        const std::string nested = std::string(kPlatePart) + R"(
+part pair(lift = 0.012) {
+  ground g { anchor m at (0, 0) }
+  use plate_cam(lift = lift) as a on g at (0, 0)
+  use plate_cam(lift = lift * 2) as b on g at (0.2, 0)
+}
+mechanism m {
+  ground base { anchor origin at (0, 0) }
+  use pair(lift = 0.01) as p on base at (0.1, 0)
+  drive p.a.cam at 30 rpm
+  drive p.b.cam at 30 rpm
+})";
+        const std::string flat = R"(
+mechanism m {
+  ground base {
+    anchor origin at (0, 0)
+    anchor g_m at (0.1, 0)
+    anchor a_axle at (0.1, 0)
+    anchor a_rail at (0.1, 0.09) dir (0, 1)
+    anchor b_axle at (0.1 + 0.2, 0)
+    anchor b_rail at (0.1 + 0.2, 0.09) dir (0, 1)
+  }
+  shaft a_cam at base.a_axle
+  cam a_lobe on a_cam.A { base 0.025 roller 0.006 rise 0.01 over 100 deg cycloidal dwell 60 deg
+                          return over 140 deg modtrap dwell }
+  body a_follower { anchor tip at (0, 0) dir (1, 0) }
+  slide a_follower.tip -> base.a_rail
+  touch a_follower.tip on a_lobe
+  shaft b_cam at base.b_axle
+  cam b_lobe on b_cam.A { base 0.025 roller 0.006 rise 0.02 over 100 deg cycloidal dwell 60 deg
+                          return over 140 deg modtrap dwell }
+  body b_follower { anchor tip at (0, 0) dir (1, 0) }
+  slide b_follower.tip -> base.b_rail
+  touch b_follower.tip on b_lobe
+  drive a_cam at 30 rpm
+  drive b_cam at 30 rpm
+})";
+        const Program p = parse(lex(nested));
+        CHECK(p.mechanisms[0].instances.size() == 3);
+        CHECK(p.mechanisms[0].instances[0].name == "p" && p.mechanisms[0].instances[1].name == "p.a");
+        CHECK(runRows(nested, 2.0) == runRows(flat, 2.0));
+        // a nested parameter is reached by its full name; an outer one flows into the inner argument
+        const Program q = parse(lex(nested), ParamOverrides{{"p.a.lift", 0.02}, {"p.lift", 0.011}});
+        double la = 0.0, lb = 0.0;
+        for (const CamDecl& c : q.mechanisms[0].cams) {
+            for (const CamSegment& sg : c.spec.segments) {
+                if (sg.kind != CamSegment::Kind::Rise) continue;
+                (c.name == "p.a.lobe" ? la : lb) = sg.lift;
+            }
+        }
+        CHECK_APPROX(la, 0.02, 1e-15);                                  // overridden directly
+        CHECK_APPROX(lb, 0.022, 1e-15);                                 // 2 x the overridden outer lift
+    }
+
+    // ---- the mount moves the whole part, in y as well as x --------------------------------------------
+    {
+        const std::string src = std::string(kPlatePart) + R"(
+mechanism m {
+  ground bench { anchor origin at (0, 0) }
+  use plate_cam as c on bench at (0.2, 0.05)
+  drive c.cam at 30 rpm
+})";
+        const Model m = buildModel(parse(lex(src)).mechanisms[0]);
+        const int ic = m.bodyIndex("c.cam"), iff = m.bodyIndex("c.follower");
+        const auto rows = runRows(src, 2.0);
+        double top = 0.0;
+        for (const auto& row : rows) top = std::max(top, row[1 + 3 * (size_t)(iff - 1) + 2]);
+        CHECK_APPROX(rows[0][1 + 3 * (size_t)(ic - 1) + 1], 0.2, 1e-12);            // the shaft sits at the mount
+        CHECK_APPROX(rows[0][1 + 3 * (size_t)(ic - 1) + 2], 0.05, 1e-12);
+        CHECK_APPROX(top, 0.05 + 0.031 + 0.012, 1e-6);                              // the lift is measured from there
+    }
+
+    // ---- a part's own ground keeps its mount after a nested part has been placed ---------------------
+    {
+        const std::string src = std::string(kPlatePart) + R"(
+part outer {
+  ground g { anchor m at (0, 0) }
+  use plate_cam as a on g at (0.2, 0.07)
+  ground h { anchor q at (0.01, 0.02) }
+}
+mechanism m {
+  ground base { anchor origin at (0, 0) }
+  use outer as p on base at (0.1, 0.03)
+})";
+        const Program pr = parse(lex(src));
+        const BodyDecl* base = nullptr;
+        for (const BodyDecl& b : pr.mechanisms[0].bodies) if (b.name == "base") base = &b;
+        CHECK(base != nullptr);
+        auto at = [&](const char* n, double x, double y) {
+            if (!base) return false;
+            for (const AnchorDecl& a : base->anchors)
+                if (a.name == n) return std::fabs(a.pos.x - x) < 1e-15 && std::fabs(a.pos.y - y) < 1e-15;
+            return false;
+        };
+        CHECK(at("p.h.q", 0.1 + 0.01, 0.03 + 0.02));            // h is mounted where the outer part is, not where the inner went
+        CHECK(at("p.g.m", 0.1, 0.03));
+        CHECK(at("p.a.frame.axle", 0.1 + 0.2, 0.03 + 0.07));
+    }
+
+    // ---- every kind of name site, in a kinematic gear train and in the clock -------------------------------
+    {
+        const std::string train = readFile("examples/train.mech");
+        std::string body, world;
+        splitMechanism(train, body, world);
+        if (!body.empty()) {
+            const std::string wrapped = wrapAsPart(body, world, "use unit as t on mount at (0, 0)");
+            const Program pr = parse(lex(wrapped));
+            const MechanismDecl& d = pr.mechanisms[0];
+            bool via = false;
+            for (const ReduceDecl& r : d.reduces) {
+                CHECK(r.bodyA.rfind("t.", 0) == 0 && r.bodyB.rfind("t.", 0) == 0);
+                for (const std::string& v : r.via) { via = true; CHECK(v.rfind("t.", 0) == 0); }
+            }
+            CHECK(via);                                                  // the file does use `via`
+            CHECK(runRows(train, 3.0) == runRows(wrapped, 3.0));
+        }
+        const std::string clock = readFile("examples/clock.mech");
+        splitMechanism(clock, body, world);
+        if (!body.empty()) {
+            const Program cp = parse(lex(wrapAsPart(body, world, "use unit as c on mount at (0, 0)")));
+            const MechanismDecl& d = cp.mechanisms[0];
+            CHECK(d.modes.size() == 1 && d.modes[0].name == "c.esc");
+            CHECK(d.hands.size() == 3);
+            for (const HandDecl& h : d.hands) CHECK(h.name.rfind("c.", 0) == 0 && h.host.rfind("c.", 0) == 0);
+            for (const GearDecl& g : d.gears) CHECK(g.name.rfind("c.", 0) == 0 && g.host.rfind("c.", 0) == 0);
+            for (const DriveDecl& dr : d.drives) CHECK(dr.body.rfind("c.", 0) == 0);
+        }
+    }
+
+    // ---- composition without grounds: the shipped crank-slider built from one `link` part ------------------
+    {
+        const std::string parts = readFile("examples/linkage_parts.mech"), flat = readFile("examples/crankslider.mech");
+        if (!parts.empty() && !flat.empty()) CHECK(runRows(parts, 2.0) == runRows(flat, 2.0));
+        else std::fprintf(stderr, "note: examples not found (cwd?)\n");
+    }
+
+    // ---- misuse is refused where it is written ---------------------------------------------------
+    {
+        const std::string pre = std::string(kPlatePart) + "mechanism m { ground base { anchor o at (0, 0) } ";
+        CHECK(partsFail(pre + "use nope as x }", "unknown part 'nope'"));
+        CHECK(partsFail(pre + "use nope as x }", "declared: plate_cam"));
+        CHECK(partsFail(pre + "use plate_cam(zz = 1) as x on base at (0, 0) }", "has no parameter 'zz'"));
+        CHECK(partsFail(pre + "use plate_cam(zz = 1) as x on base at (0, 0) }", "it has: lift, base_r"));
+        CHECK(partsFail(pre + "use plate_cam(lift = 1, lift = 2) as x on base at (0, 0) }", "given twice"));
+        CHECK(partsFail(pre + "use plate_cam as x }", "mounted"));                                  // its ground has nowhere to go
+        CHECK(partsFail(pre + "use plate_cam as x on nowhere at (0, 0) }", "not a ground declared before"));
+        CHECK(partsFail(pre + "use plate_cam on base at (0, 0) }", "expected 'as'"));
+        CHECK(partsFail(pre + "use plate_cam as x on base at (0, 0) use plate_cam as x on base at (1, 0) }",
+                        "already the name of a part instance"));
+        CHECK(partsFail(pre + "body x { anchor a at (0, 0) } use plate_cam as x on base at (0, 0) }", "already a body name"));
+        CHECK(partsFail(pre + "use plate_cam as x on base at (0, 0) body x { anchor a at (0, 0) } }",
+                        "already the name of a part instance"));
+        CHECK(partsFail("part p { } part p { } mechanism m { }", "part 'p' is already declared"));
+        CHECK(partsFail("part p(a = 1, a = 2) { } mechanism m { }", "declared twice"));
+        CHECK(partsFail("part p(pi = 1) { } mechanism m { }", "cannot be a parameter name"));
+        CHECK(partsFail("part p { world { gravity: 9.81 } } mechanism m { }", "cannot contain a 'world' block"));
+        CHECK(partsFail("part p { use p as x } mechanism m { }", "uses itself"));
+        CHECK(partsFail("part a { use b as x } part b { } mechanism m { }", "unknown part 'b'"));   // declared in order
+        CHECK(partsFail("mechanism m { ground g { anchor o at (0,0) } use late as x on g at (0, 0) } part late { }",
+                        "unknown part 'late'"));
+        // a part with no ground cannot be mounted
+        CHECK(partsFail("part nog { shaft s } mechanism m { ground g { anchor o at (0,0) } use nog as x on g at (0, 0) }",
+                        "has no ground"));
+        // ... and one without a mount is fine when it has no ground of its own
+        CHECK(!partsFail("part nog { body b { anchor a at (0, 0) } } mechanism m { ground g { anchor o at (0,0) } use nog as x }", "x"));
+
+        // a mistake inside a part is reported where it is written, even if the part is never used
+        int line = 0;
+        const std::string bad = "// first line\npart broken {\n  ground g { anchor a at (0, 0) }\n  rod r on g.a { lenth: 1 }\n}\nmechanism m { }\n";
+        CHECK(partsFail(bad, "rod property", &line));
+        CHECK(line == 4);
+        // ... and a semantic error names the instance it happened in
+        bool caught = false;
+        try {
+            (void)buildModel(parse(lex(std::string(kPlatePart) +
+                "mechanism m { ground base { anchor o at (0, 0) } use plate_cam(base_r = -1) as left on base at (0, 0) "
+                "drive left.cam at 30 rpm }")).mechanisms[0]);
+        } catch (const SemanticError& e) {
+            caught = e.msg.find("left.lobe") != std::string::npos;
+        }
+        CHECK(caught);
+    }
+
+    // ---- parts stay out of the way of the old language ---------------------------------------------
+    {
+        // 'part', 'use' and 'as' are only words in these positions
+        const Program p = parse(lex("mechanism m { ground use { anchor part at (0, 0) } rod as on use.part { length: 1 } "
+                                    "drive as at 30 deg/s }"));
+        CHECK(p.mechanisms[0].instances.empty() && p.mechanisms[0].bodies.size() == 2);
+        // a second mechanism does not see the first one's instances
+        const Program q = parse(lex(std::string(kPlatePart) +
+            "mechanism a { ground g { anchor o at (0, 0) } use plate_cam as x on g at (0, 0) } "
+            "mechanism b { ground x { anchor o at (0, 0) } rod r on x.o { length: 1 } }"));
+        CHECK(q.mechanisms.size() == 2 && q.mechanisms[1].instances.empty() && q.mechanisms[1].bodies.size() == 2);
+    }
+
+    // ---- sweeps and the command line through instance names ----------------------------------------
+    {
+        const std::string src = std::string(kPlatePart) + R"(
+mechanism two {
+  ground base { anchor origin at (0, 0) }
+  use plate_cam as left  on base at (0, 0)
+  use plate_cam as right on base at (0.2, 0)
+  drive left.cam at 30 rpm
+  drive right.cam at 30 rpm
+})";
+        SweepAxis a;
+        std::string err;
+        CHECK(parseAxis("left.lift=0.012,0.02,0.03", a, err) && a.name == "left.lift" && a.values.size() == 3);
+        SweepOptions opt;
+        opt.seconds = 2.0;
+        opt.reports = {"max:left.follower.y", "max:right.follower.y"};
+        const SweepResult r = runSweep(src, {a}, opt);
+        CHECK(r.rows.size() == 3);
+        for (size_t i = 0; i < r.rows.size(); ++i) {
+            CHECK(r.rows[i].error.empty());
+            CHECK_APPROX(r.rows[i].metrics[0], 0.031 + a.values[i], 1e-6);          // closed form: base + roller + lift
+            CHECK_APPROX(r.rows[i].metrics[1], 0.043, 1e-6);                        // the other cam stays at its design
+        }
+
+        char path[] = "/tmp/mech_parts_XXXXXX";
+        const int fd = mkstemp(path);
+        CHECK(fd >= 0);
+        if (fd >= 0) {
+            const ssize_t w = write(fd, src.data(), src.size());
+            CHECK(w == (ssize_t)src.size());
+            close(fd);
+            const std::string csv = std::string(path) + ".csv";
+            const std::string cmd = std::string("./mech run ") + path + " --headless 1 --set left.lift=0.03 --csv " + csv +
+                                    " --probe right.follower.tip > /dev/null 2>&1";
+            CHECK(std::system(cmd.c_str()) == 0);
+            std::ifstream in(csv);
+            std::string header;
+            std::getline(in, header);
+            CHECK(header.find("right.follower.tip.x[m]") != std::string::npos);     // probe through a dotted body name
+            CHECK(header.find("left.follower.tip@left.lobe.gap[m]") != std::string::npos);
+            std::remove(csv.c_str());
+            const std::string bare = std::string("./mech check ") + path + " --set lift=0.03 > /dev/null 2>&1";
+            CHECK(std::system(bare.c_str()) != 0);                                  // the bare name is not a parameter
+            std::remove(path);
+        }
+    }
+}
+
 } // namespace (anonymous)
 
 namespace mech {
@@ -5973,6 +6448,7 @@ int runAllTests() {
     testFriction();
     testRecorder();
     testParams();
+    testParts();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

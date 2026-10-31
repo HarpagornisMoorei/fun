@@ -79,6 +79,14 @@
 //   unary       := ['-' | '+'] unary | primary
 //   primary     := NUMBER | 'pi' | PARAM | FUNC '(' expr {',' expr} ')' | '(' expr ')'
 //
+// M9 ('part' at top level and 'use' at statement start are contextual; 'as' too):
+//   partDecl    := 'part' IDENT [ '(' IDENT '=' expr { ',' IDENT '=' expr } ')' ] '{' stmt* '}'
+//   useDecl     := 'use' IDENT [ '(' IDENT '=' expr { ',' IDENT '=' expr } ')' ] 'as' IDENT
+//                  [ 'on' IDENT 'at' '(' expr ',' expr ')' ]
+//   ref         := qname '.' IDENT        qname := IDENT { '.' IDENT } while the prefix names an instance
+// A part is expanded at parse time: its body is re-parsed once per instance with every
+// name qualified by the instance ('left.follower'), so the model sees a flat mechanism.
+//
 // M6b ('cam' is contextual at statement start so `cam` stays usable as a
 // body name; the items below are contextual identifiers too):
 //   camDecl     := 'cam' IDENT [ 'on' IDENT ['.' IDENT] ]
@@ -111,6 +119,7 @@ public:
     Program program() {
         Program p;
         while (!atEnd()) {
+            if (cur().type == Tok::Ident && cur().text == "part") { next(); partDecl(); continue; }
             expectKw("mechanism");
             p.mechanisms.push_back(mechanism());
         }
@@ -131,8 +140,25 @@ private:
     const std::vector<Token>& t_;
     const ParamOverrides& ov_;
     std::set<std::string> used_;                 // overrides that found their parameter
-    std::map<std::string, double> params_;       // parameters declared so far (this mechanism)
+    std::map<std::string, double> params_;       // parameters declared so far (this scope)
     size_t pos_ = 0;
+
+    // --- parts (M9) --------------------------------------------------------
+    struct PartParam { std::string name; size_t exprPos; double def; int line; };
+    struct PartDef {
+        std::string name;
+        int line = 0;
+        std::vector<PartParam> params;
+        size_t bodyPos = 0;                      // first token after '{'
+    };
+    struct GroundAlias { std::string target; std::string anchorPrefix; Vec2 off; };
+    struct Mount { std::string target; Vec2 off; bool used = false; };
+    std::map<std::string, PartDef> parts_;
+    std::vector<std::string> expanding_;         // parts being expanded (recursion guard)
+    std::set<std::string> instances_;            // qualified instance names of this mechanism
+    std::map<std::string, GroundAlias> aliases_; // a part's ground -> the outer ground it merged into
+    std::string prefix_;                         // "" at top level, "left." inside instance 'left'
+    Mount mount_;
 
     // --- token helpers -----------------------------------------------------
 
@@ -294,23 +320,270 @@ private:
         }
         expectSym("=");
         ParamDecl pd;
-        pd.name = name.text;
+        pd.name = prefix_ + name.text;           // inside a part: 'left.lift'
         pd.line = name.line;
         pd.declared = pd.value = checkFinite(parseNum());
-        auto ov = ov_.find(name.text);
+        auto ov = ov_.find(pd.name);
         if (ov != ov_.end()) {
             pd.value = ov->second;
             pd.overridden = true;
-            used_.insert(name.text);
+            used_.insert(pd.name);
         }
         params_[name.text] = pd.value;
         m.params.push_back(pd);
     }
 
+    // A body/gear/profile name as written: inside an instance every name belongs to it, and
+    // a name that starts with an instance ('left.follower') is followed through it.
+    std::string qref() {
+        std::string name = expectIdent().text;
+        while (instances_.count(prefix_ + name)) {
+            expectSym(".");
+            name += "." + expectIdent().text;
+        }
+        return prefix_ + name;
+    }
+
+    // The name a declaration gives itself, qualified by the instance it is in.
+    std::string declName(const Token& t) const {
+        const std::string n = prefix_ + t.text;
+        if (instances_.count(n))
+            throw ParseError{t.line, t.col, "'" + t.text + "' is already the name of a part instance"};
+        return n;
+    }
+
+    // An anchor of a part's ground lives on the outer ground under a qualified name.
+    void applyAlias(std::string& body, std::string& anchor) const {
+        auto it = aliases_.find(body);
+        if (it == aliases_.end()) return;
+        body = it->second.target;
+        if (!anchor.empty()) anchor = it->second.anchorPrefix + anchor;
+    }
+
     void parseRef(std::string& body, std::string& anchor) {
-        body = expectIdent().text;
+        body = qref();
         expectSym(".");
         anchor = expectIdent().text;
+        applyAlias(body, anchor);
+    }
+
+    // host := qname [ '.' IDENT ]   (the anchor is optional)
+    void parseHost(std::string& body, std::string& anchor) {
+        body = qref();
+        if (acceptSym(".")) anchor = expectIdent().text;
+        applyAlias(body, anchor);
+    }
+
+    // --- parts (M9) --------------------------------------------------------
+
+    // part NAME [ ( p = expr, ... ) ] { ... }   — the body is kept as tokens and expanded per use.
+    void partDecl() {
+        const Token name = expectIdent();
+        if (parts_.count(name.text))
+            throw ParseError{name.line, name.col, "part '" + name.text + "' is already declared"};
+        PartDef def;
+        def.name = name.text;
+        def.line = name.line;
+        std::map<std::string, double> saved;
+        saved.swap(params_);                     // defaults may use earlier parameters of the header
+        if (acceptSym("(") && !acceptSym(")")) {
+            for (;;) {
+                const Token pn = expectIdent();
+                if (isReservedParam(pn.text))
+                    throw ParseError{pn.line, pn.col, "'" + pn.text + "' cannot be a parameter name"};
+                if (params_.count(pn.text))
+                    throw ParseError{pn.line, pn.col, "part parameter '" + pn.text + "' is declared twice"};
+                expectSym("=");
+                const size_t at = pos_;
+                const double v = checkFinite(parseNum());
+                def.params.push_back({pn.text, at, v, pn.line});
+                params_[pn.text] = v;
+                if (acceptSym(",")) continue;
+                expectSym(")");
+                break;
+            }
+        }
+        params_.swap(saved);
+        expectSym("{");
+        def.bodyPos = pos_;
+        int depth = 1;
+        while (depth > 0) {
+            if (atEnd()) throw ParseError{name.line, name.col, "unterminated '{' in part '" + name.text + "'"};
+            if (cur().type == Tok::Sym && cur().text == "{") ++depth;
+            if (cur().type == Tok::Sym && cur().text == "}") --depth;
+            next();
+        }
+        const size_t endPos = pos_;
+        parts_[name.text] = def;
+
+        // check the body now, with its defaults, so a mistake is reported where it is written
+        // and not only where (if ever) the part is used
+        MechanismDecl scratch;
+        BodyDecl g;
+        g.kind = BodyDecl::Kind::Ground;
+        g.name = "<check>";
+        scratch.bodies.push_back(g);
+        const auto savedInst = instances_;
+        const auto savedAlias = aliases_;
+        Mount mt;
+        mt.target = "<check>";
+        expandPart(parts_[name.text], "<check>", {}, scratch, mt);
+        instances_ = savedInst;
+        aliases_ = savedAlias;
+        pos_ = endPos;
+    }
+
+    // use PART [ ( p = expr, ... ) ] as NAME [ on GROUND at (x, y) ]
+    void useDecl(MechanismDecl& m) {
+        const Token pn = expectIdent();
+        auto it = parts_.find(pn.text);
+        if (it == parts_.end()) {
+            std::string known;
+            for (const auto& kv : parts_) known += (known.empty() ? "" : ", ") + kv.first;
+            throw ParseError{pn.line, pn.col, "unknown part '" + pn.text + "' (" +
+                             (known.empty() ? std::string("none is declared") : "declared: " + known) + ")"};
+        }
+        const PartDef& def = it->second;
+        std::vector<std::pair<std::string, double>> args;
+        if (acceptSym("(") && !acceptSym(")")) {
+            for (;;) {
+                const Token an = expectIdent();
+                bool known = false;
+                for (const PartParam& pp : def.params) known = known || pp.name == an.text;
+                if (!known) {
+                    std::string has;
+                    for (const PartParam& pp : def.params) has += (has.empty() ? "" : ", ") + pp.name;
+                    throw ParseError{an.line, an.col, "part '" + def.name + "' has no parameter '" + an.text +
+                                     "' (" + (has.empty() ? std::string("it has none") : "it has: " + has) + ")"};
+                }
+                for (const auto& a : args)
+                    if (a.first == an.text)
+                        throw ParseError{an.line, an.col, "argument '" + an.text + "' is given twice"};
+                expectSym("=");
+                args.emplace_back(an.text, checkFinite(parseNum()));   // evaluated in the caller's scope
+                if (acceptSym(",")) continue;
+                expectSym(")");
+                break;
+            }
+        }
+        if (!(cur().type == Tok::Ident && cur().text == "as"))
+            fail("expected 'as' and an instance name after the part, got '" + cur().text + "'");
+        next();
+        const Token in = expectIdent();
+        const std::string full = declName(in);
+        for (const BodyDecl& b : m.bodies)
+            if (b.name == full) throw ParseError{in.line, in.col, "'" + in.text + "' is already a body name"};
+
+        Mount mt;
+        bool mounted = false;
+        if (acceptKw("on")) {
+            const Token gt = cur();
+            const std::string g = qref();
+            expectKw("at");
+            expectSym("(");
+            const double x = parseNum();
+            expectSym(",");
+            const double y = parseNum();
+            expectSym(")");
+            auto al = aliases_.find(g);
+            if (al != aliases_.end()) {
+                mt.target = al->second.target;
+                mt.off = Vec2{al->second.off.x + x, al->second.off.y + y};
+            } else {
+                bool isGround = false;
+                for (const BodyDecl& b : m.bodies) isGround = isGround || (b.name == g && b.kind == BodyDecl::Kind::Ground);
+                if (!isGround)
+                    throw ParseError{gt.line, gt.col, "'" + g + "' is not a ground declared before this 'use'"};
+                mt.target = g;
+                mt.off = Vec2{x, y};
+            }
+            mounted = true;
+        }
+        const size_t endPos = pos_;
+        instances_.insert(full);
+        InstanceDecl idl;
+        idl.name = full;
+        idl.part = def.name;
+        idl.line = in.line;
+        m.instances.push_back(idl);
+        expandPart(def, full, args, m, mt);
+        if (mounted && !mt.used)
+            throw ParseError{in.line, in.col, "part '" + def.name + "' has no ground, so 'on ... at (...)' "
+                             "has nothing to mount"};
+        pos_ = endPos;
+    }
+
+    // Re-parse a part's body as instance `inst`: bind its parameters (argument, else --set,
+    // else default), then run its statements with every name qualified by the instance.
+    void expandPart(const PartDef& def, const std::string& inst,
+                    const std::vector<std::pair<std::string, double>>& args, MechanismDecl& m, Mount& mt) {
+        for (const std::string& e : expanding_) {
+            if (e == def.name)
+                fail("part '" + def.name + "' uses itself (a part cannot contain an instance of itself)");
+        }
+        expanding_.push_back(def.name);
+        std::map<std::string, double> savedParams;
+        savedParams.swap(params_);
+        const std::string savedPrefix = prefix_;
+        const Mount savedMount = mount_;
+        const size_t savedPos = pos_;
+        prefix_ = inst + ".";
+        mount_ = mt;
+
+        for (const PartParam& pp : def.params) {
+            double v = pp.def;
+            bool given = false;
+            for (const auto& a : args) if (a.first == pp.name) { v = a.second; given = true; }
+            if (!given) {                                   // the default, evaluated in the part's own scope
+                pos_ = pp.exprPos;
+                v = checkFinite(parseNum());
+            }
+            ParamDecl pd;
+            pd.name = prefix_ + pp.name;
+            pd.line = pp.line;
+            pd.declared = pd.value = v;
+            auto ov = ov_.find(pd.name);
+            if (ov != ov_.end()) {
+                pd.value = ov->second;
+                pd.overridden = true;
+                used_.insert(pd.name);
+            }
+            params_[pp.name] = pd.value;
+            m.params.push_back(pd);
+        }
+        pos_ = def.bodyPos;
+        while (!acceptSym("}")) {
+            if (atEnd()) fail("unterminated '{' in part '" + def.name + "'");
+            stmt(m);
+            skipSeparators();
+        }
+
+        mt.used = mount_.used;
+        mount_ = savedMount;
+        prefix_ = savedPrefix;
+        params_.swap(savedParams);
+        pos_ = savedPos;
+        expanding_.pop_back();
+    }
+
+    // A ground inside a part adds its anchors to the outer ground the instance is mounted on,
+    // shifted by the mount offset and named 'inst.ground.anchor'.
+    void mergePartGround(MechanismDecl& m, const BodyDecl& g) {
+        if (aliases_.count(g.name))
+            throw ParseError{g.line, 1, "ground '" + g.name + "' is declared twice"};
+        BodyDecl* target = nullptr;
+        for (BodyDecl& b : m.bodies)
+            if (b.name == mount_.target && b.kind == BodyDecl::Kind::Ground) target = &b;
+        if (!target)
+            throw ParseError{g.line, 1, "a ground inside a part needs the instance to say where it is "
+                             "mounted: 'use ... as name on <ground> at (x, y)'"};
+        for (AnchorDecl a : g.anchors) {
+            a.name = g.name + "." + a.name;
+            a.pos = Vec2{a.pos.x + mount_.off.x, a.pos.y + mount_.off.y};
+            target->anchors.push_back(a);
+        }
+        aliases_[g.name] = GroundAlias{mount_.target, g.name + ".", mount_.off};
+        mount_.used = true;
     }
 
     // --- grammar -----------------------------------------------------------
@@ -318,6 +591,8 @@ private:
     MechanismDecl mechanism() {
         MechanismDecl m;
         params_.clear();                        // parameters are per mechanism
+        instances_.clear();
+        aliases_.clear();
         Token name = expectIdent();
         m.name = name.text;
         m.line = name.line;
@@ -351,16 +626,17 @@ private:
         else if (acceptKw("touch")) touchDecl(m);
         else if (cur().type == Tok::Ident && cur().text == "cam") { next(); camDecl(m); }
         else if (cur().type == Tok::Ident && cur().text == "param") { next(); paramDecl(m); }
+        else if (cur().type == Tok::Ident && cur().text == "use") { next(); useDecl(m); }
         else fail("expected a statement ('ground', 'body', 'rod', 'shaft', 'world', 'gear', "
                   "'mesh', 'spring', 'pin', 'slide', 'drive', 'reduce', 'hand', 'dial', "
-                  "'mode', 'profile', 'touch' or 'cam'), got '" + cur().text + "'");
+                  "'mode', 'profile', 'touch', 'cam', 'param' or 'use'), got '" + cur().text + "'");
     }
 
     void anchorBodyDecl(MechanismDecl& m, BodyDecl::Kind kind) {
         BodyDecl b;
         b.kind = kind;
         Token name = expectIdent();
-        b.name = name.text;
+        b.name = declName(name);
         b.line = name.line;
         expectSym("{");
 
@@ -404,11 +680,13 @@ private:
             }
             skipSeparators();
         }
+        if (kind == BodyDecl::Kind::Ground && !prefix_.empty()) { mergePartGround(m, b); return; }
         m.bodies.push_back(b);
     }
 
     // world { gravity: 9.81, step: 0.002 } — contextual property idents
     void worldDecl(MechanismDecl& m) {
+        if (!prefix_.empty()) fail("a part cannot contain a 'world' block; put it in the mechanism");
         WorldDecl w;
         w.line = cur().line;
         w.present = true;
@@ -456,7 +734,7 @@ private:
         BodyDecl b;
         b.kind = BodyDecl::Kind::Rod;
         Token name = expectIdent();
-        b.name = name.text;
+        b.name = declName(name);
         b.line = name.line;
         parseAttach(b);               // 'rod r on A.p { ... }'
         expectSym("{");
@@ -505,7 +783,7 @@ private:
         BodyDecl b;
         b.kind = BodyDecl::Kind::Shaft;
         Token name = expectIdent();
-        b.name = name.text;
+        b.name = declName(name);
         b.line = name.line;
         parseAttach(b);   // M4: optional — a bare shaft is placed by 'reduce'
         m.bodies.push_back(b);
@@ -514,7 +792,7 @@ private:
     void gearDecl(MechanismDecl& m) {
         GearDecl g;
         Token name = expectIdent();
-        g.name = name.text;
+        g.name = declName(name);
         g.line = name.line;
         expectSym("{");
 
@@ -538,20 +816,15 @@ private:
         }
 
         expectKw("on");
-        Token host = expectIdent();
-        g.host = host.text;
-        if (acceptSym(".")) {
-            // M3: the pitch circle may sit on any host anchor
-            g.hostAnchor = expectIdent().text;
-        }
+        parseHost(g.host, g.hostAnchor);        // M3: the pitch circle may sit on any host anchor
         m.gears.push_back(g);
     }
 
     void meshDecl(MechanismDecl& m) {
         MeshDecl d;
         d.line = cur().line;
-        d.gearA = expectIdent().text;
-        d.gearB = expectIdent().text;
+        d.gearA = qref();
+        d.gearB = qref();
         if (cur().type == Tok::Ident) {
             if (cur().text == "tangent") {
                 next();
@@ -571,12 +844,11 @@ private:
     void profileDecl(MechanismDecl& m) {
         ProfileDecl p;
         Token name = expectIdent();
-        p.name = name.text;
+        p.name = declName(name);
         p.line = name.line;
         bool hasHost = false;
         auto host = [&]() {
-            p.host = expectIdent().text;
-            if (acceptSym(".")) p.hostAnchor = expectIdent().text;
+            parseHost(p.host, p.hostAnchor);
             hasHost = true;
         };
         if (acceptKw("on")) host();
@@ -666,12 +938,11 @@ private:
     void camDecl(MechanismDecl& m) {
         CamDecl c;
         Token name = expectIdent();
-        c.name = name.text;
+        c.name = declName(name);
         c.line = name.line;
         bool hasHost = false;
         auto host = [&]() {
-            c.host = expectIdent().text;
-            if (acceptSym(".")) c.hostAnchor = expectIdent().text;
+            parseHost(c.host, c.hostAnchor);
             hasHost = true;
         };
         auto expectDeg = [&](const char* what) {
@@ -761,7 +1032,7 @@ private:
         t.line = cur().line;
         parseRef(t.body, t.anchor);
         expectKw("on");
-        t.profile = expectIdent().text;
+        t.profile = qref();
         while (cur().type == Tok::Ident &&
                (cur().text == "roller" || cur().text == "restitution" ||
                 cur().text == "friction")) {
@@ -785,7 +1056,7 @@ private:
     void springDecl(MechanismDecl& m) {
         SpringDecl s;
         Token name = expectIdent();
-        s.name = name.text;
+        s.name = declName(name);
         s.line = name.line;
         parseRef(s.bodyA, s.anchorA);
         expectSym("->");
@@ -823,8 +1094,8 @@ private:
 
     void driveDecl(MechanismDecl& m) {
         DriveDecl d;
-        Token name = expectIdent();
-        d.body = name.text;
+        const Token name = cur();
+        d.body = qref();
         d.line = name.line;
 
         if (acceptKw("torque")) {
@@ -899,9 +1170,9 @@ private:
     void reduceDecl(MechanismDecl& m) {
         ReduceDecl r;
         r.line = cur().line;
-        r.bodyA = expectIdent().text;
+        r.bodyA = qref();
         expectSym("->");
-        r.bodyB = expectIdent().text;
+        r.bodyB = qref();
 
         if (!(cur().type == Tok::Ident && cur().text == "ratio")) {
             fail("expected 'ratio' in reduce, got '" + cur().text + "'");
@@ -941,14 +1212,14 @@ private:
                 if (sawVia) fail("duplicate 'via' clause in reduce");
                 sawVia = true;
                 next();
-                r.via.push_back(expectIdent().text);
-                while (acceptSym(",")) r.via.push_back(expectIdent().text);
+                r.via.push_back(qref());
+                while (acceptSym(",")) r.via.push_back(qref());
                 // allow space-separated too: consume further bare idents
                 while (cur().type == Tok::Ident && cur().text != "via" &&
                        cur().text != "same" && cur().text != "opposite" &&
                        cur().text != "module" && cur().text != "spread") {
-                    r.via.push_back(expectIdent().text);
-                    while (acceptSym(",")) r.via.push_back(expectIdent().text);
+                    r.via.push_back(qref());
+                    while (acceptSym(",")) r.via.push_back(qref());
                 }
             } else if (cur().type == Tok::Ident &&
                        (cur().text == "same" || cur().text == "opposite")) {
@@ -985,11 +1256,10 @@ private:
     void handDecl(MechanismDecl& m) {
         HandDecl h;
         Token name = expectIdent();
-        h.name = name.text;
+        h.name = declName(name);
         h.line = name.line;
         expectKw("on");
-        h.host = expectIdent().text;
-        if (acceptSym(".")) h.hostAnchor = expectIdent().text;
+        parseHost(h.host, h.hostAnchor);
         if (acceptSym("{")) {
             while (!acceptSym("}")) {
                 if (atEnd()) fail("unterminated '{' in hand '" + h.name + "'");
@@ -1051,7 +1321,7 @@ private:
     void modeDecl(MechanismDecl& m) {
         ModeDecl md;
         Token name = expectIdent();
-        md.name = name.text;
+        md.name = declName(name);
         md.line = name.line;
         expectSym("{");
 
@@ -1068,7 +1338,7 @@ private:
                     if (atEnd()) fail("unterminated '{' in state '" + st.name + "'");
                     if (cur().type == Tok::Ident && cur().text == "hold") {
                         next();
-                        st.holds.push_back(expectIdent().text);
+                        st.holds.push_back(qref());
                     } else {
                         fail("expected 'hold <body>' in state '" + st.name +
                              "', got '" + cur().text + "'");
@@ -1092,7 +1362,7 @@ private:
                 next();
 
                 // guard: body.field (>|<) num [deg | deg/s]
-                tr.body = expectIdent().text;
+                tr.body = qref();
                 expectSym(".");
                 Token fld = expectIdent();
                 if (fld.text == "theta") {
@@ -1140,7 +1410,7 @@ private:
                         next();
                         ModeDecl::Reset rs;
                         rs.line = cur().line;
-                        rs.body = expectIdent().text;
+                        rs.body = qref();
                         if (cur().type == Tok::Ident && cur().text == "maintain") {
                             next();
                             rs.kind = ModeDecl::Reset::Kind::Maintain;

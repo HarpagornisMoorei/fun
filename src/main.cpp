@@ -576,7 +576,7 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
     }
     std::vector<Probe> probes;
     for (const std::string& ref : ex.probes) {
-        const size_t dot = ref.find('.');
+        const size_t dot = ref.rfind('.');
         const int bi = dot == std::string::npos ? -1 : m.bodyIndex(ref.substr(0, dot));
         const int ai = bi < 0 ? -1 : m.anchorIndex(bi, ref.substr(dot + 1));
         if (bi < 0 || ai < 0) {

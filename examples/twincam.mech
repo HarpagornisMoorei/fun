@@ -1,0 +1,46 @@
+// twincam — one cam-and-follower written once, used twice. A `part` is a
+// mechanism fragment with parameters; `use` makes an instance of it, giving
+// every name inside a prefix (left.follower, right.lobe, ...) and mounting the
+// part's own ground on a ground of the mechanism, at an offset.
+//
+//   mech check examples/twincam.mech
+//   mech run   examples/twincam.mech --headless 2 --csv twin.csv --probe left.follower.tip
+//
+// Both cams turn at 30 rpm; the left follower lifts 20 mm, the right the part's
+// default 12 mm. Instance parameters are addressed by the instance's name, so the
+// same sweep machinery works on one cam of the pair:
+//
+//   mech sweep examples/twincam.mech --set left.lift=0.012:0.036:0.008 --time 2 \
+//        --report max:left.follower.y --report max:right.follower.y
+//
+// The left follower's top is 31 mm + lift (base circle 25 mm + roller 6 mm); the
+// right one does not move off its design however the left is changed.
+part plate_cam(lift = 0.012, base_r = 0.025, speed = 30) {
+  ground frame {
+    anchor axle at (0, 0)
+    anchor rail at (0, 0.09) dir (0, 1)     // the follower's line of travel
+  }
+
+  shaft cam at frame.axle
+  cam lobe on cam.A {
+    base   base_r
+    roller 0.006
+    rise lift over 100 deg cycloidal
+    dwell 60 deg
+    return over 140 deg modtrap
+    dwell
+  }
+
+  body follower { anchor tip at (0, 0) dir (1, 0) }
+  slide follower.tip -> frame.rail
+  touch follower.tip on lobe
+
+  drive cam at speed rpm
+}
+
+mechanism twincam {
+  ground bench { anchor origin at (0, 0) }
+
+  use plate_cam(lift = 0.020)  as left  on bench at (0, 0)
+  use plate_cam                as right on bench at (0.2, 0)
+}

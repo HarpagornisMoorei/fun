@@ -1,4 +1,4 @@
-# The mech language — M8 specification
+# The mech language — M9 specification
 
 This document pins down the M6f kernel: lexical structure, grammar, static
 semantics, the kinematic solver's mathematical formulation, the
@@ -9,7 +9,8 @@ higher pair — bilateral in kinematic files, unilateral with lift-off and
 impact in dynamic ones), plate cams stated as displacement diagrams, and
 non-circular gear pairs (`mesh` between two profiles), and polygon profiles
 with filleted corners (ratchets and anything with teeth), and Coulomb friction at
-contacts, plus (M8) named parameters, numeric expressions and sweeps. It is the contract
+contacts, plus (M8) named parameters, numeric expressions and sweeps, and (M9) reusable
+parts. It is the contract
 the implementation is tested against (`mech test`).
 
 ---
@@ -76,7 +77,7 @@ Four principles govern the design:
 ## 3. Grammar (M3)
 
 ```ebnf
-program     = mechanism { mechanism } ;
+program     = { partDecl | mechanism } ;                (* parts before their first use *)
 
 mechanism   = "mechanism" IDENT "{" { stmt } "}" ;
 
@@ -87,7 +88,8 @@ stmt        = groundDecl | bodyDecl | rodDecl | shaftDecl | worldDecl
             | modeDecl | weightDriveDecl                 (* M5 *)
             | profileDecl | touchDecl                      (* M6 *)
             | camDecl                                     (* M6b *)
-            | paramDecl ;                                 (* M8 *)
+            | paramDecl                                   (* M8 *)
+            | useDecl ;                                   (* M9 *)
 
 groundDecl  = "ground" IDENT "{" { anchorDecl } "}" ;
 bodyDecl    = "body" IDENT "{" { anchorDecl | "mass" ":" num
@@ -104,6 +106,12 @@ attach      = ( "on" | "at" ) ref ;                    (* pins anchor A *)
 worldDecl   = "world" "{" { ( "gravity" | "step" ) ":" num } "}" ;
 
 paramDecl   = "param" IDENT "=" expr ;                       (* M8 *)
+partDecl    = "part" IDENT [ "(" paramInit { "," paramInit } ")" ] "{" { stmt } "}" ;   (* M9 *)
+paramInit   = IDENT "=" expr ;
+useDecl     = "use" IDENT [ "(" paramInit { "," paramInit } ")" ] "as" IDENT
+              [ "on" IDENT "at" "(" expr "," expr ")" ] ;
+(* A reference to a name is `qname`: IDENT { "." IDENT }, followed through while the prefix
+   names an instance (`left.follower.tip`); `ref = qname "." IDENT`. *)
 (* Everywhere this grammar writes `num`, M8 accepts an expression that evaluates to one. *)
 expr        = term { ( "+" | "-" ) term } ;
 term        = unary { ( "*" | "/" ) unary } ;
@@ -231,6 +239,20 @@ Checks run at model build time, each error pointing at a source line:
   the escapement's pair (a wheel driven by a weight and locked by a pallet).
   One hold row exists per held body across the whole mechanism: two modes
   cannot hold the same body.
+
+**M9 part checks:**
+
+* A part is expanded at parse time: its body is read again for each `use` with every
+  name it declares or mentions qualified by the instance (`left.follower`), so the
+  model sees one flat mechanism. Full specification in [`PARTS.md`](PARTS.md).
+* A part must be declared before the part or mechanism that uses it, which also rules
+  out recursion. Its body is checked at its definition with the default arguments.
+* A part has no `world` block. A ground inside a part merges into the ground named by
+  `on ... at (x, y)`, translated by `(x, y)` (no rotation); a part with a ground needs
+  the `on` clause and a part without one must not have it.
+* Instance names are unique per mechanism and cannot be body names. Arguments are
+  evaluated in the caller's scope; each instance's parameters are `instance.name` to
+  `--set` and to sweeps.
 
 **M8 parameter checks:**
 
@@ -1019,7 +1041,7 @@ resistance, more than one contact point per `touch`, and compliant
 
 ## 8. Test matrix
 
-`mech test` (14682 checks) covers: lexer tokens/units/keywords/comments/errors;
+`mech test` (14792 checks) covers: lexer tokens/units/keywords/comments/errors;
 parser AST shapes for all M3 and M4 forms and all error classes; model checks,
 desugaring, gear radius arithmetic, module rules, mass derivation (rods,
 discs, compound assemblies, overrides), DOF arithmetic including tangent
@@ -1197,6 +1219,21 @@ exit status 2 for a sweep with invalid designs. Reversing subtraction or divisio
 ignoring an override, accepting an unused one, swapping grid order, or dropping the
 absolute value in the ledger metric breaks checks.
 
+The M9 suite adds: the oracle that an instanced file *is* the flat file — two cams of
+different lifts and speeds, nested parts (mount offsets added the way the flat file adds
+them), a ground-less `link` part used twice to rebuild the crank-slider (CSV rows identical
+to `crankslider.mech`), and the whole clock wrapped in one part, 30 s of hybrid dynamics,
+identical in every row and column; the jumping cam as a part, with `--set u.speed` equal
+to `--set speed` on the flat file and a sweep over `u.speed` giving the same lift-off
+counts and ledger residuals; defaults, arguments and overrides in their precedence order;
+the diagnostics (unknown part and argument, duplicates, mounting rules, recursion, a
+mistake inside a never-used part reported at its own line, a semantic error naming the
+instance); probes, CSV columns and sweep reports through dotted names. Mutation checks
+cover each rule of the expansion — the prefix, the ground merge, the mount offset in x
+and y, nested offsets, scope restoration, argument binding, override keys, the recursion
+guard, the definition-time check, and every name site (`mesh`, `reduce`, `via`, `hold`,
+mode guards and resets, `drive`, hand and gear hosts, touch profiles, mode and hand names).
+
 ## 9. Milestone history & reserved ground
 
 M1 walked the skeleton (lexer/parser/rods/pins/drives); M2 added shafts,
@@ -1261,6 +1298,10 @@ plate cam's design pressure angle (20.590 deg against the formula's 20.59 deg).
 M8 added `param` and numeric expressions, `--set`, and `mech sweep` (see
 `docs/PARAMS.md`): the language stays a description of one mechanism, and designs are
 compared by running many of it. Reusable parts and composition remain open.
+
+M9 added reusable parts: `part` with parameters and `use ... as name on ground at (x, y)`
+(see `docs/PARTS.md`), expanded at parse time so the solver, dynamics and tooling are
+unchanged, and an instanced file runs bit for bit like the flat one.
 
 The rest is reserved: static friction proper (the regularization creeps at ~2 mm/s
 instead of sticking), tangential impact impulses, curve-against-curve contact (the

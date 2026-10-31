@@ -268,8 +268,16 @@ struct ParamDecl {
     int line = 0;
 };
 
+// M9: one `use PART ... as NAME` (the expansion itself is already in the lists below).
+struct InstanceDecl {
+    std::string name;      // qualified: 'left', or 'left.sub' for an instance inside a part
+    std::string part;
+    int line = 0;
+};
+
 struct MechanismDecl {
     std::string name;
+    std::vector<InstanceDecl> instances;   // M9
     std::vector<ParamDecl> params;     // M7
     WorldDecl world;
     std::vector<BodyDecl> bodies;

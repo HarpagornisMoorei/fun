@@ -93,6 +93,24 @@ mech sweep examples/platecam.mech --set rise_deg=100,60,30,20,10 --time 2 --repo
 Designs the compiler rejects (an undercut cam, say) are reported in their own row.
 See [`docs/PARAMS.md`](docs/PARAMS.md).
 
+## Parts
+
+Write an assembly once, use it many times with different numbers:
+
+```
+part plate_cam(lift = 0.012, base_r = 0.025) { ground frame { ... }  cam lobe ...  body follower ... }
+
+mechanism twincam {
+  ground bench { anchor origin at (0, 0) }
+  use plate_cam(lift = 0.020) as left  on bench at (0, 0)
+  use plate_cam               as right on bench at (0.2, 0)
+}
+```
+
+Everything inside is reached by the instance's name (`left.follower.tip`, `--set left.lift=0.03`,
+`--report max:left.follower.y`), and an instanced file runs bit for bit like the flat one.
+See [`docs/PARTS.md`](docs/PARTS.md).
+
 ## Examples
 
 | file | shows |
@@ -103,6 +121,7 @@ See [`docs/PARAMS.md`](docs/PARAMS.md).
 | `ratchet` | a ratchet wheel and gravity pawl with friction: one click per tooth forward, locked and at rest in reverse; energy ledger closes |
 | `ellipgears` | a pair of elliptical gears: input steady, output surging between 3x and 1/3x |
 | `jumpcam` | the plate cam with mass, a spring and a contact that can let go — cam jump, impacts, energy ledger |
+| `twincam`, `linkage_parts` | parts: one cam-and-follower used twice with different numbers; a crank-slider assembled from one ground-less `link` part |
 | `pendulum`, `doublepend`, `flywheel`, `oscillator`, `orbit` | dynamics |
 | `clock`, `clockface` | the flagship: a complete weight-driven clock |
 
@@ -114,5 +133,6 @@ implementation against. [`docs/design/contact.md`](docs/design/contact.md)
 is the design for contact (cams, Geneva drives, ratchets, non-circular
 gears); M6a through M6f (profiles, cam synthesis, unilateral contact,
 non-circular gears, polygons and a ratchet, friction) are implemented, as are
-parameters and sweeps ([`docs/PARAMS.md`](docs/PARAMS.md)). `scripts/` holds offscreen-rendering harnesses for
+parameters and sweeps ([`docs/PARAMS.md`](docs/PARAMS.md)) and reusable parts
+([`docs/PARTS.md`](docs/PARTS.md)). `scripts/` holds offscreen-rendering harnesses for
 screenshots without a display.
