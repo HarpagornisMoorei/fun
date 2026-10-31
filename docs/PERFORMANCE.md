@@ -22,7 +22,8 @@ output number (the CSV of every example is byte-identical to what it was; `scrip
 * **Envelope Cholesky.** The factor of `J W J^T` has the same envelope as the matrix (row `i` of `L` is zero left of the
   first nonzero of row `i`), and a chain of joints makes that envelope narrow. The factorization and both
   substitutions visit only the terms inside it. A dense matrix has a full envelope and gets the plain algorithm. The test
-  compares against the dense algorithm bit for bit on chain, arrow and dense matrices.
+  compares against the dense algorithm on chain, arrow and dense matrices: identical on the machine it was developed on (the
+  bench script's byte comparison), and to rounding error in the test, because another compiler may fuse multiply-adds differently.
 * **Scratch buffers.** Those matrices were allocated and zeroed afresh on every step (a large share of the time of a big
   mechanism was the operating system handing out and reclaiming memory); they are now reused.
 * **Parallel sweeps.** Every row of a sweep parses and builds its own model from the shared tokens, so the rows are

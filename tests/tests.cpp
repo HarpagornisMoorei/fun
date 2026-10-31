@@ -9081,7 +9081,7 @@ void testSpeed() {
         }
     }
 
-    // ---- the envelope Cholesky is the dense one, bit for bit, for banded, arrow-shaped and dense matrices
+    // ---- the envelope Cholesky is the dense one, for banded, arrow-shaped and dense matrices
     {
         for (int kind = 0; kind < 3; ++kind) {
             const int n = (kind == 2) ? 25 : 70;
@@ -9105,8 +9105,11 @@ void testSpeed() {
             std::vector<double> b((size_t)n), x1, x2;
             for (double& v : b) v = rnd() - 0.5;
             CHECK(denseCholesky(M, b, n, x1) && choleskySolve(M, b, n, x2));
+            // The envelope version leaves out only exact zeros, so on one compiler it is the same bit for bit (checked
+            // with `scripts/bench.sh check`); across compilers a fused multiply-add may round the two loops differently,
+            // so the test asks for agreement to rounding error.
             bool same = x1.size() == x2.size();
-            for (size_t i = 0; same && i < x1.size(); ++i) same = (x1[i] == x2[i]);
+            for (size_t i = 0; same && i < x1.size(); ++i) same = std::fabs(x1[i] - x2[i]) <= 1e-12 * (1.0 + std::fabs(x1[i]));
             CHECK(same);
         }
         // a pivot that collapses is reported the same way
