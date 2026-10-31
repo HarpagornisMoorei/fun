@@ -1,4 +1,4 @@
-# The mech language — M12 specification
+# The mech language — M13 specification
 
 This document pins down the M6f kernel: lexical structure, grammar, static
 semantics, the kinematic solver's mathematical formulation, the
@@ -10,7 +10,7 @@ impact in dynamic ones), plate cams stated as displacement diagrams, and
 non-circular gear pairs (`mesh` between two profiles), and polygon profiles
 with filleted corners (ratchets and anything with teeth), and Coulomb friction at
 contacts, plus (M8) named parameters, numeric expressions and sweeps, and (M9) reusable
-parts, and (M10) `import` with a library of standard parts, (M11) rotated mounts, and (M12) loops and indexed names. It is the contract
+parts, and (M10) `import` with a library of standard parts, (M11) rotated mounts, (M12) loops and indexed names, and (M13) SVG drawings. It is the contract
 the implementation is tested against (`mech test`).
 
 ---
@@ -246,6 +246,12 @@ Checks run at model build time, each error pointing at a source line:
   the escapement's pair (a wheel driven by a weight and locked by a pallet).
   One hold row exists per held body across the whole mechanism: two modes
   cannot hold the same body.
+
+**M13 drawing:** `mech render` is tooling, not language (see [`RENDER.md`](RENDER.md)): it poses the model
+the way `run` does (kinematic files re-solved in steps of at most 1/60 s, dynamic ones integrated) and writes the
+geometry in world coordinates. A mechanism that does not assemble is an error. `Model::assemble` returns a model
+that has been run before to its build-time state, including a mode's hold drives (they used to keep the angle
+pinned at the end of the last run, so a second assembly of the clock began from it).
 
 **M12 loop checks:**
 
@@ -1081,7 +1087,7 @@ resistance, more than one contact point per `touch`, and compliant
 
 ## 8. Test matrix
 
-`mech test` (15144 checks) covers: lexer tokens/units/keywords/comments/errors;
+`mech test` (15338 checks) covers: lexer tokens/units/keywords/comments/errors;
 parser AST shapes for all M3 and M4 forms and all error classes; model checks,
 desugaring, gear radius arithmetic, module rules, mass derivation (rods,
 discs, compound assemblies, overrides), DOF arithmetic including tangent
@@ -1315,6 +1321,17 @@ missing `to`, an unterminated block, a negative or fractional index, an error in
 body's line). Mutation checks cover the index suffix and its checks, the range's ends, the variable's scope
 and collision rules, the loop limit, the integer checks and the three places a loop may appear.
 
+The M13 suite adds: every number in a rendered SVG read back and compared with the solver (rod endpoints, pins,
+pitch circles and the first tooth, 240 points of every profile, rollers and contact points, spring ends, hand tips,
+trace points, rail spans), for a kinematic four-bar, a cam on a gear, a dynamic jumping cam against an
+independent integration, the clock, a plate cam's rail, and an animation (frame *k* is the pose at its time, the
+one `animate` cycling `#f0..#fN` over span / speed); the root transform mapping the drawing into the page, the
+themes, the width, the ring-gear rule, the ground bar rule; the refusals (a trace that names nothing, a mechanism that
+does not assemble) and the command line end to end; and, for every example file, that posing a model twice gives
+identical poses. Mutation checks cover the transform, each kind of element, the animation's times, values and duration,
+the trace, the rail span, the assembly and pose checks, the dynamic stepping, the ring rule, the model reset and the
+command-line refusals.
+
 ## 9. Milestone history & reserved ground
 
 M1 walked the skeleton (lexer/parser/rods/pins/drives); M2 added shafts,
@@ -1383,6 +1400,9 @@ compared by running many of it. Reusable parts and composition remain open.
 M9 added reusable parts: `part` with parameters and `use ... as name on ground at (x, y)`
 (see `docs/PARTS.md`), expanded at parse time so the solver, dynamics and tooling are
 unchanged, and an instanced file runs bit for bit like the flat one.
+
+M13 added `mech render` (SVG drawings, `docs/RENDER.md`) and fixed a bug it exposed: assembling a model that had been
+run before began from the angles its mode holds had pinned at the end of that run (the viewer's reset key was affected).
 
 M12 added `for` loops, indexed names (`cam[i]`), and loops inside anchor and shape lists (see
 `docs/PARTS.md`), so structure can depend on a number: the count of a part's contents is a parameter and

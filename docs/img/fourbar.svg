@@ -1,0 +1,1514 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="800" height="646.1537" viewBox="0 0 800 646.1537" data-mechanism="fourbar" data-scale="184.6722">
+<title>fourbar</title>
+<rect width="800" height="646.1537" fill="#ffffff"/>
+<g id="world" transform="matrix(184.6722 0 0 -184.6722 196.8606 196.8606)">
+<g class="ground">
+<line class="base" x1="-0.3" y1="0" x2="3.3" y2="0" stroke="#59616b" stroke-width="0.016245" stroke-linecap="round"/>
+<g class="ticks">
+<line x1="-0.3" y1="0" x2="-0.3344608" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="-0.23502" y1="0" x2="-0.2694808" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="-0.17004" y1="0" x2="-0.2045008" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="-0.10506" y1="0" x2="-0.1395208" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="-0.04008" y1="0" x2="-0.07454085" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.0249" y1="0" x2="-0.009560849" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.08988" y1="0" x2="0.05541915" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.15486" y1="0" x2="0.1203992" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.21984" y1="0" x2="0.1853792" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.28482" y1="0" x2="0.2503592" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.3498" y1="0" x2="0.3153392" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.41478" y1="0" x2="0.3803192" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.47976" y1="0" x2="0.4452992" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.54474" y1="0" x2="0.5102792" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.60972" y1="0" x2="0.5752592" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.6747" y1="0" x2="0.6402392" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.73968" y1="0" x2="0.7052192" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.80466" y1="0" x2="0.7701992" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.86964" y1="0" x2="0.8351792" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.93462" y1="0" x2="0.9001592" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="0.9996" y1="0" x2="0.9651392" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="1.06458" y1="0" x2="1.030119" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="1.12956" y1="0" x2="1.095099" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="1.19454" y1="0" x2="1.160079" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="1.25952" y1="0" x2="1.225059" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="1.3245" y1="0" x2="1.290039" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="1.38948" y1="0" x2="1.355019" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="1.45446" y1="0" x2="1.419999" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="1.51944" y1="0" x2="1.484979" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="1.58442" y1="0" x2="1.549959" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="1.6494" y1="0" x2="1.614939" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="1.71438" y1="0" x2="1.679919" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="1.77936" y1="0" x2="1.744899" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="1.84434" y1="0" x2="1.809879" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="1.90932" y1="0" x2="1.874859" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="1.9743" y1="0" x2="1.939839" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="2.03928" y1="0" x2="2.004819" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="2.10426" y1="0" x2="2.069799" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="2.16924" y1="0" x2="2.134779" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="2.23422" y1="0" x2="2.199759" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="2.2992" y1="0" x2="2.264739" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="2.36418" y1="0" x2="2.329719" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="2.42916" y1="0" x2="2.394699" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="2.49414" y1="0" x2="2.459679" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="2.55912" y1="0" x2="2.524659" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="2.6241" y1="0" x2="2.589639" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="2.68908" y1="0" x2="2.654619" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="2.75406" y1="0" x2="2.719599" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="2.81904" y1="0" x2="2.784579" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="2.88402" y1="0" x2="2.849559" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="2.949" y1="0" x2="2.914539" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="3.01398" y1="0" x2="2.979519" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="3.07896" y1="0" x2="3.044499" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="3.14394" y1="0" x2="3.109479" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="3.20892" y1="0" x2="3.174459" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+<line x1="3.2739" y1="0" x2="3.239439" y2="0.03446085" stroke="#59616b" stroke-width="0.0081225"/>
+</g>
+</g>
+<polyline class="trace" data-anchor="coupler.B" points="1.538697,-1.644565 1.52486,-1.632165 1.511417,-1.619914 1.498364,-1.607822 1.485697,-1.595897 1.47341,-1.584148 1.461499,-1.572582 1.449959,-1.561209 1.438784,-1.550034 1.427968,-1.539063 1.417506,-1.528304 1.407393,-1.517762 1.397621,-1.507443 1.388187,-1.49735 1.379083,-1.48749 1.370303,-1.477866 1.361843,-1.468483 1.353697,-1.459345 1.345859,-1.450454 1.338323,-1.441815 1.331085,-1.433431 1.324139,-1.425304 1.317481,-1.417438 1.311105,-1.409835 1.305007,-1.402497 1.299182,-1.395428 1.293627,-1.388629 1.288336,-1.382102 1.283307,-1.37585 1.278535,-1.369875 1.274017,-1.364179 1.26975,-1.358763 1.265731,-1.353629 1.261956,-1.348779 1.258424,-1.344214 1.255131,-1.339937 1.252076,-1.335949 1.249256,-1.332252 1.24667,-1.328847 1.244316,-1.325735 1.242193,-1.322919 1.240299,-1.320398 1.238634,-1.318176 1.237196,-1.316253 1.235986,-1.314631 1.235002,-1.31331 1.234246,-1.312293 1.233716,-1.311579 1.233412,-1.311171 1.233336,-1.311068 1.233488,-1.311273 1.233869,-1.311786 1.234479,-1.312607 1.23532,-1.313737 1.236393,-1.315177 1.237699,-1.316927 1.239241,-1.318987 1.241018,-1.321357 1.243035,-1.324037 1.245292,-1.327027 1.247792,-1.330325 1.250536,-1.333932 1.253528,-1.337847 1.256769,-1.342068 1.260262,-1.346593 1.264011,-1.351422 1.268016,-1.356551 1.272282,-1.36198 1.27681,-1.367705 1.281604,-1.373723 1.286666,-1.380031 1.291999,-1.386627 1.297606,-1.393505 1.30349,-1.400662 1.309653,-1.408093 1.316097,-1.415793 1.322826,-1.423758 1.329842,-1.431981 1.337146,-1.440457 1.344742,-1.44918 1.352632,-1.458142 1.360816,-1.467336 1.369298,-1.476757 1.378078,-1.486394 1.387158,-1.496242 1.396539,-1.506291 1.406221,-1.516532 1.416206,-1.526957 1.426494,-1.537557 1.437085,-1.548321 1.447979,-1.55924 1.459175,-1.570305 1.470672,-1.581504 1.482469,-1.592828 1.494565,-1.604265 1.506958,-1.615805 1.519646,-1.627437 1.532626,-1.63915 1.545895,-1.650932 1.55945,-1.662773 1.573286,-1.674661 1.587401,-1.686584 1.60179,-1.698531 1.616447,-1.710492 1.631368,-1.722453 1.646546,-1.734405 1.661975,-1.746336 1.67765,-1.758235 1.693563,-1.770091 1.709706,-1.781893 1.726072,-1.79363 1.742653,-1.805292 1.75944,-1.816869 1.776425,-1.82835 1.793597,-1.839726 1.810947,-1.850987 1.828465,-1.862124 1.846141,-1.873128 1.863963,-1.88399 1.88192,-1.894702 1.9,-1.905256 1.918192,-1.915644 1.936482,-1.925858 1.954859,-1.935892 1.973308,-1.94574 1.991817,-1.955394 2.010371,-1.96485 2.028957,-1.974101 2.04756,-1.983144 2.066165,-1.991972 2.084757,-2.000583 2.103321,-2.008971 2.12184,-2.017135 2.140299,-2.025072 2.158682,-2.032778 2.176972,-2.040251 2.195152,-2.047491 2.213204,-2.054496 2.231113,-2.061265 2.248859,-2.067798 2.266425,-2.074095 2.283794,-2.080156 2.300946,-2.085982 2.317863,-2.091576 2.334526,-2.096937 2.350918,-2.102069 2.367017,-2.106972 2.382806,-2.111651 2.398265,-2.116108 2.413374,-2.120347 2.428113,-2.124369 2.442464,-2.128181 2.456405,-2.131784 2.469917,-2.135184 2.48298,-2.138385 2.495574,-2.141391 2.507679,-2.144206 2.519274,-2.146835 2.53034,-2.149284 2.540857,-2.151555 2.550806,-2.153654 2.560166,-2.155585 2.568917,-2.157352 2.577042,-2.15896 2.584521,-2.160411 2.591335,-2.161711 2.597466,-2.162861 2.602896,-2.163864 2.607609,-2.164724 2.611588,-2.165441 2.614816,-2.166018 2.617279,-2.166454 2.618962,-2.166751 2.619852,-2.166907 2.619936,-2.166922 2.619204,-2.166794 2.617644,-2.166519 2.615249,-2.166095 2.612011,-2.165517 2.607924,-2.164781 2.602984,-2.16388 2.597189,-2.162809 2.590537,-2.16156 2.58303,-2.160124 2.574671,-2.158494 2.565467,-2.15666 2.555423,-2.154612 2.544551,-2.15234 2.532861,-2.149833 2.520369,-2.14708 2.507091,-2.144071 2.493046,-2.140794 2.478255,-2.137237 2.462742,-2.13339 2.446533,-2.129243 2.429656,-2.124784 2.412141,-2.120005 2.394019,-2.114897 2.375325,-2.109451 2.356095,-2.10366 2.336364,-2.097519 2.316171,-2.091023 2.295555,-2.084168 2.274557,-2.076953 2.253217,-2.069376 2.231577,-2.061438 2.209677,-2.053142 2.18756,-2.044491 2.165266,-2.03549 2.142836,-2.026147 2.12031,-2.016468 2.097727,-2.006465 2.075125,-1.996148 2.052541,-1.985528 2.03001,-1.974619 2.007567,-1.963435 1.985244,-1.951991 1.963071,-1.940304 1.941078,-1.928389 1.919292,-1.916265 1.897737,-1.903948 1.876438,-1.891457 1.855416,-1.87881 1.83469,-1.866026 1.814278,-1.853123 1.794197,-1.840119 1.77446,-1.827034 1.75508,-1.813884 1.736068,-1.800688 1.717433,-1.787462 1.699183,-1.774225 1.681325,-1.760993 1.663863,-1.747781 1.646802,-1.734605 1.630144,-1.721481 1.613892,-1.708421 1.598044,-1.695441 1.582603,-1.682553 1.567565,-1.66977 1.552931,-1.657103 1.538697,-1.644565" fill="none" stroke="#339e66" stroke-width="0.01083" stroke-linejoin="round" stroke-opacity="0.75"/>
+<defs>
+<g id="f0" class="pose" data-t="0">
+<g class="rod" data-body="crank">
+<line x1="3.265805e-24" y1="-1.05812e-23" x2="0.4" y2="0.6928203" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3.265805e-24" y1="-1.05812e-23" x2="0.4" y2="0.6928203" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.4" y1="0.6928203" x2="1.538697" y2="-1.644565" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.4" y1="0.6928203" x2="1.538697" y2="-1.644565" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="1.052385e-23" x2="1.538697" y2="-1.644565" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="1.052385e-23" x2="1.538697" y2="-1.644565" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3.265805e-24" cy="-1.05812e-23" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3.265805e-24" cy="-1.05812e-23" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.4" cy="0.6928203" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.4" cy="0.6928203" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="1.052385e-23" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="1.052385e-23" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.538697" cy="-1.644565" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.538697" cy="-1.644565" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f1" class="pose" data-t="0.2083333">
+<g class="rod" data-body="crank">
+<line x1="5.477751e-13" y1="1.464225e-12" x2="0.3061467" y2="0.7391036" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="5.477751e-13" y1="1.464225e-12" x2="0.3061467" y2="0.7391036" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.3061467" y1="0.7391036" x2="1.47341" y2="-1.584148" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.3061467" y1="0.7391036" x2="1.47341" y2="-1.584148" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-3.411028e-13" x2="1.47341" y2="-1.584148" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-3.411028e-13" x2="1.47341" y2="-1.584148" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="5.477751e-13" cy="1.464225e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="5.477751e-13" cy="1.464225e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.3061467" cy="0.7391036" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.3061467" cy="0.7391036" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-3.411028e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-3.411028e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.47341" cy="-1.584148" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.47341" cy="-1.584148" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f2" class="pose" data-t="0.4166667">
+<g class="rod" data-body="crank">
+<line x1="3.766815e-13" y1="1.481795e-12" x2="0.2070552" y2="0.7727407" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3.766815e-13" y1="1.481795e-12" x2="0.2070552" y2="0.7727407" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.2070552" y1="0.7727407" x2="1.417506" y2="-1.528304" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.2070552" y1="0.7727407" x2="1.417506" y2="-1.528304" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-3.066072e-13" x2="1.417506" y2="-1.528304" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-3.066072e-13" x2="1.417506" y2="-1.528304" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3.766815e-13" cy="1.481795e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3.766815e-13" cy="1.481795e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.2070552" cy="0.7727407" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.2070552" cy="0.7727407" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-3.066072e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-3.066072e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.417506" cy="-1.528304" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.417506" cy="-1.528304" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f3" class="pose" data-t="0.625">
+<g class="rod" data-body="crank">
+<line x1="1.985589e-13" y1="1.480128e-12" x2="0.104421" y2="0.7931559" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="1.985589e-13" y1="1.480128e-12" x2="0.104421" y2="0.7931559" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.104421" y1="0.7931559" x2="1.370303" y2="-1.477866" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.104421" y1="0.7931559" x2="1.370303" y2="-1.477866" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-2.729892e-13" x2="1.370303" y2="-1.477866" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-2.729892e-13" x2="1.370303" y2="-1.477866" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.985589e-13" cy="1.480128e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.985589e-13" cy="1.480128e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.104421" cy="0.7931559" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.104421" cy="0.7931559" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-2.729892e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-2.729892e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.370303" cy="-1.477866" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.370303" cy="-1.477866" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f4" class="pose" data-t="0.8333333">
+<g class="rod" data-body="crank">
+<line x1="1.663477e-14" y1="1.46038e-12" x2="2.787481e-14" y2="0.8" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="1.663477e-14" y1="1.46038e-12" x2="2.787481e-14" y2="0.8" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="4.389812e-14" y1="0.8" x2="1.331085" y2="-1.433431" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="4.389812e-14" y1="0.8" x2="1.331085" y2="-1.433431" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-2.419482e-13" x2="1.331085" y2="-1.433431" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-2.419482e-13" x2="1.331085" y2="-1.433431" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.663477e-14" cy="1.46038e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.663477e-14" cy="1.46038e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="4.389812e-14" cy="0.8" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="4.389812e-14" cy="0.8" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-2.419482e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-2.419482e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.331085" cy="-1.433431" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.331085" cy="-1.433431" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f5" class="pose" data-t="1.041667">
+<g class="rod" data-body="crank">
+<line x1="-1.660643e-13" y1="1.423054e-12" x2="-0.104421" y2="0.7931559" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-1.660643e-13" y1="1.423054e-12" x2="-0.104421" y2="0.7931559" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.104421" y1="0.7931559" x2="1.299182" y2="-1.395428" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.104421" y1="0.7931559" x2="1.299182" y2="-1.395428" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-2.141818e-13" x2="1.299182" y2="-1.395428" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-2.141818e-13" x2="1.299182" y2="-1.395428" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-1.660643e-13" cy="1.423054e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-1.660643e-13" cy="1.423054e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.104421" cy="0.7931559" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.104421" cy="0.7931559" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-2.141818e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-2.141818e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.299182" cy="-1.395428" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.299182" cy="-1.395428" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f6" class="pose" data-t="1.25">
+<g class="rod" data-body="crank">
+<line x1="-3.466917e-13" y1="1.368384e-12" x2="-0.2070552" y2="0.7727407" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-3.466917e-13" y1="1.368384e-12" x2="-0.2070552" y2="0.7727407" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.2070552" y1="0.7727407" x2="1.274017" y2="-1.364179" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.2070552" y1="0.7727407" x2="1.274017" y2="-1.364179" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-1.897565e-13" x2="1.274017" y2="-1.364179" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-1.897565e-13" x2="1.274017" y2="-1.364179" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-3.466917e-13" cy="1.368384e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-3.466917e-13" cy="1.368384e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.2070552" cy="0.7727407" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.2070552" cy="0.7727407" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-1.897565e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-1.897565e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.274017" cy="-1.364179" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.274017" cy="-1.364179" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f7" class="pose" data-t="1.458333">
+<g class="rod" data-body="crank">
+<line x1="-5.225284e-13" y1="1.29658e-12" x2="-0.3061467" y2="0.7391036" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-5.225284e-13" y1="1.29658e-12" x2="-0.3061467" y2="0.7391036" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.3061467" y1="0.7391036" x2="1.255131" y2="-1.339937" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.3061467" y1="0.7391036" x2="1.255131" y2="-1.339937" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-1.683662e-13" x2="1.255131" y2="-1.339937" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-1.683662e-13" x2="1.255131" y2="-1.339937" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-5.225284e-13" cy="1.29658e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-5.225284e-13" cy="1.29658e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.3061467" cy="0.7391036" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.3061467" cy="0.7391036" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-1.683662e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-1.683662e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.255131" cy="-1.339937" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.255131" cy="-1.339937" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f8" class="pose" data-t="1.666667">
+<g class="rod" data-body="crank">
+<line x1="-6.909218e-13" y1="1.207994e-12" x2="-0.4" y2="0.6928203" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-6.909218e-13" y1="1.207994e-12" x2="-0.4" y2="0.6928203" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.4" y1="0.6928203" x2="1.242193" y2="-1.322919" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.4" y1="0.6928203" x2="1.242193" y2="-1.322919" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-1.49499e-13" x2="1.242193" y2="-1.322919" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-1.49499e-13" x2="1.242193" y2="-1.322919" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-6.909218e-13" cy="1.207994e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-6.909218e-13" cy="1.207994e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.4" cy="0.6928203" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.4" cy="0.6928203" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-1.49499e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-1.49499e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.242193" cy="-1.322919" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.242193" cy="-1.322919" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f9" class="pose" data-t="1.875">
+<g class="rod" data-body="crank">
+<line x1="-8.492263e-13" y1="1.103207e-12" x2="-0.4870091" y2="0.6346827" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-8.492263e-13" y1="1.103207e-12" x2="-0.4870091" y2="0.6346827" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.4870091" y1="0.6346827" x2="1.235002" y2="-1.31331" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.4870091" y1="0.6346827" x2="1.235002" y2="-1.31331" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-1.325432e-13" x2="1.235002" y2="-1.31331" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-1.325432e-13" x2="1.235002" y2="-1.31331" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-8.492263e-13" cy="1.103207e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-8.492263e-13" cy="1.103207e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.4870091" cy="0.6346827" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.4870091" cy="0.6346827" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-1.325432e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-1.325432e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.235002" cy="-1.31331" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.235002" cy="-1.31331" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f10" class="pose" data-t="2.083333">
+<g class="rod" data-body="crank">
+<line x1="-9.94754e-13" y1="9.830826e-13" x2="-0.5656854" y2="0.5656854" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-9.94754e-13" y1="9.830826e-13" x2="-0.5656854" y2="0.5656854" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.5656854" y1="0.5656854" x2="1.233488" y2="-1.311273" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.5656854" y1="0.5656854" x2="1.233488" y2="-1.311273" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-1.168583e-13" x2="1.233488" y2="-1.311273" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-1.168583e-13" x2="1.233488" y2="-1.311273" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-9.94754e-13" cy="9.830826e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-9.94754e-13" cy="9.830826e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.5656854" cy="0.5656854" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.5656854" cy="0.5656854" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-1.168583e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-1.168583e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.233488" cy="-1.311273" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.233488" cy="-1.311273" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f11" class="pose" data-t="2.291667">
+<g class="rod" data-body="crank">
+<line x1="-1.124749e-12" y1="8.487953e-13" x2="-0.6346827" y2="0.4870091" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-1.124749e-12" y1="8.487953e-13" x2="-0.6346827" y2="0.4870091" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.6346827" y1="0.4870091" x2="1.237699" y2="-1.316927" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.6346827" y1="0.4870091" x2="1.237699" y2="-1.316927" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-1.018325e-13" x2="1.237699" y2="-1.316927" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-1.018325e-13" x2="1.237699" y2="-1.316927" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-1.124749e-12" cy="8.487953e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-1.124749e-12" cy="8.487953e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.6346827" cy="0.4870091" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.6346827" cy="0.4870091" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-1.018325e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-1.018325e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.237699" cy="-1.316927" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.237699" cy="-1.316927" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f12" class="pose" data-t="2.5">
+<g class="rod" data-body="crank">
+<line x1="-1.236406e-12" y1="7.018585e-13" x2="-0.6928203" y2="0.4" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-1.236406e-12" y1="7.018585e-13" x2="-0.6928203" y2="0.4" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.6928203" y1="0.4" x2="1.247792" y2="-1.330325" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.6928203" y1="0.4" x2="1.247792" y2="-1.330325" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-8.693784e-14" x2="1.247792" y2="-1.330325" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-8.693784e-14" x2="1.247792" y2="-1.330325" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-1.236406e-12" cy="7.018585e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-1.236406e-12" cy="7.018585e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.6928203" cy="0.4" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.6928203" cy="0.4" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-8.693784e-14" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-8.693784e-14" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.247792" cy="-1.330325" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.247792" cy="-1.330325" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f13" class="pose" data-t="2.708333">
+<g class="rod" data-body="crank">
+<line x1="-1.326959e-12" y1="5.441416e-13" x2="-0.7391036" y2="0.3061467" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-1.326959e-12" y1="5.441416e-13" x2="-0.7391036" y2="0.3061467" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.7391036" y1="0.3061467" x2="1.264011" y2="-1.351422" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.7391036" y1="0.3061467" x2="1.264011" y2="-1.351422" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-7.178439e-14" x2="1.264011" y2="-1.351422" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-7.178439e-14" x2="1.264011" y2="-1.351422" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-1.326959e-12" cy="5.441416e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-1.326959e-12" cy="5.441416e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.7391036" cy="0.3061467" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.7391036" cy="0.3061467" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-7.178439e-14" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-7.178439e-14" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.264011" cy="-1.351422" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.264011" cy="-1.351422" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f14" class="pose" data-t="2.916667">
+<g class="rod" data-body="crank">
+<line x1="-1.393846e-12" y1="3.778771e-13" x2="-0.7727407" y2="0.2070552" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-1.393846e-12" y1="3.778771e-13" x2="-0.7727407" y2="0.2070552" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.7727407" y1="0.2070552" x2="1.286666" y2="-1.380031" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.7727407" y1="0.2070552" x2="1.286666" y2="-1.380031" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-5.6165e-14" x2="1.286666" y2="-1.380031" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-5.6165e-14" x2="1.286666" y2="-1.380031" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-1.393846e-12" cy="3.778771e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-1.393846e-12" cy="3.778771e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.7727407" cy="0.2070552" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.7727407" cy="0.2070552" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-5.6165e-14" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-5.6165e-14" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.286666" cy="-1.380031" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.286666" cy="-1.380031" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f15" class="pose" data-t="3.125">
+<g class="rod" data-body="crank">
+<line x1="-1.434938e-12" y1="2.056387e-13" x2="-0.7931559" y2="0.104421" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-1.434938e-12" y1="2.056387e-13" x2="-0.7931559" y2="0.104421" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.7931559" y1="0.104421" x2="1.316097" y2="-1.415793" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.7931559" y1="0.104421" x2="1.316097" y2="-1.415793" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-4.007534e-14" x2="1.316097" y2="-1.415793" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-4.007534e-14" x2="1.316097" y2="-1.415793" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-1.434938e-12" cy="2.056387e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-1.434938e-12" cy="2.056387e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.7931559" cy="0.104421" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.7931559" cy="0.104421" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-4.007534e-14" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-4.007534e-14" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.316097" cy="-1.415793" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.316097" cy="-1.415793" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f16" class="pose" data-t="3.333333">
+<g class="rod" data-body="crank">
+<line x1="-1.448799e-12" y1="3.027683e-14" x2="-0.8" y2="5.027e-14" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-1.448799e-12" y1="3.027683e-14" x2="-0.8" y2="5.027e-14" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.8" y1="7.996435e-14" x2="1.352632" y2="-1.458142" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.8" y1="7.996435e-14" x2="1.352632" y2="-1.458142" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-2.369402e-14" x2="1.352632" y2="-1.458142" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-2.369402e-14" x2="1.352632" y2="-1.458142" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-1.448799e-12" cy="3.027683e-14" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-1.448799e-12" cy="3.027683e-14" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.8" cy="7.996435e-14" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.8" cy="7.996435e-14" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-2.369402e-14" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-2.369402e-14" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.352632" cy="-1.458142" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.352632" cy="-1.458142" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f17" class="pose" data-t="3.541667">
+<g class="rod" data-body="crank">
+<line x1="-1.434872e-12" y1="-1.451904e-13" x2="-0.7931559" y2="-0.104421" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-1.434872e-12" y1="-1.451904e-13" x2="-0.7931559" y2="-0.104421" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.7931559" y1="-0.104421" x2="1.396539" y2="-1.506291" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.7931559" y1="-0.104421" x2="1.396539" y2="-1.506291" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-7.318905e-15" x2="1.396539" y2="-1.506291" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-7.318905e-15" x2="1.396539" y2="-1.506291" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-1.434872e-12" cy="-1.451904e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-1.434872e-12" cy="-1.451904e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.7931559" cy="-0.104421" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.7931559" cy="-0.104421" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-7.318905e-15" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-7.318905e-15" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.396539" cy="-1.506291" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.396539" cy="-1.506291" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f18" class="pose" data-t="3.75">
+<g class="rod" data-body="crank">
+<line x1="-1.39357e-12" y1="-3.177187e-13" x2="-0.7727407" y2="-0.2070552" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-1.39357e-12" y1="-3.177187e-13" x2="-0.7727407" y2="-0.2070552" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.7727407" y1="-0.2070552" x2="1.447979" y2="-1.55924" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.7727407" y1="-0.2070552" x2="1.447979" y2="-1.55924" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="8.727677e-15" x2="1.447979" y2="-1.55924" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="8.727677e-15" x2="1.447979" y2="-1.55924" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-1.39357e-12" cy="-3.177187e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-1.39357e-12" cy="-3.177187e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.7727407" cy="-0.2070552" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.7727407" cy="-0.2070552" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="8.727677e-15" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="8.727677e-15" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.447979" cy="-1.55924" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.447979" cy="-1.55924" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f19" class="pose" data-t="3.958333">
+<g class="rod" data-body="crank">
+<line x1="-1.326195e-12" y1="-4.843837e-13" x2="-0.7391036" y2="-0.3061467" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-1.326195e-12" y1="-4.843837e-13" x2="-0.7391036" y2="-0.3061467" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.7391036" y1="-0.3061467" x2="1.506958" y2="-1.615805" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.7391036" y1="-0.3061467" x2="1.506958" y2="-1.615805" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="2.419856e-14" x2="1.506958" y2="-1.615805" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="2.419856e-14" x2="1.506958" y2="-1.615805" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-1.326195e-12" cy="-4.843837e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-1.326195e-12" cy="-4.843837e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.7391036" cy="-0.3061467" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.7391036" cy="-0.3061467" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="2.419856e-14" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="2.419856e-14" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.506958" cy="-1.615805" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.506958" cy="-1.615805" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f20" class="pose" data-t="4.166667">
+<g class="rod" data-body="crank">
+<line x1="-1.234745e-12" y1="-6.425034e-13" x2="-0.6928203" y2="-0.4" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-1.234745e-12" y1="-6.425034e-13" x2="-0.6928203" y2="-0.4" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.6928203" y1="-0.4" x2="1.573286" y2="-1.674661" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.6928203" y1="-0.4" x2="1.573286" y2="-1.674661" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="3.899852e-14" x2="1.573286" y2="-1.674661" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="3.899852e-14" x2="1.573286" y2="-1.674661" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-1.234745e-12" cy="-6.425034e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-1.234745e-12" cy="-6.425034e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.6928203" cy="-0.4" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.6928203" cy="-0.4" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="3.899852e-14" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="3.899852e-14" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.573286" cy="-1.674661" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.573286" cy="-1.674661" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f21" class="pose" data-t="4.375">
+<g class="rod" data-body="crank">
+<line x1="-1.121663e-12" y1="-7.8972e-13" x2="-0.6346827" y2="-0.4870091" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-1.121663e-12" y1="-7.8972e-13" x2="-0.6346827" y2="-0.4870091" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.6346827" y1="-0.4870091" x2="1.646546" y2="-1.734405" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.6346827" y1="-0.4870091" x2="1.646546" y2="-1.734405" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="5.322169e-14" x2="1.646546" y2="-1.734405" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="5.322169e-14" x2="1.646546" y2="-1.734405" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-1.121663e-12" cy="-7.8972e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-1.121663e-12" cy="-7.8972e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.6346827" cy="-0.4870091" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.6346827" cy="-0.4870091" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="5.322169e-14" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="5.322169e-14" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.646546" cy="-1.734405" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.646546" cy="-1.734405" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f22" class="pose" data-t="4.583333">
+<g class="rod" data-body="crank">
+<line x1="-9.895908e-13" y1="-9.240402e-13" x2="-0.5656854" y2="-0.5656854" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-9.895908e-13" y1="-9.240402e-13" x2="-0.5656854" y2="-0.5656854" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.5656854" y1="-0.5656854" x2="1.726072" y2="-1.79363" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.5656854" y1="-0.5656854" x2="1.726072" y2="-1.79363" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="6.714994e-14" x2="1.726072" y2="-1.79363" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="6.714994e-14" x2="1.726072" y2="-1.79363" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-9.895908e-13" cy="-9.240402e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-9.895908e-13" cy="-9.240402e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.5656854" cy="-0.5656854" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.5656854" cy="-0.5656854" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="6.714994e-14" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="6.714994e-14" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.726072" cy="-1.79363" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.726072" cy="-1.79363" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f23" class="pose" data-t="4.791667">
+<g class="rod" data-body="crank">
+<line x1="-8.411941e-13" y1="-1.043846e-12" x2="-0.4870091" y2="-0.6346827" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-8.411941e-13" y1="-1.043846e-12" x2="-0.4870091" y2="-0.6346827" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.4870091" y1="-0.6346827" x2="1.810947" y2="-1.850987" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.4870091" y1="-0.6346827" x2="1.810947" y2="-1.850987" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="8.122541e-14" x2="1.810947" y2="-1.850987" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="8.122541e-14" x2="1.810947" y2="-1.850987" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-8.411941e-13" cy="-1.043846e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-8.411941e-13" cy="-1.043846e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.4870091" cy="-0.6346827" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.4870091" cy="-0.6346827" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="8.122541e-14" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="8.122541e-14" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.810947" cy="-1.850987" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.810947" cy="-1.850987" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f24" class="pose" data-t="5">
+<g class="rod" data-body="crank">
+<line x1="-6.79058e-13" y1="-1.147894e-12" x2="-0.4" y2="-0.6928203" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-6.79058e-13" y1="-1.147894e-12" x2="-0.4" y2="-0.6928203" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.4" y1="-0.6928203" x2="1.9" y2="-1.905256" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.4" y1="-0.6928203" x2="1.9" y2="-1.905256" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="9.601338e-14" x2="1.9" y2="-1.905256" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="9.601338e-14" x2="1.9" y2="-1.905256" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-6.79058e-13" cy="-1.147894e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-6.79058e-13" cy="-1.147894e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.4" cy="-0.6928203" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.4" cy="-0.6928203" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="9.601338e-14" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="9.601338e-14" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.9" cy="-1.905256" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.9" cy="-1.905256" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f25" class="pose" data-t="5.208333">
+<g class="rod" data-body="crank">
+<line x1="-5.056543e-13" y1="-1.235311e-12" x2="-0.3061467" y2="-0.7391036" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-5.056543e-13" y1="-1.235311e-12" x2="-0.3061467" y2="-0.7391036" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.3061467" y1="-0.7391036" x2="1.991817" y2="-1.955394" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.3061467" y1="-0.7391036" x2="1.991817" y2="-1.955394" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="1.12168e-13" x2="1.991817" y2="-1.955394" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="1.12168e-13" x2="1.991817" y2="-1.955394" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-5.056543e-13" cy="-1.235311e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-5.056543e-13" cy="-1.235311e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.3061467" cy="-0.7391036" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.3061467" cy="-0.7391036" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="1.12168e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="1.12168e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.991817" cy="-1.955394" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.991817" cy="-1.955394" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f26" class="pose" data-t="5.416667">
+<g class="rod" data-body="crank">
+<line x1="-3.233528e-13" y1="-1.305593e-12" x2="-0.2070552" y2="-0.7727407" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-3.233528e-13" y1="-1.305593e-12" x2="-0.2070552" y2="-0.7727407" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.2070552" y1="-0.7727407" x2="2.084757" y2="-2.000583" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.2070552" y1="-0.7727407" x2="2.084757" y2="-2.000583" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="1.304047e-13" x2="2.084757" y2="-2.000583" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="1.304047e-13" x2="2.084757" y2="-2.000583" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-3.233528e-13" cy="-1.305593e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-3.233528e-13" cy="-1.305593e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.2070552" cy="-0.7727407" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.2070552" cy="-0.7727407" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="1.304047e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="1.304047e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.084757" cy="-2.000583" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.084757" cy="-2.000583" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f27" class="pose" data-t="5.625">
+<g class="rod" data-body="crank">
+<line x1="-1.344617e-13" y1="-1.3586e-12" x2="-0.104421" y2="-0.7931559" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-1.344617e-13" y1="-1.3586e-12" x2="-0.104421" y2="-0.7931559" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="-0.104421" y1="-0.7931559" x2="2.176972" y2="-2.040251" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="-0.104421" y1="-0.7931559" x2="2.176972" y2="-2.040251" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="1.514743e-13" x2="2.176972" y2="-2.040251" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="1.514743e-13" x2="2.176972" y2="-2.040251" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-1.344617e-13" cy="-1.3586e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-1.344617e-13" cy="-1.3586e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="-0.104421" cy="-0.7931559" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="-0.104421" cy="-0.7931559" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="1.514743e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="1.514743e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.176972" cy="-2.040251" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.176972" cy="-2.040251" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f28" class="pose" data-t="5.833333">
+<g class="rod" data-body="crank">
+<line x1="5.870969e-14" y1="-1.394536e-12" x2="9.551096e-14" y2="-0.8" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="5.870969e-14" y1="-1.394536e-12" x2="9.551096e-14" y2="-0.8" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="1.549299e-13" y1="-0.8" x2="2.266425" y2="-2.074095" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="1.549299e-13" y1="-0.8" x2="2.266425" y2="-2.074095" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="1.761269e-13" x2="2.266425" y2="-2.074095" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="1.761269e-13" x2="2.266425" y2="-2.074095" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="5.870969e-14" cy="-1.394536e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="5.870969e-14" cy="-1.394536e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.549299e-13" cy="-0.8" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.549299e-13" cy="-0.8" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="1.761269e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="1.761269e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.266425" cy="-2.074095" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.266425" cy="-2.074095" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f29" class="pose" data-t="6.041667">
+<g class="rod" data-body="crank">
+<line x1="2.537628e-13" y1="-1.413887e-12" x2="0.104421" y2="-0.7931559" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="2.537628e-13" y1="-1.413887e-12" x2="0.104421" y2="-0.7931559" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.104421" y1="-0.7931559" x2="2.350918" y2="-2.102069" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.104421" y1="-0.7931559" x2="2.350918" y2="-2.102069" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="2.050422e-13" x2="2.350918" y2="-2.102069" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="2.050422e-13" x2="2.350918" y2="-2.102069" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.537628e-13" cy="-1.413887e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.537628e-13" cy="-1.413887e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.104421" cy="-0.7931559" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.104421" cy="-0.7931559" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="2.050422e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="2.050422e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.350918" cy="-2.102069" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.350918" cy="-2.102069" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f30" class="pose" data-t="6.25">
+<g class="rod" data-body="crank">
+<line x1="4.480813e-13" y1="-1.417296e-12" x2="0.2070552" y2="-0.7727407" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="4.480813e-13" y1="-1.417296e-12" x2="0.2070552" y2="-0.7727407" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.2070552" y1="-0.7727407" x2="2.428113" y2="-2.124369" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.2070552" y1="-0.7727407" x2="2.428113" y2="-2.124369" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="2.386969e-13" x2="2.428113" y2="-2.124369" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="2.386969e-13" x2="2.428113" y2="-2.124369" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="4.480813e-13" cy="-1.417296e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="4.480813e-13" cy="-1.417296e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.2070552" cy="-0.7727407" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.2070552" cy="-0.7727407" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="2.386969e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="2.386969e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.428113" cy="-2.124369" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.428113" cy="-2.124369" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f31" class="pose" data-t="6.458333">
+<g class="rod" data-body="crank">
+<line x1="6.386488e-13" y1="-1.405316e-12" x2="0.3061467" y2="-0.7391036" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="6.386488e-13" y1="-1.405316e-12" x2="0.3061467" y2="-0.7391036" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.3061467" y1="-0.7391036" x2="2.495574" y2="-2.141391" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.3061467" y1="-0.7391036" x2="2.495574" y2="-2.141391" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="2.771259e-13" x2="2.495574" y2="-2.141391" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="2.771259e-13" x2="2.495574" y2="-2.141391" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="6.386488e-13" cy="-1.405316e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="6.386488e-13" cy="-1.405316e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.3061467" cy="-0.7391036" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.3061467" cy="-0.7391036" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="2.771259e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="2.771259e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.495574" cy="-2.141391" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.495574" cy="-2.141391" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f32" class="pose" data-t="6.666667">
+<g class="rod" data-body="crank">
+<line x1="8.218148e-13" y1="-1.378015e-12" x2="0.4" y2="-0.6928203" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="8.218148e-13" y1="-1.378015e-12" x2="0.4" y2="-0.6928203" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.4" y1="-0.6928203" x2="2.550806" y2="-2.153654" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.4" y1="-0.6928203" x2="2.550806" y2="-2.153654" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="3.195331e-13" x2="2.550806" y2="-2.153654" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="3.195331e-13" x2="2.550806" y2="-2.153654" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="8.218148e-13" cy="-1.378015e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="8.218148e-13" cy="-1.378015e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.4" cy="-0.6928203" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.4" cy="-0.6928203" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="3.195331e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="3.195331e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.550806" cy="-2.153654" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.550806" cy="-2.153654" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f33" class="pose" data-t="6.875">
+<g class="rod" data-body="crank">
+<line x1="9.930486e-13" y1="-1.334394e-12" x2="0.4870091" y2="-0.6346827" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="9.930486e-13" y1="-1.334394e-12" x2="0.4870091" y2="-0.6346827" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.4870091" y1="-0.6346827" x2="2.591335" y2="-2.161711" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.4870091" y1="-0.6346827" x2="2.591335" y2="-2.161711" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="3.63725e-13" x2="2.591335" y2="-2.161711" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="3.63725e-13" x2="2.591335" y2="-2.161711" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="9.930486e-13" cy="-1.334394e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="9.930486e-13" cy="-1.334394e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.4870091" cy="-0.6346827" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.4870091" cy="-0.6346827" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="3.63725e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="3.63725e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.591335" cy="-2.161711" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.591335" cy="-2.161711" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f34" class="pose" data-t="7.083333">
+<g class="rod" data-body="crank">
+<line x1="1.146808e-12" y1="-1.27168e-12" x2="0.5656854" y2="-0.5656854" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="1.146808e-12" y1="-1.27168e-12" x2="0.5656854" y2="-0.5656854" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.5656854" y1="-0.5656854" x2="2.614816" y2="-2.166018" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.5656854" y1="-0.5656854" x2="2.614816" y2="-2.166018" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="4.054218e-13" x2="2.614816" y2="-2.166018" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="4.054218e-13" x2="2.614816" y2="-2.166018" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.146808e-12" cy="-1.27168e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.146808e-12" cy="-1.27168e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.5656854" cy="-0.5656854" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.5656854" cy="-0.5656854" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="4.054218e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="4.054218e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.614816" cy="-2.166018" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.614816" cy="-2.166018" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f35" class="pose" data-t="7.291667">
+<g class="rod" data-body="crank">
+<line x1="1.276748e-12" y1="-1.184707e-12" x2="0.6346827" y2="-0.4870091" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="1.276748e-12" y1="-1.184707e-12" x2="0.6346827" y2="-0.4870091" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.6346827" y1="-0.4870091" x2="2.619204" y2="-2.166794" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.6346827" y1="-0.4870091" x2="2.619204" y2="-2.166794" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="4.376703e-13" x2="2.619204" y2="-2.166794" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="4.376703e-13" x2="2.619204" y2="-2.166794" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.276748e-12" cy="-1.184707e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.276748e-12" cy="-1.184707e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.6346827" cy="-0.4870091" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.6346827" cy="-0.4870091" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="4.376703e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="4.376703e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.619204" cy="-2.166794" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.619204" cy="-2.166794" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f36" class="pose" data-t="7.5">
+<g class="rod" data-body="crank">
+<line x1="1.376546e-12" y1="-1.065904e-12" x2="0.6928203" y2="-0.4" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="1.376546e-12" y1="-1.065904e-12" x2="0.6928203" y2="-0.4" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.6928203" y1="-0.4" x2="2.602984" y2="-2.16388" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.6928203" y1="-0.4" x2="2.602984" y2="-2.16388" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="4.508584e-13" x2="2.602984" y2="-2.16388" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="4.508584e-13" x2="2.602984" y2="-2.16388" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.376546e-12" cy="-1.065904e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.376546e-12" cy="-1.065904e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.6928203" cy="-0.4" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.6928203" cy="-0.4" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="4.508584e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="4.508584e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.602984" cy="-2.16388" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.602984" cy="-2.16388" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f37" class="pose" data-t="7.708333">
+<g class="rod" data-body="crank">
+<line x1="1.441485e-12" y1="-9.065924e-13" x2="0.7391036" y2="-0.3061467" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="1.441485e-12" y1="-9.065924e-13" x2="0.7391036" y2="-0.3061467" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.7391036" y1="-0.3061467" x2="2.565467" y2="-2.15666" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.7391036" y1="-0.3061467" x2="2.565467" y2="-2.15666" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="4.340507e-13" x2="2.565467" y2="-2.15666" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="4.340507e-13" x2="2.565467" y2="-2.15666" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.441485e-12" cy="-9.065924e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.441485e-12" cy="-9.065924e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.7391036" cy="-0.3061467" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.7391036" cy="-0.3061467" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="4.340507e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="4.340507e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.565467" cy="-2.15666" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.565467" cy="-2.15666" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f38" class="pose" data-t="7.916667">
+<g class="rod" data-body="crank">
+<line x1="1.470383e-12" y1="-7.001223e-13" x2="0.7727407" y2="-0.2070552" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="1.470383e-12" y1="-7.001223e-13" x2="0.7727407" y2="-0.2070552" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.7727407" y1="-0.2070552" x2="2.507091" y2="-2.144071" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.7727407" y1="-0.2070552" x2="2.507091" y2="-2.144071" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="3.781642e-13" x2="2.507091" y2="-2.144071" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="3.781642e-13" x2="2.507091" y2="-2.144071" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.470383e-12" cy="-7.001223e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.470383e-12" cy="-7.001223e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.7727407" cy="-0.2070552" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.7727407" cy="-0.2070552" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="3.781642e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="3.781642e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.507091" cy="-2.144071" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.507091" cy="-2.144071" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f39" class="pose" data-t="8.125">
+<g class="rod" data-body="crank">
+<line x1="1.466798e-12" y1="-4.463295e-13" x2="0.7931559" y2="-0.104421" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="1.466798e-12" y1="-4.463295e-13" x2="0.7931559" y2="-0.104421" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.7931559" y1="-0.104421" x2="2.429656" y2="-2.124784" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.7931559" y1="-0.104421" x2="2.429656" y2="-2.124784" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="2.804662e-13" x2="2.429656" y2="-2.124784" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="2.804662e-13" x2="2.429656" y2="-2.124784" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.466798e-12" cy="-4.463295e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.466798e-12" cy="-4.463295e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.7931559" cy="-0.104421" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.7931559" cy="-0.104421" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="2.804662e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="2.804662e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.429656" cy="-2.124784" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.429656" cy="-2.124784" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f40" class="pose" data-t="8.333333">
+<g class="rod" data-body="crank">
+<line x1="1.438213e-12" y1="-1.551653e-13" x2="0.8" y2="-2.548372e-13" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="1.438213e-12" y1="-1.551653e-13" x2="0.8" y2="-2.548372e-13" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.8" y1="-4.096401e-13" x2="2.336364" y2="-2.097519" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.8" y1="-4.096401e-13" x2="2.336364" y2="-2.097519" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="1.482459e-13" x2="2.336364" y2="-2.097519" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="1.482459e-13" x2="2.336364" y2="-2.097519" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.438213e-12" cy="-1.551653e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.438213e-12" cy="-1.551653e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.8" cy="-4.096401e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.8" cy="-4.096401e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="1.482459e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="1.482459e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.336364" cy="-2.097519" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.336364" cy="-2.097519" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f41" class="pose" data-t="8.541667">
+<g class="rod" data-body="crank">
+<line x1="1.392994e-12" y1="1.534027e-13" x2="0.7931559" y2="0.104421" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="1.392994e-12" y1="1.534027e-13" x2="0.7931559" y2="0.104421" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.7931559" y1="0.104421" x2="2.231577" y2="-2.061438" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.7931559" y1="0.104421" x2="2.231577" y2="-2.061438" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-1.241864e-15" x2="2.231577" y2="-2.061438" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-1.241864e-15" x2="2.231577" y2="-2.061438" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.392994e-12" cy="1.534027e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.392994e-12" cy="1.534027e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.7931559" cy="0.104421" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.7931559" cy="0.104421" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-1.241864e-15" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-1.241864e-15" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.231577" cy="-2.061438" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.231577" cy="-2.061438" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f42" class="pose" data-t="8.75">
+<g class="rod" data-body="crank">
+<line x1="1.336779e-12" y1="4.543911e-13" x2="0.7727407" y2="0.2070552" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="1.336779e-12" y1="4.543911e-13" x2="0.7727407" y2="0.2070552" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.7727407" y1="0.2070552" x2="2.12031" y2="-2.016468" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.7727407" y1="0.2070552" x2="2.12031" y2="-2.016468" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-1.457341e-13" x2="2.12031" y2="-2.016468" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-1.457341e-13" x2="2.12031" y2="-2.016468" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.336779e-12" cy="4.543911e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.336779e-12" cy="4.543911e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.7727407" cy="0.2070552" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.7727407" cy="0.2070552" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-1.457341e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-1.457341e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.12031" cy="-2.016468" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.12031" cy="-2.016468" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f43" class="pose" data-t="8.958333">
+<g class="rod" data-body="crank">
+<line x1="1.270685e-12" y1="7.253783e-13" x2="0.7391036" y2="0.3061467" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="1.270685e-12" y1="7.253783e-13" x2="0.7391036" y2="0.3061467" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.7391036" y1="0.3061467" x2="2.007567" y2="-1.963435" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.7391036" y1="0.3061467" x2="2.007567" y2="-1.963435" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-2.654902e-13" x2="2.007567" y2="-1.963435" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-2.654902e-13" x2="2.007567" y2="-1.963435" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.270685e-12" cy="7.253783e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.270685e-12" cy="7.253783e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.7391036" cy="0.3061467" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.7391036" cy="0.3061467" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-2.654902e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-2.654902e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="2.007567" cy="-1.963435" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="2.007567" cy="-1.963435" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f44" class="pose" data-t="9.166667">
+<g class="rod" data-body="crank">
+<line x1="1.192274e-12" y1="9.523605e-13" x2="0.6928203" y2="0.4" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="1.192274e-12" y1="9.523605e-13" x2="0.6928203" y2="0.4" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.6928203" y1="0.4" x2="1.897737" y2="-1.903948" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.6928203" y1="0.4" x2="1.897737" y2="-1.903948" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-3.491013e-13" x2="1.897737" y2="-1.903948" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-3.491013e-13" x2="1.897737" y2="-1.903948" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.192274e-12" cy="9.523605e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.192274e-12" cy="9.523605e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.6928203" cy="0.4" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.6928203" cy="0.4" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-3.491013e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-3.491013e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.897737" cy="-1.903948" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.897737" cy="-1.903948" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f45" class="pose" data-t="9.375">
+<g class="rod" data-body="crank">
+<line x1="1.098092e-12" y1="1.131168e-12" x2="0.6346827" y2="0.4870091" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="1.098092e-12" y1="1.131168e-12" x2="0.6346827" y2="0.4870091" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.6346827" y1="0.4870091" x2="1.794197" y2="-1.840119" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.6346827" y1="0.4870091" x2="1.794197" y2="-1.840119" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-3.948592e-13" x2="1.794197" y2="-1.840119" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-3.948592e-13" x2="1.794197" y2="-1.840119" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.098092e-12" cy="1.131168e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.098092e-12" cy="1.131168e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.6346827" cy="0.4870091" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.6346827" cy="0.4870091" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-3.948592e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-3.948592e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.794197" cy="-1.840119" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.794197" cy="-1.840119" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f46" class="pose" data-t="9.583333">
+<g class="rod" data-body="crank">
+<line x1="9.858744e-13" y1="1.265016e-12" x2="0.5656854" y2="0.5656854" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="9.858744e-13" y1="1.265016e-12" x2="0.5656854" y2="0.5656854" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.5656854" y1="0.5656854" x2="1.699183" y2="-1.774225" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.5656854" y1="0.5656854" x2="1.699183" y2="-1.774225" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-4.08261e-13" x2="1.699183" y2="-1.774225" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-4.08261e-13" x2="1.699183" y2="-1.774225" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="9.858744e-13" cy="1.265016e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="9.858744e-13" cy="1.265016e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.5656854" cy="0.5656854" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.5656854" cy="0.5656854" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-4.08261e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-4.08261e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.699183" cy="-1.774225" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.699183" cy="-1.774225" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+<g id="f47" class="pose" data-t="9.791667">
+<g class="rod" data-body="crank">
+<line x1="8.554418e-13" y1="1.360643e-12" x2="0.4870091" y2="0.6346827" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="8.554418e-13" y1="1.360643e-12" x2="0.4870091" y2="0.6346827" stroke="#d98c1f" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="coupler">
+<line x1="0.4870091" y1="0.6346827" x2="1.613892" y2="-1.708421" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="0.4870091" y1="0.6346827" x2="1.613892" y2="-1.708421" stroke="#3380b3" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="rod" data-body="rocker">
+<line x1="3" y1="-3.981098e-13" x2="1.613892" y2="-1.708421" stroke="#24262e" stroke-width="0.048735" stroke-linecap="round"/>
+<line class="bar" x1="3" y1="-3.981098e-13" x2="1.613892" y2="-1.708421" stroke="#b84747" stroke-width="0.037905" stroke-linecap="round"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="8.554418e-13" cy="1.360643e-12" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="8.554418e-13" cy="1.360643e-12" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="0.4870091" cy="0.6346827" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="0.4870091" cy="0.6346827" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="3" cy="-3.981098e-13" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="3" cy="-3.981098e-13" r="0.011913" fill="#1f2129"/>
+</g>
+<g class="pin">
+<circle class="hub" cx="1.613892" cy="-1.708421" r="0.027075" fill="#ffffff" stroke="#24262e" stroke-width="0.006498"/>
+<circle cx="1.613892" cy="-1.708421" r="0.011913" fill="#1f2129"/>
+</g>
+</g>
+</defs>
+<use href="#f0" xlink:href="#f0">
+<animate attributeName="href" values="#f0;#f1;#f2;#f3;#f4;#f5;#f6;#f7;#f8;#f9;#f10;#f11;#f12;#f13;#f14;#f15;#f16;#f17;#f18;#f19;#f20;#f21;#f22;#f23;#f24;#f25;#f26;#f27;#f28;#f29;#f30;#f31;#f32;#f33;#f34;#f35;#f36;#f37;#f38;#f39;#f40;#f41;#f42;#f43;#f44;#f45;#f46;#f47" dur="5s" calcMode="discrete" repeatCount="indefinite"/>
+<animate attributeName="xlink:href" values="#f0;#f1;#f2;#f3;#f4;#f5;#f6;#f7;#f8;#f9;#f10;#f11;#f12;#f13;#f14;#f15;#f16;#f17;#f18;#f19;#f20;#f21;#f22;#f23;#f24;#f25;#f26;#f27;#f28;#f29;#f30;#f31;#f32;#f33;#f34;#f35;#f36;#f37;#f38;#f39;#f40;#f41;#f42;#f43;#f44;#f45;#f46;#f47" dur="5s" calcMode="discrete" repeatCount="indefinite"/>
+</use>
+</g>
+</svg>

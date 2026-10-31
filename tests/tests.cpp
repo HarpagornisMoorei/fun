@@ -11,6 +11,7 @@
 #include "../src/parser.hpp"
 #include "../src/profile.hpp"
 #include "../src/record.hpp"
+#include "../src/render.hpp"
 #include "../src/sweep.hpp"
 
 #include <algorithm>
@@ -19,6 +20,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -7427,6 +7429,571 @@ mechanism m {
     }
 }
 
+// ============================================================================
+// M13 — SVG drawings. The file carries world coordinates (metres, y up) inside one root transform,
+// so the oracle is the solver itself: every number read back out of the SVG is compared with the pose
+// the solver gives for the same time, and the pictures are looked at separately (scripts/svg2png.js).
+// ============================================================================
+
+struct SvgTag {
+    std::string name;
+    std::map<std::string, std::string> a;
+    double n(const char* k) const { auto it = a.find(k); return it == a.end() ? std::nan("") : std::strtod(it->second.c_str(), nullptr); }
+    std::string s(const char* k) const { auto it = a.find(k); return it == a.end() ? std::string() : it->second; }
+};
+
+std::vector<SvgTag> svgTags(const std::string& svg) {
+    std::vector<SvgTag> out;
+    size_t i = 0;
+    while ((i = svg.find('<', i)) != std::string::npos) {
+        const size_t e = svg.find('>', i);
+        if (e == std::string::npos) break;
+        if (svg[i + 1] != '/' && svg[i + 1] != '!' && svg[i + 1] != '?') {
+            SvgTag t;
+            size_t p = i + 1;
+            while (p < e && !std::isspace((unsigned char)svg[p]) && svg[p] != '/' && svg[p] != '>') ++p;
+            t.name = svg.substr(i + 1, p - i - 1);
+            while (p < e) {
+                while (p < e && (std::isspace((unsigned char)svg[p]) || svg[p] == '/')) ++p;
+                const size_t eq = svg.find('=', p);
+                if (eq == std::string::npos || eq >= e) break;
+                const size_t q0 = svg.find('"', eq), q1 = svg.find('"', q0 + 1);
+                if (q0 == std::string::npos || q1 == std::string::npos || q1 > e) break;
+                t.a[svg.substr(p, eq - p)] = svg.substr(q0 + 1, q1 - q0 - 1);
+                p = q1 + 1;
+            }
+            out.push_back(t);
+        }
+        i = e + 1;
+    }
+    return out;
+}
+
+std::vector<Vec2> svgPoints(const std::string& v) {
+    std::vector<Vec2> pts;
+    std::stringstream ss(v);
+    std::string tok;
+    while (ss >> tok) {
+        const size_t c = tok.find(',');
+        pts.push_back(Vec2{std::strtod(tok.substr(0, c).c_str(), nullptr), std::strtod(tok.substr(c + 1).c_str(), nullptr)});
+    }
+    return pts;
+}
+
+std::vector<SvgTag> withClass(const std::vector<SvgTag>& tags, const char* cls, const char* name = nullptr) {
+    std::vector<SvgTag> out;
+    for (const SvgTag& t : tags)
+        if (t.s("class") == cls && (!name || t.name == name)) out.push_back(t);
+    return out;
+}
+
+struct SvgRod { Vec2 a, b; };
+
+// rod body name -> its drawn endpoints
+std::map<std::string, SvgRod> svgRods(const std::vector<SvgTag>& tags) {
+    std::map<std::string, SvgRod> rods;
+    std::string cur;
+    for (const SvgTag& t : tags) {
+        if (t.name == "g" && t.s("class") == "rod") cur = t.s("data-body");
+        else if (t.name == "line" && t.s("class") == "bar" && !cur.empty()) {
+            rods[cur] = SvgRod{Vec2{t.n("x1"), t.n("y1")}, Vec2{t.n("x2"), t.n("y2")}};
+            cur.clear();
+        }
+    }
+    return rods;
+}
+
+Model modelFromFile(const char* path, const ParamOverrides& ov = {}) {
+    const std::string text = readFile(path);
+    return buildModel(parse(loadSource(text, path).tokens, ov).mechanisms[0]);
+}
+
+void testRender() {
+    std::printf("[render M13]\n");
+    const double tol = 5e-6;     // the file keeps 7 significant digits
+
+    // ---- a kinematic pose: every drawn endpoint is the solver's ----------------------------------------------------------
+    {
+        const Model m = modelFromFile("examples/fourbar.mech");
+        RenderOptions opt;
+        opt.at = 3.3;
+        const RenderResult r = renderSvg(m, opt);
+        CHECK(r.ok && r.frames == 1 && r.svg.compare(0, 4, "<svg") == 0);
+        std::string err;
+        const auto poses = samplePoses(m, {3.3}, err);
+        CHECK(poses.size() == 1 && err.empty());
+        const auto tags = svgTags(r.svg);
+        const auto rods = svgRods(tags);
+        CHECK(rods.size() == 3);
+        for (const char* nm : {"crank", "coupler", "rocker"}) {
+            const int bi = m.bodyIndex(nm);
+            CHECK(bi > 0 && rods.count(nm) == 1);
+            if (bi < 1 || !rods.count(nm)) continue;
+            const Vec2 pa = m.worldAnchor(bi, 0, poses[0]), pb = m.worldAnchor(bi, 1, poses[0]);
+            CHECK(vlen(rods.at(nm).a - pa) < tol && vlen(rods.at(nm).b - pb) < tol);
+        }
+        // pins: one hub per pin, at its anchor
+        const auto pins = withClass(tags, "hub", "circle");
+        CHECK(pins.size() == m.pins.size());
+        for (size_t k = 0; k < pins.size() && k < m.pins.size(); ++k) {
+            const Vec2 want = m.worldAnchor(m.pins[k].bodyA, m.pins[k].anchA, poses[0]);
+            CHECK(std::hypot(pins[k].n("cx") - want.x, pins[k].n("cy") - want.y) < tol);
+        }
+        // the pose is the one asked for, and the root transform maps world to a page that holds everything
+        const auto poseG = withClass(tags, "pose", "g");
+        CHECK(poseG.size() == 1 && std::fabs(poseG[0].n("data-t") - 3.3) < 1e-12);
+        const SvgTag root = svgTags(r.svg)[0];
+        const double W = root.n("width"), H = root.n("height"), scale = root.n("data-scale");
+        CHECK(W == 800.0 && H > 100.0 && scale > 0.0);
+        std::string tf;
+        for (const SvgTag& t : tags) if (t.s("id") == "world") tf = t.s("transform");
+        double s1 = 0, s2 = 0, tx = 0, ty = 0, z0 = 0, z1 = 0;
+        CHECK(std::sscanf(tf.c_str(), "matrix(%lf %lf %lf %lf %lf %lf)", &s1, &z0, &z1, &s2, &tx, &ty) == 6);
+        CHECK_APPROX(s1, scale, 1e-4 * scale);
+        CHECK_APPROX(s2, -scale, 1e-4 * scale);                      // y up in the world, down on the page
+        bool inside = true;
+        for (const auto& kv : rods)
+            for (const Vec2& p : {kv.second.a, kv.second.b}) {
+                const double px = s1 * p.x + tx, py = s2 * p.y + ty;
+                inside = inside && px > 0 && px < W && py > 0 && py < H;
+            }
+        CHECK(inside);
+        // a white page by default, the viewer's colours with dark
+        CHECK(r.svg.find("<rect width=\"800\"") != std::string::npos && r.svg.find("fill=\"#ffffff\"") != std::string::npos);
+        opt.dark = true;
+        CHECK(renderSvg(m, opt).svg.find("fill=\"#0e1114\"") != std::string::npos);
+        // the geometry fills the page: its extent is most of the width, with a margin on each side
+        {
+            double lox = 1e9, hix = -1e9;
+            for (const auto& kv : rods)
+                for (const Vec2& p : {kv.second.a, kv.second.b}) { lox = std::min(lox, s1 * p.x + tx); hix = std::max(hix, s1 * p.x + tx); }
+            CHECK(hix - lox > 0.7 * W && hix - lox < 0.99 * W);
+        }
+        // the width is the width
+        opt.dark = false;
+        opt.width = 400.0;
+        const RenderResult narrow = renderSvg(m, opt);
+        CHECK(svgTags(narrow.svg)[0].n("width") == 400.0);
+        CHECK_APPROX(svgTags(narrow.svg)[0].n("height") * 2.0, H, 1e-3 * H);   // same aspect
+    }
+
+    // ---- gears, profiles, rollers and contact points (a cam on a gear) -----------------------------------------------------
+    {
+        const Model m = modelFromFile("examples/camshaft.mech");
+        RenderOptions opt;
+        opt.at = 0.7;
+        const RenderResult r = renderSvg(m, opt);
+        CHECK(r.ok);
+        std::string err;
+        const auto poses = samplePoses(m, {0.7}, err);
+        const auto tags = svgTags(r.svg);
+        const auto pitch = withClass(tags, "pitch", "circle");
+        CHECK(pitch.size() == m.gears.size() && m.gears.size() == 2);
+        for (size_t gi = 0; gi < pitch.size() && gi < m.gears.size(); ++gi) {
+            const Vec2 c = m.gearCenter((int)gi, poses[0]);
+            CHECK(std::hypot(pitch[gi].n("cx") - c.x, pitch[gi].n("cy") - c.y) < tol);
+            CHECK_APPROX(pitch[gi].n("r"), m.gears[gi].radius, tol);
+        }
+        // teeth ticks: one per tooth, the first at the host's angle
+        const auto teeth = withClass(tags, "tooth", "line");
+        CHECK(teeth.size() == (size_t)(m.gears[0].teeth + m.gears[1].teeth));
+        {
+            const Gear& g = m.gears[0];
+            const Body& b = m.bodies[(size_t)g.body];
+            const double th = poses[0][(size_t)b.qOffset];
+            const Vec2 c = m.gearCenter(0, poses[0]);
+            CHECK(std::hypot(teeth[0].n("x1") - (c.x + 0.88 * g.radius * std::cos(th)), teeth[0].n("y1") - (c.y + 0.88 * g.radius * std::sin(th))) < tol);
+            CHECK(std::hypot(teeth[0].n("x2") - (c.x + 1.10 * g.radius * std::cos(th)), teeth[0].n("y2") - (c.y + 1.10 * g.radius * std::sin(th))) < tol);
+        }
+        // profiles: the whole outline, riding its host
+        const auto profs = withClass(tags, "profile", "polygon");
+        CHECK(profs.size() == m.profiles.size() && profs.size() == 2);
+        for (size_t k = 0; k < profs.size() && k < m.profiles.size(); ++k) {
+            const Profile& pr = m.profiles[k];
+            const Body& hb = m.bodies[(size_t)pr.body];
+            const double th = poses[0][(size_t)hb.qOffset];
+            const Vec2 tr{poses[0][(size_t)hb.qOffset + 1], poses[0][(size_t)hb.qOffset + 2]};
+            const Vec2 origin = hb.anchors[(size_t)pr.hostAnchor].local;
+            const auto want = pr.curve->outline(240);
+            const auto got = svgPoints(profs[k].s("points"));
+            CHECK(got.size() == want.size());
+            double worst = 0.0;
+            for (size_t i = 0; i < got.size() && i < want.size(); ++i)
+                worst = std::max(worst, vlen(got[i] - (rotate(origin + want[i], th) + tr)));
+            CHECK(worst < tol);
+        }
+        // rollers and the contact points
+        const auto rollers = withClass(tags, "roller", "circle");
+        const auto feet = withClass(tags, "foot", "circle");
+        CHECK(rollers.size() == m.touches.size() && feet.size() == m.touches.size());
+        for (size_t k = 0; k < m.touches.size() && k < rollers.size() && k < feet.size(); ++k) {
+            const TouchJoint& tj = m.touches[k];
+            const Vec2 tip = m.worldAnchor(tj.body, tj.anchor, poses[0]);
+            const ContactState cs = m.touchState(tj, poses[0]);
+            CHECK(std::hypot(rollers[k].n("cx") - tip.x, rollers[k].n("cy") - tip.y) < tol);
+            CHECK_APPROX(rollers[k].n("r"), tj.roller, tol);
+            CHECK(std::hypot(feet[k].n("cx") - cs.foot.x, feet[k].n("cy") - cs.foot.y) < tol);
+            CHECK(std::fabs(cs.gap - tj.roller) < 1e-6);                      // the roller rests on the curve (the row is gap - roller = 0)
+        }
+    }
+
+    // ---- a dynamic pose, against an independent integration (the CSV path), with a spring and a rail --------------------------
+    {
+        const Model m = modelFromFile("examples/jumpcam.mech");
+        RenderOptions opt;
+        opt.at = 0.09;
+        const RenderResult r = renderSvg(m, opt);
+        CHECK(r.ok);
+        const auto tags = svgTags(r.svg);
+        // simulate() integrates on its own; its last row is the state at the same step count
+        const SimSeries s = simulate(m, 0.09, 1.0 / 60.0, {}, 1);
+        std::vector<double> q((size_t)m.nq(), 0.0);
+        const auto& row = s.rows.back();
+        CHECK_APPROX(row[0], 0.09, 1e-9);
+        for (size_t bi = 1; bi < m.bodies.size(); ++bi)
+            for (size_t k = 0; k < 3; ++k) q[(size_t)m.bodies[bi].qOffset + k] = row[1 + 3 * (bi - 1) + k];
+        const auto springs = withClass(tags, "spring", "polyline");
+        CHECK(springs.size() == 1);
+        if (springs.size() == 1) {
+            const SpringJoint& sp = m.springs[0];
+            const auto pts = svgPoints(springs[0].s("points"));
+            const Vec2 pa = m.worldAnchor(sp.bodyA, sp.anchA, q), pb = m.worldAnchor(sp.bodyB, sp.anchB, q);
+            CHECK(vlen(pts.front() - pa) < tol && vlen(pts.back() - pb) < tol);
+            CHECK(pts.size() > 8);                                              // it is drawn as a coil
+        }
+        const auto feet = withClass(tags, "foot", "circle");
+        CHECK(feet.size() == 1);
+        if (feet.size() == 1) {
+            const ContactState cs = m.touchState(m.touches[0], q);
+            CHECK(std::hypot(feet[0].n("cx") - cs.foot.x, feet[0].n("cy") - cs.foot.y) < tol);
+        }
+    }
+
+    // ---- the branch is followed: a pose far from the start is reached by stepping, as `run` does ---------------------------------------
+    // (one big jump from the assembly can land on the mirror assembly: these two do, which is why the steps are there)
+    for (const auto& c : {std::make_pair("examples/fourbar.mech", 12.0), std::make_pair("examples/crankslider.mech", 5.0)}) {
+        const Model m = modelFromFile(c.first);
+        const double t = c.second;
+        std::vector<double> qj;
+        m.assemble(qj);
+        ConstraintSystem sys(m);
+        int it = 0;
+        sys.solve(qj, 0.0, it);
+        sys.solve(qj, t, it);                                           // the jump
+        const SimSeries ref = simulate(m, t, 1.0 / 60.0, {}, 1);        // run's own route: solve every 1/60 s
+        std::vector<double> qs((size_t)m.nq(), 0.0);
+        const auto& row = ref.rows.back();
+        CHECK_APPROX(row[0], t, 1e-9);
+        for (size_t bi = 1; bi < m.bodies.size(); ++bi)
+            for (size_t k = 0; k < 3; ++k) qs[(size_t)m.bodies[bi].qOffset + k] = row[1 + 3 * (bi - 1) + k];
+        double jumpGap = 0.0;
+        for (size_t k = 0; k < qs.size(); ++k) jumpGap = std::max(jumpGap, std::fabs(qj[k] - qs[k]));
+        CHECK(jumpGap > 0.5);                                           // so this case does tell the two routes apart
+        RenderOptions opt;
+        opt.at = t;
+        const RenderResult r = renderSvg(m, opt);
+        CHECK(r.ok);
+        const auto rods = svgRods(svgTags(r.svg));
+        CHECK(!rods.empty());
+        for (const auto& kv : rods) {
+            const int bi = m.bodyIndex(kv.first);
+            CHECK(bi > 0 && vlen(kv.second.a - m.worldAnchor(bi, 0, qs)) < tol && vlen(kv.second.b - m.worldAnchor(bi, 1, qs)) < tol);
+        }
+    }
+
+    // ---- a dynamic pose between steps is the nearest step's ----------------------------------------------------------------------------
+    {
+        const Model m = modelFromFile("examples/jumpcam.mech");
+        RenderOptions opt;
+        opt.at = 0.01502;                                               // 30.04 steps of 0.5 ms: step 30, mid-rise (the follower is moving)
+        const RenderResult r = renderSvg(m, opt);
+        CHECK(r.ok);
+        const SimSeries s = simulate(m, 0.01502, 1.0 / 60.0, {}, 1);    // integrates round(t / h) = 30 steps
+        std::vector<double> q((size_t)m.nq(), 0.0);
+        const auto& row = s.rows.back();
+        CHECK_APPROX(row[0], 0.015, 1e-9);
+        for (size_t bi = 1; bi < m.bodies.size(); ++bi)
+            for (size_t k = 0; k < 3; ++k) q[(size_t)m.bodies[bi].qOffset + k] = row[1 + 3 * (bi - 1) + k];
+        const auto feet = withClass(svgTags(r.svg), "foot", "circle");
+        CHECK(feet.size() == 1);
+        if (feet.size() == 1) {
+            const ContactState cs = m.touchState(m.touches[0], q);
+            CHECK(std::hypot(feet[0].n("cx") - cs.foot.x, feet[0].n("cy") - cs.foot.y) < tol);
+        }
+    }
+
+    // ---- a mechanism that closes at the start but cannot follow its drive is an error at the time it fails ---------------------------------
+    {
+        const Model m = buildModel(parse(lex("mechanism m { ground g { anchor a at (0,0) anchor b at (2.5,0) } "
+            "rod crank { length: 1 } rod coupler { length: 1 } rod rocker { length: 1 } "
+            "pin crank.A -> g.a pin coupler.A -> crank.B pin rocker.A -> g.b pin coupler.B -> rocker.B "
+            "drive crank at 90 deg/s from 0 deg }")).mechanisms[0]);
+        RenderOptions at0;
+        CHECK(renderSvg(m, at0).ok);                                    // it assembles at t = 0 ...
+        RenderOptions late;
+        late.at = 1.0;                                                  // ... and the crank cannot get this far (the tip leaves reach near 50 degrees)
+        const RenderResult r = renderSvg(m, late);
+        CHECK(!r.ok && r.error.find("cannot be posed at t = 1") != std::string::npos && r.svg.empty());
+    }
+
+    // ---- an internal mesh draws one ring (the larger gear), not two ---------------------------------------------------------------------
+    {
+        const Model m = modelFromFile("examples/planetary.mech");
+        const RenderResult r = renderSvg(m, RenderOptions{});
+        CHECK(r.ok);
+        size_t groups = 0, rings = 0, pos = 0;
+        while ((pos = r.svg.find("<g class=\"gear\"", pos)) != std::string::npos) {
+            const size_t end = r.svg.find("</g>", pos);
+            const std::string seg = r.svg.substr(pos, end - pos);
+            size_t circles = 0, at = 0;
+            while ((at = seg.find("<circle", at)) != std::string::npos) { ++circles; ++at; }
+            ++groups;
+            if (circles == 3) ++rings;                               // rim band, inner band and pitch circle
+            pos = end;
+        }
+        CHECK(groups == m.gears.size() && groups >= 3);
+        CHECK(rings == 1);
+    }
+
+    // ---- the ground: a bar through collinear anchors, marks otherwise, rails where the follower goes --------------------------------
+    {
+        const Model fb = modelFromFile("examples/fourbar.mech");
+        const auto t1 = svgTags(renderSvg(fb, RenderOptions{}).svg);
+        CHECK(withClass(t1, "base", "line").size() == 1 && withClass(t1, "mount", "line").empty());
+        const Model star = modelFromFile("examples/camstar.mech");
+        const auto t2 = svgTags(renderSvg(star, RenderOptions{}).svg);
+        CHECK(withClass(t2, "base", "line").empty());                       // four cams around a hub: not a line
+        CHECK(withClass(t2, "mount", "line").size() >= 5);
+        // a rail covers the follower's travel over the animation
+        const Model pc = modelFromFile("examples/platecam.mech");
+        RenderOptions opt;
+        opt.frames = 24;
+        opt.span = 2.0;
+        const RenderResult r = renderSvg(pc, opt);
+        CHECK(r.ok && r.frames == 24);
+        const auto tags = svgTags(r.svg);
+        const auto rails = withClass(tags, "rail", "line");
+        CHECK(rails.size() == 1);
+        std::string err;
+        std::vector<double> times;
+        for (int k = 0; k < 24; ++k) times.push_back(2.0 * k / 24.0);
+        const auto poses = samplePoses(pc, times, err);
+        const int fi = pc.bodyIndex("follower");
+        double lo = 1e9, hi = -1e9;
+        for (const auto& q : poses) { const double y = pc.worldAnchor(fi, 0, q).y; lo = std::min(lo, y); hi = std::max(hi, y); }
+        if (rails.size() == 1) {
+            const double y1 = rails[0].n("y1"), y2 = rails[0].n("y2");
+            CHECK(std::min(y1, y2) <= lo + 1e-9 && std::max(y1, y2) >= hi - 1e-9);   // the rail spans the whole stroke
+            CHECK(std::fabs(rails[0].n("x1") - rails[0].n("x2")) < 1e-9);          // along the rail's own direction
+        }
+    }
+
+    // ---- a rail runs a little beyond the stroke it carries ------------------------------------------------------------------------------
+    {
+        const Model m = modelFromFile("examples/crankslider.mech");
+        RenderOptions opt;
+        opt.frames = 24;
+        opt.span = 4.0;
+        const RenderResult r = renderSvg(m, opt);
+        CHECK(r.ok);
+        const auto tags = svgTags(r.svg);
+        const auto rails = withClass(tags, "rail", "line");
+        CHECK(rails.size() == 1);
+        std::string err;
+        std::vector<double> times;
+        for (int k = 0; k < 24; ++k) times.push_back(4.0 * k / 24.0);
+        const auto poses = samplePoses(m, times, err);
+        const int pi = m.bodyIndex("piston");
+        double lo = 1e9, hi = -1e9;
+        for (const auto& q : poses) { const double x = m.worldAnchor(pi, 0, q).x; lo = std::min(lo, x); hi = std::max(hi, x); }
+        const SvgTag root = tags[0];
+        const double ex = root.n("width") / root.n("data-scale");       // the drawing's width in metres
+        if (rails.size() == 1) {
+            const double a = std::min(rails[0].n("x1"), rails[0].n("x2")), b = std::max(rails[0].n("x1"), rails[0].n("x2"));
+            CHECK(a < lo - 0.02 * ex && b > hi + 0.02 * ex);               // margin on both ends
+            CHECK(a > lo - 0.5 * ex && b < hi + 0.5 * ex);                 // and not a rail from edge to edge
+        }
+    }
+
+    // ---- an animation: n frames, each the solver's pose at its time, one animate cycling them -------------------------------------
+    {
+        const Model m = modelFromFile("examples/fourbar.mech");
+        RenderOptions opt;
+        opt.at = 1.0;
+        opt.frames = 12;
+        opt.span = 6.0;
+        opt.speed = 2.0;
+        const RenderResult r = renderSvg(m, opt);
+        CHECK(r.ok && r.frames == 12);
+        const auto tags = svgTags(r.svg);
+        const auto frames = withClass(tags, "pose", "g");
+        CHECK(frames.size() == 12);
+        std::vector<double> times;
+        for (int k = 0; k < 12; ++k) times.push_back(1.0 + 6.0 * k / 12.0);
+        std::string err;
+        const auto poses = samplePoses(m, times, err);
+        for (size_t k = 0; k < frames.size() && k < poses.size(); ++k)
+            CHECK_APPROX(frames[k].n("data-t"), times[k], 1e-9);
+        // frame k's crank endpoints: re-parse the markup frame by frame
+        size_t at = 0, found = 0;
+        for (int k = 0; k < 12; ++k) {
+            const std::string open = "<g id=\"f" + std::to_string(k) + "\"";
+            at = r.svg.find(open, at);
+            const size_t end = r.svg.find("</defs>", at);
+            const size_t next = k < 11 ? r.svg.find("<g id=\"f" + std::to_string(k + 1) + "\"", at) : end;
+            if (at == std::string::npos || next == std::string::npos) break;
+            const auto rods = svgRods(svgTags(r.svg.substr(at, next - at)));
+            const int bi = m.bodyIndex("coupler");
+            const Vec2 pb = m.worldAnchor(bi, 1, poses[(size_t)k]);
+            if (rods.count("coupler") && vlen(rods.at("coupler").b - pb) < tol) ++found;
+            at = next;
+        }
+        CHECK(found == 12);
+        // the animation: one <use> whose href cycles #f0 .. #f11, over span / speed seconds, forever
+        std::string values, dur, repeat, calc;
+        for (const SvgTag& t : tags)
+            if (t.name == "animate" && t.s("attributeName") == "href") { values = t.s("values"); dur = t.s("dur"); repeat = t.s("repeatCount"); calc = t.s("calcMode"); }
+        std::string want;
+        for (int k = 0; k < 12; ++k) want += (k ? ";#f" : "#f") + std::to_string(k);
+        CHECK(values == want);
+        CHECK(dur == "3s" && repeat == "indefinite" && calc == "discrete");
+        // the frames are all the same picture of the same mechanism: the view does not move between them
+        CHECK(r.svg.find("<use href=\"#f0\"") != std::string::npos);
+    }
+
+    // ---- a trace -------------------------------------------------------------------------------------------------------------------------
+    {
+        const Model m = modelFromFile("examples/fourbar.mech");
+        RenderOptions opt;
+        opt.at = 0.5;
+        opt.span = 8.0;
+        opt.trace = "coupler.B";
+        const RenderResult r = renderSvg(m, opt);
+        CHECK(r.ok);
+        const auto tr = withClass(svgTags(r.svg), "trace", "polyline");
+        CHECK(tr.size() == 1 && tr[0].s("data-anchor") == "coupler.B");
+        if (tr.size() == 1) {
+            const auto pts = svgPoints(tr[0].s("points"));
+            CHECK(pts.size() == 241);
+            std::string err;
+            std::vector<double> times;
+            for (int k = 0; k <= 240; ++k) times.push_back(0.5 + 8.0 * k / 240.0);
+            const auto poses = samplePoses(m, times, err);
+            const int bi = m.bodyIndex("coupler");
+            double worst = 0.0;
+            for (size_t k = 0; k < pts.size() && k < poses.size(); ++k) worst = std::max(worst, vlen(pts[k] - m.worldAnchor(bi, 1, poses[k])));
+            CHECK(worst < tol);
+        }
+        // without a trace there is none; a trace that names nothing is an error
+        RenderOptions none;
+        CHECK(withClass(svgTags(renderSvg(m, none).svg), "trace").empty());
+        RenderOptions bad;
+        bad.trace = "coupler.Z";
+        const RenderResult br = renderSvg(m, bad);
+        CHECK(!br.ok && br.error.find("--trace expects an existing body.anchor") != std::string::npos);
+        bad.trace = "nobody";
+        CHECK(!renderSvg(m, bad).ok);
+    }
+
+    // ---- hands and dials (the clock), by count and place ---------------------------------------------------------------------------------
+    {
+        const Model m = modelFromFile("examples/clock.mech");
+        RenderOptions opt;
+        opt.at = 12.0;
+        const RenderResult r = renderSvg(m, opt);
+        CHECK(r.ok);
+        const auto tags = svgTags(r.svg);
+        std::string err;
+        const auto poses = samplePoses(m, {12.0}, err);
+        const auto hands = withClass(tags, "hand", "polygon");
+        CHECK(hands.size() == m.hands.size() && hands.size() == 3);
+        for (size_t k = 0; k < hands.size() && k < m.hands.size(); ++k) {
+            const Hand& h = m.hands[k];
+            const Vec2 mount = m.worldAnchor(h.body, h.mountAnchor, poses[0]);
+            const double th = poses[0][(size_t)m.bodies[(size_t)h.body].qOffset];
+            const auto pts = svgPoints(hands[k].s("points"));
+            CHECK(pts.size() == 6);
+            if (pts.size() == 6) CHECK(vlen(pts[3] - (mount + Vec2{h.length * std::cos(th), h.length * std::sin(th)})) < tol);   // the tip
+        }
+        size_t dials = 0;
+        for (const Dial& d : m.dials) if (d.radius > 0.0) ++dials;
+        CHECK(withClass(tags, "dial", "g").size() == dials && dials == 2);
+        // the dynamic pendulum is a rod too
+        CHECK(svgRods(tags).count("pend") == 1);
+    }
+
+    // ---- a design that does not assemble is an error, not a blank page ------------------------------------------------------------------
+    {
+        const Model m = buildModel(parse(lex("mechanism m { ground g { anchor a at (0,0) anchor b at (3,0) } "
+            "rod crank { length: 0.8 } rod coupler { length: 0.5 } rod rocker { length: 0.5 } "
+            "pin crank.A -> g.a pin coupler.A -> crank.B pin rocker.A -> g.b pin coupler.B -> rocker.B "
+            "drive crank at 36 deg/s from 60 deg }")).mechanisms[0]);
+        const RenderResult r = renderSvg(m, RenderOptions{});
+        CHECK(!r.ok && r.error.find("does not assemble") != std::string::npos && r.svg.empty());
+    }
+
+    // ---- a model can be posed again: assembling a model that has been run gives the same poses ------------------------------------------
+    // (a hold drive used to keep the angle it pinned at the end of the last run, and the next run began there:
+    // the same request twice must give identical poses, a different route to the same time the same ones to 1e-8)
+    {
+        size_t files = 0, dynamicFiles = 0;
+        for (const auto& entry : std::filesystem::directory_iterator("examples")) {
+            if (entry.path().extension() != ".mech") continue;
+            const std::string path = entry.path().string();
+            Program prog;
+            try { prog = parse(loadSource(readFile(path.c_str()), path).tokens); } catch (...) { continue; }
+            if (prog.mechanisms.empty()) continue;
+            const Model m = buildModel(prog.mechanisms[0]);
+            std::string e1, e2;
+            const auto a = samplePoses(m, {0.0, 0.5, 1.2}, e1);
+            const auto b = samplePoses(m, {0.0, 0.5, 1.2}, e2);
+            const auto c = samplePoses(m, {1.2}, e2);                  // and starting the same way whatever came before
+            CHECK(!a.empty() && a == b);
+            // a different route to the same time agrees to the solver's tolerance (different warm starts, not different answers)
+            double worst = 1e9;
+            if (!c.empty() && !a.empty() && c[0].size() == a[2].size()) {
+                worst = 0.0;
+                for (size_t k = 0; k < c[0].size(); ++k) worst = std::max(worst, std::fabs(c[0][k] - a[2][k]));
+            }
+            CHECK(worst < 1e-8);
+            ++files;
+            if (m.world.dynamic) ++dynamicFiles;
+        }
+        CHECK(files >= 20 && dynamicFiles >= 6);
+    }
+
+    // ---- the command line ---------------------------------------------------------------------------------------------------------------
+    {
+        TempDir td;
+        const std::string out = td.dir + "/out.svg", log = td.dir + "/log.txt";
+        auto run = [&](const std::string& args) {
+            return std::system(("./mech render " + args + " > " + log + " 2>&1").c_str());
+        };
+        CHECK(run("examples/fourbar.mech --at 1 -o " + out) == 0);
+        CHECK(readFile(out.c_str()).compare(0, 4, "<svg") == 0 && readFile(log.c_str()).find("1 pose") != std::string::npos);
+        CHECK(run("examples/fourbar.mech --frames 6 --span 3 --trace coupler.B --width 500 --dark -o " + out) == 0);
+        const std::string anim = readFile(out.c_str());
+        CHECK(anim.find("id=\"f5\"") != std::string::npos && anim.find("class=\"trace\"") != std::string::npos);
+        CHECK(svgTags(anim)[0].n("width") == 500.0);
+        CHECK(readFile(log.c_str()).find("6 frames") != std::string::npos);
+        // to standard output
+        CHECK(std::system(("./mech render examples/fourbar.mech -o - > " + out + " 2>&1").c_str()) == 0);
+        CHECK(readFile(out.c_str()).compare(0, 4, "<svg") == 0);
+        // --set reaches the model: six cams are six profiles
+        CHECK(run("examples/camstar.mech --set n=6 -o " + out) == 0);
+        CHECK(withClass(svgTags(readFile(out.c_str())), "profile", "polygon").size() == 6);
+        // refusals
+        CHECK(run("examples/fourbar.mech") != 0 && readFile(log.c_str()).find("needs -o") != std::string::npos);
+        CHECK(run("examples/fourbar.mech --frames 5 -o " + out) != 0 && readFile(log.c_str()).find("needs --span") != std::string::npos);
+        CHECK(run("examples/fourbar.mech --frames 0 -o " + out) != 0);
+        CHECK(run("examples/fourbar.mech --frames 9999 --span 1 -o " + out) != 0);
+        CHECK(run("examples/fourbar.mech --width 5 -o " + out) != 0);
+        CHECK(run("examples/fourbar.mech --bogus -o " + out) != 0);
+        CHECK(run("examples/fourbar.mech --trace nobody -o " + out) != 0 && readFile(log.c_str()).find("--trace expects") != std::string::npos);
+        CHECK(run("nofile.mech -o " + out) != 0);
+    }
+}
+
 } // namespace (anonymous)
 
 namespace mech {
@@ -7468,6 +8035,7 @@ int runAllTests() {
     testImports();
     testRotation();
     testLoops();
+    testRender();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

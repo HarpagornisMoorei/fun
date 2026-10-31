@@ -172,6 +172,17 @@ void Model::placeBody(std::vector<double>& q, int bodyIdx, int viaAnchor,
 }
 
 std::vector<std::string> Model::assemble(std::vector<double>& q) const {
+    // A mode's hold drives remember where they last pinned a body (their captured target and whether
+    // they are enabled). Body placement below reads that, so a model that has been run before must
+    // start from its build-time state, not from where the last run ended: the initial state's holds
+    // enabled, targets not yet captured.
+    for (const Mode& mo : modes) {
+        for (size_t hi = 0; hi < mo.holdBodies.size(); ++hi) {
+            const Drive& d = drives[(size_t)mo.holdDrive[hi]];
+            d.enabled = mo.stateHolds(0, mo.holdBodies[hi]);
+            d.theta0Rad = 0.0;
+        }
+    }
     q.assign(nq(), 0.0);
     const size_t n = bodies.size();
     std::vector<char> placed(n, 0);
