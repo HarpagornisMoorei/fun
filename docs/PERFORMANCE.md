@@ -59,12 +59,15 @@ nothing else, so everything the solvers build is sparse, and now it is *stored* 
 
 Measured (seconds of computing per second simulated at 1 ms steps, an N-link pendulum chain):
 
-| links | before M18 | after M18 | now |
+| links | before M18 | after M18 | now (M21) |
 |---|---|---|---|
 | 40 | 1.7 | 0.6 | 0.36 |
 | 80 | 13.6 | 2.1 | 0.7 |
-| 320 | ~140 (est.) | 30 (est.) | 3 |
-| 1280 | - | - | ~10 |
+| 160 | | 6.8 | 0.9 |
+| 320 | | 33 | 2.9 |
+| 1280 | | | 10.6 |
+
+(blank: not measured at that stage)
 
 The cost is linear in the size of a chain, declared in order or at random (`scripts/bench.sh`: `chain320` and `shuf320` take the same time).
 
