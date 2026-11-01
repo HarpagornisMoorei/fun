@@ -9699,6 +9699,16 @@ void testSparseSolver() {
         const double ra = maxOf(sa, "maxRes"), rb = maxOf(sb, "maxRes");
         CHECK(ra < 1e-9 && rb < 1e-9);
     }
+    // ---- a redundant constraint (the same pin twice) makes A singular: the damping lets the factor through and the motion is the pendulum's
+    {
+        const std::string once = "mechanism p { world { gravity: 9.81 step: 0.001 } ground g { anchor o at (0, 0) } body b { anchor A at (0, 0) mass: 1 com: (0.5, 0) inertia: 0.02 from: -20 deg } pin b.A -> g.o }";
+        const std::string twice = "mechanism p { world { gravity: 9.81 step: 0.001 } ground g { anchor o at (0, 0) } body b { anchor A at (0, 0) mass: 1 com: (0.5, 0) inertia: 0.02 from: -20 deg } pin b.A -> g.o pin b.A -> g.o }";
+        const SimSeries s1 = simulate(buildFromText(once.c_str()), 1.0, 1.0, {}, 1), s2 = simulate(buildFromText(twice.c_str()), 1.0, 1.0, {}, 1);
+        const int c1 = colOf(s1.columns, "b.theta"), c2 = colOf(s2.columns, "b.theta");
+        CHECK(c1 > 0 && c2 > 0);
+        if (c1 > 0 && c2 > 0) CHECK_APPROX(s2.rows.back()[(size_t)c2], s1.rows.back()[(size_t)c1], 1e-6);
+        CHECK(std::fabs(s1.rows.back()[(size_t)c1] - s1.rows[0][(size_t)c1]) > 0.1);          // and it did swing
+    }
     // ---- big mechanisms run: a 600-link chain in a few steps, kinematic and dynamic, with its constraints met
     {
         const int n = 600;
