@@ -8,6 +8,11 @@ Controls: **space** pause/resume, **R** reset, **F** refit the view, **wheel** z
 **Q**/**Esc** quit. `--trace body.anchor` draws the path of an anchor (a coupler curve), `--speed x` and `--paused`
 set the start.
 
+The window also watches for singular poses (`docs/DIAGNOSE.md`). When the mechanism nears one, a branch point or the end of its range, a line appears on
+standard error as it happens (and a second one if the constraints can then no longer be met); **R** starts the watch again. A pose it *starts* on is reported by
+`mech run` before the window opens. This was run through the software-GL harness of `scripts/` (the real `src/viewer.cpp` over a stub GLFW) on the boom and the
+Peaucellier cell; like the rest of the window it was not run on a real display.
+
 ## It draws the same picture as `mech render`
 
 Since M15 the viewer has no drawing logic of its own. `src/scene.cpp` turns a pose into a list of drawing items

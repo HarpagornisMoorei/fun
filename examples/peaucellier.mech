@@ -1,0 +1,62 @@
+// peaucellier — a Peaucellier-Lipkin cell, the first linkage that draws an exact straight line with turning joints only.
+//
+// A crank of length c, pivoted at F (which is c from O), makes P run round a circle through O. The far corner R of the rhombus
+// P-Q-R-S is the inverse of P in O: R lies on the ray O->P and |OP| |OR| = L^2 - l^2. The inverse of a circle through the centre
+// of inversion is a straight line, so R runs along
+//
+//   x = (L^2 - l^2) / (2 c) = 0.36 m
+//
+// for every crank angle (checked against the closed form by the test suite):
+//
+//   mech run examples/peaucellier.mech --headless 3.5 --csv cell.csv --probe qr.B     (qr.B.x is 0.36 in every row)
+//
+// A cell can be assembled several ways, and nothing in the constraints says which one is meant. With no help the solver folds the
+// rhombus onto itself (oq on top of os, pq on top of ps, qr on top of sr), which satisfies every constraint and draws nothing;
+// `mech check` reports that ("singular pose ... a folded branch"). The `from:` angles below start every rod of the cell near the
+// assembly with Q above the axis and S below it. They are computed from the parameters, so --set keeps them right; a rough angle
+// is enough, the solver does the rest.
+//
+// The crank cannot go all the way round. When |OP| falls to k = sqrt(L^2 - l^2) = 0.6 the rhombus goes flat (R lands on P) and the
+// cell can leave on either branch; the crank gets there at 2 acos(k / 2c) = 106.26 deg, which at 30 deg/s is t = 3.54 s. Run it for
+// a few seconds; past that point `mech run` says so:
+//
+//   mech run examples/peaucellier.mech --headless 4
+//   warning: singular configuration at t = 3.517 .. 3.567 s: the constraints came within 0.17 deg of dependent ...
+mechanism peaucellier {
+  param c = 0.5            // crank length; F is c from O, so P's circle passes through O
+  param L = 1.0            // the two long links from O
+  param l = 0.8            // the four sides of the rhombus
+
+  // Where the rods start (degrees), for the crank at 0: P is at (2c, 0), Q is xq along OP and yq above it, S mirrors Q, R is on the axis.
+  param op = 2 * c
+  param xq = (op * op + L * L - l * l) / (2 * op)
+  param yq = sqrt(L * L - xq * xq)
+  param aq = 90 - atan(xq / yq) * 180 / pi         // the angle of O->Q
+  param ap = 90 + atan((op - xq) / yq) * 180 / pi  // the angle of P->Q (Q->R is its mirror image: the rhombus)
+
+  ground frame {
+    anchor O at (0, 0)
+    anchor F at (c, 0)
+  }
+
+  rod crank { length: c }                          // A at F, B = P
+  rod oq { length: L, from: aq deg }               // A at O, B = Q
+  rod os { length: L, from: -aq deg }              // A at O, B = S
+  rod pq { length: l, from: ap deg }               // A at P, B = Q
+  rod ps { length: l, from: -ap deg }              // A at P, B = S
+  rod qr { length: l, from: -ap deg }              // A at Q, B = R: the output
+  rod sr { length: l, from: ap deg }               // A at S, B = R
+
+  pin crank.A -> frame.F
+  pin oq.A -> frame.O
+  pin os.A -> frame.O
+  pin pq.A -> crank.B
+  pin ps.A -> crank.B
+  pin pq.B -> oq.B
+  pin ps.B -> os.B
+  pin qr.A -> oq.B
+  pin sr.A -> os.B
+  pin qr.B -> sr.B
+
+  drive crank at 30 deg/s from 0 deg
+}

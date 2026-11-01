@@ -458,6 +458,10 @@ F_residual = F_free - d                  d  = rate drives
 
 Springs and torque drives are forces: they remove no DOF.
 
+The count says how many constraints there are, not whether they are independent at the pose the mechanism is in. A folded branch, a dead point and
+the flat pose where a linkage branches all have a dependent constraint, so the mechanism there can move in ways the count does not predict (and, when driven,
+may leave on either branch). `mech check` and `mech run` measure this on the Jacobian (M22, [`DIAGNOSE.md`](DIAGNOSE.md)).
+
 ### 4.2 Masses
 
 Dynamic mechanisms need mass on every body; it is auto-derived from geometry
@@ -1370,6 +1374,20 @@ side of a slide is missing; a part holding a slide, rotated (covariance); and th
 Mutation checks cover each term of every new row's Jacobian and bias, the force and its work, the reactions and the
 velocity projection, the damping, the placement, the checks and the columns.
 
+The M22 suite adds: the separation angle's rank against an independent dense rank (Gaussian elimination with full pivoting) on random sparse rows with planted dependencies,
+on shuffled row orders and on the Jacobian of every example; invariance of the angle, row by row, to the units of every equation and to the size of the mechanism (a four-bar and a plate cam drawn ten times
+bigger, a 1 mm gear train beside a 1.5 m arm); every example regular at assembly (closest 7.7 degrees, the boom near the end of its stroke) and quiet over a run; the Peaucellier cell folded (rank 20 of 21,
+three pairs of bodies in the same place, named) and seeded (regular), the other regular assembly mode correctly not flagged; redundancy the count forces (two pins on a plate) and
+redundancy by design (three parallel cranks) as notes; the cell's bifurcation flagged within a frame of the closed-form crank angle 2 acos(k/2c); the boom's end of stroke flagged
+at the closed-form actuator limit and told apart from a branch point by its residual; a bead flung to 27 m along a tube drawn 0.1 m long staying regular (the lever arm comes from
+the rows, not the drawing); the baseline of a design that is over-constrained on purpose not being news; a monitored run ending in bit-for-bit the same state, and the same tracked gear angles, as an unmonitored one
+(gear meshes and contacts included); the shipped Peaucellier cell keeping R on x = 0.36 over the crank's range, and its seeds following `--set`; the window's interface (each excursion told once, the end of the range told again, reset); the labels following the rows through a run
+in which contacts engage and lift off; and the command line end to end. Mutation checks cover the dependent and near-singular thresholds, the lever arms (weights fixed at the drawing against taken from the rows, in the assembly and in the monitor), a floor on
+the reach (a 1 mm gear train in a 1.5 m mechanism), the coincident-body and count-explained rules, the baseline, the lost-range test, the row names, the monitor evaluating residuals (one
+extra evaluation per step changes the tracked gear angle of six examples and the final pose of two) and the live interface (each excursion told once, the end of the range told again,
+reset). Two mutations are equivalent and are not tested: keeping a dependent row's column in the factorization changes nothing but rounding, and taking every row at unit length
+changes nothing at all, since an angle does not depend on a row's length (the step was removed).
+
 ## 9. Milestone history & reserved ground
 
 M1 walked the skeleton (lexer/parser/rods/pins/drives); M2 added shafts,
@@ -1438,6 +1456,10 @@ compared by running many of it. Reusable parts and composition remain open.
 M9 added reusable parts: `part` with parameters and `use ... as name on ground at (x, y)`
 (see `docs/PARTS.md`), expanded at parse time so the solver, dynamics and tooling are
 unchanged, and an instanced file runs bit for bit like the flat one.
+
+M22 made `mech check` and `mech run` say when a pose is not regular (`docs/DIAGNOSE.md`): the Jacobian's rank and a scale-free separation angle between each constraint and the others,
+at the assembled pose (a folded branch with bodies in the same place, dependent constraints) and at every step of a run (a singular configuration nearly met, the end of the mechanism's range,
+told apart by the residual), in the window too. `examples/peaucellier.mech` is the cell it was found with. Nothing it does changes a number the solvers compute.
 
 M21 made the solvers sparse (sparse Jacobian rows, a skyline Cholesky for `J W J^T` and `J^T J`, reverse Cuthill-McKee when the declaration
 order is bad): cost linear in the size of a mechanism (`docs/PERFORMANCE.md`).

@@ -1,6 +1,6 @@
 // mech — main.cpp: command line interface
 //
-//   mech check <file.mech>                    static analysis: parse, DOF, assembly
+//   mech check <file.mech>                    static analysis: parse, DOF, assembly, is the pose regular
 //   mech run   <file.mech> [options]          animate (window) or --headless <sec>
 //   mech test                                 run the unit test suite
 //
@@ -11,6 +11,7 @@
 //   --paused           open the window paused
 
 #include "ast.hpp"
+#include "diagnose.hpp"
 #include "dynamics.hpp"
 #include "kinematics.hpp"
 #include "record.hpp"
@@ -117,7 +118,7 @@ void printHelp() {
         "mech — mechanism language, M7: contact, cams, gears, friction; CSV export\n"
         "\n"
         "usage:\n"
-        "  mech check <file.mech>              parse + DOF analysis + initial assembly\n"
+        "  mech check <file.mech>              parse + DOF analysis + initial assembly + is that pose regular\n"
         "  mech run <file.mech> [options]      animate in an OpenGL window\n"
         "  mech sweep <file.mech> --set name=a:b:step [options]\n"
         "                                      run the design over a range of `param` values\n"
@@ -542,6 +543,17 @@ int cmdCheck(const std::string& path, const ParamOverrides& overrides = {}) {
         std::printf("assembly %s (max residual %.2e, %d iterations)\n",
                     ok ? "converged [ok]" : "DID NOT CONVERGE [warn]", res, iters);
 
+        // M22: converged is not the same as regular. A folded branch or a dead point satisfies every constraint; its
+        // Jacobian is where it shows
+        if (ok) {
+            for (const Finding& f : describePose(m, diagnosePose(m, sys, q))) {
+                const char* before = f.severity == Severity::Warn ? "[warn] " : "";
+                const char* after = f.severity == Severity::Ok ? " [ok]" : "";
+                std::printf("%s%s%s\n", before, f.headline.c_str(), after);
+                for (const std::string& d2 : f.details) std::printf("  %s\n", d2.c_str());
+            }
+        }
+
         // M4: hands and dials (dials resolve at assembly)
         for (const Hand& h : m.hands) {
             const Vec2 mount = m.worldAnchor(h.body, h.mountAnchor, q);
@@ -617,7 +629,8 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
     ConstraintSystem sys(m);
     int iters = 0;
     double res = 0;
-    if (!sys.solve(q, 0.0, iters, &res)) {
+    const bool assembled = sys.solve(q, 0.0, iters, &res);
+    if (!assembled) {
         std::fprintf(stderr, "warning: initial assembly did not converge (max residual %.3e)\n", res);
     }
     std::vector<std::string> geomErrs = m.validateAssembly(q);
@@ -625,6 +638,14 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
         for (const std::string& e : geomErrs)
             std::fprintf(stderr, "error: %s\n", e.c_str());
         return 1;
+    }
+    // M22: say so when the pose it assembled to is singular (a folded branch, a dead point)
+    if (assembled) {
+        for (const Finding& f : describePose(m, diagnosePose(m, sys, q))) {
+            if (f.severity == Severity::Ok) continue;
+            std::fprintf(stderr, "%s: %s\n", f.severity == Severity::Warn ? "warning" : "note", f.headline.c_str());
+            for (const std::string& d2 : f.details) std::fprintf(stderr, "  %s\n", d2.c_str());
+        }
     }
 
     if (!headless && (!ex.csv.empty() || !ex.probes.empty() || ex.dt > 0.0 || ex.every != 1)) {
@@ -681,9 +702,12 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
                 std::fprintf(csv.f, "%s\n", rec.headerLine().c_str());
                 csv.row(0.0, q, qd, sys.maxResidual(q, 0.0));
             }
+            RunMonitor monitor(sys);       // M22: reads the Jacobian at each step; changes nothing
+            monitor.observe(q, 0.0);
             for (long k = 1; k <= steps; ++k) {
                 const double t = (k - 1) * h;
                 dyn.step(q, qd, t);
+                monitor.observe(q, k * h);
                 if (csv.f && (k % ex.every == 0 || k == steps))
                     csv.row(k * h, q, qd, sys.maxResidual(q, k * h));
                 if (k % reportEvery == 0 || k == steps) {
@@ -715,6 +739,8 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
                     std::printf("\n");
                 }
             }
+            monitor.finish();
+            for (const std::string& line : monitor.report()) std::fprintf(stderr, "warning: %s\n", line.c_str());
             for (size_t di = 0; di < m.drives.size(); ++di) {
                 if (!m.drives[di].enabled) continue;   // a disabled mode hold
                 std::printf("drive %-8s reaction torque: %9.4f N*m\n",
@@ -794,9 +820,12 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
         }
         int frame = 0;
         double maxSeen = 0;
+        RunMonitor monitor(sys);           // M22: reads the Jacobian at each frame; changes nothing
+        monitor.observe(q, 0.0);
         for (double t = dt; t <= headlessSecs + 1e-9; t += dt, ++frame) {
             sys.solve(q, t, iters);
             double r = sys.maxResidual(q, t);
+            monitor.observe(q, t, r);
             maxSeen = std::max(maxSeen, r);
             if (csv.f && (frame + 1) % ex.every == 0) csv.row(t, q, noVel, r);
             if (frame % printEvery == 0) {
@@ -810,6 +839,8 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
                 std::printf("\n");
             }
         }
+        monitor.finish();
+        for (const std::string& line : monitor.report()) std::fprintf(stderr, "warning: %s\n", line.c_str());
         std::printf("done: %d frames, worst residual %.2e\n", frame, maxSeen);
         if (csv.f)
             std::printf("wrote %s: %ld rows x %zu columns\n", ex.csv.c_str(), csv.rows,

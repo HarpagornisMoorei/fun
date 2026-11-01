@@ -15,6 +15,7 @@
 // builds a stub so the rest of `mech` still works headless.
 
 #include "viewer.hpp"
+#include "diagnose.hpp"
 #include "dynamics.hpp"
 #include "kinematics.hpp"
 #include "geom.hpp"
@@ -257,6 +258,10 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
                      res0);
     }
     if (dynamic) dyn.projectVelocities(q, qd);   // rate-driven bodies start at speed
+    // M22: the window says so when the mechanism reaches a singular pose (a branch point, the end of its range). A pose it starts
+    // on was reported by `mech run` before the window opened.
+    RunMonitor monitor(sys);
+    monitor.observe(q, 0.0);
 
     int traceBody = -1, traceAnchor = -1;
     if (!traceRef.empty()) {
@@ -400,6 +405,8 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
             qd.assign(m.nq(), 0.0);
             if (dynamic) dyn.projectVelocities(q, qd);
             dyn.resetHybrid();   // M5: rewind the discrete state and its ledger
+            monitor.reset();     // M22
+            monitor.observe(q, 0.0);
             simT = 0.0; accum = 0.0; trail.clear();
             for (RailSpan& sp : spans) { sp.t0 = 1e30; sp.t1 = -1e30; }
             updateSpans();
@@ -438,12 +445,16 @@ int run(const Model& m, double speedMul, bool startPaused, const std::string& tr
                     simT += h;
                     accum -= h;
                     ++guard;
+                    monitor.observe(q, simT);
                 }
                 if (guard >= 4000) accum = 0.0;   // too far behind; drop the debt
             } else {
                 simT += speed * dt;
-                sys.solve(q, simT, iters);
+                double stepRes = 0.0;
+                sys.solve(q, simT, iters, &stepRes);
+                monitor.observe(q, simT, stepRes);
             }
+            for (const std::string& line : monitor.startedSince()) std::fprintf(stderr, "warning: %s\n", line.c_str());
             if (traceBody >= 0 && (long)trail.size() < 20000) {
                 trail.push_back(m.worldAnchor(traceBody, traceAnchor, q));
             }
