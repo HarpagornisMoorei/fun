@@ -41,11 +41,43 @@ sh scripts/bench.sh check base      # ... and compare after a change: every file
 Typical numbers on this machine (seconds of computing, for the simulated time shown): Geneva 1.1 s for 3 s; ratchet 0.3 s for
 3 s; jumpcam 0.6 s for 1 s; clock 0.5 s for 20 s; chains of 20, 40 and 80 links 0.2, 0.6 and 2.1 s for 1 s.
 
+## The sparse solver (M21)
+
+The first round made the dense solver skip its zeros; M21 removed the dense matrices. A constraint row touches the bodies it joins and
+nothing else, so everything the solvers build is sparse, and now it is *stored* sparse too:
+
+* **Rows.** `ConstraintSystem::jacobianSparse` gives the Jacobian as sparse rows (columns ascending, exact zeros left out); the dense
+  `jacobian` is the same assembly into a matrix.
+* **The multiplier system** `A = J W J^T` (dynamics, impacts, velocity projection) is formed only between rows that share a body, stored as a
+  skyline (each row keeps the columns from its first nonzero to the diagonal), and factored by a skyline Cholesky with the same relative
+  damping as before. The factor is computed once per solve and reused by the friction passes.
+* **The kinematic solve** (Levenberg-Marquardt, every step of a kinematic run and the stabilization of a dynamic one) forms `J^T J` the same way.
+* **Ordering.** The unknowns are numbered in the order the bodies were declared and the rows in the order the joints were written. For a chain
+  declared in order that is the best order there is; declared at random it would make the envelope as big as the matrix. So the
+  pattern is looked at once (and again only when it changes) and, if a reverse Cuthill-McKee numbering shrinks the envelope below 70%
+  of the natural one, the solve works in that numbering.
+
+Measured (seconds of computing per second simulated at 1 ms steps, an N-link pendulum chain):
+
+| links | before M18 | after M18 | now |
+|---|---|---|---|
+| 40 | 1.7 | 0.6 | 0.36 |
+| 80 | 13.6 | 2.1 | 0.7 |
+| 320 | ~140 (est.) | 30 (est.) | 3 |
+| 1280 | - | - | ~10 |
+
+The cost is linear in the size of a chain, declared in order or at random (`scripts/bench.sh`: `chain320` and `shuf320` take the same time).
+
+**What changed in the numbers.** Declared in order, nothing: the sparse sums are the dense sums with the zeros left out, in the same order, and
+`scripts/bench.sh check` compares the CSV of every benchmark with a saved baseline (up to the sign of an exact zero, which a different
+arithmetic order can flip). Where the reordering applies (a mechanism written in an unlucky order, such as `examples/clock.mech`) the
+arithmetic is done in a different order and results agree to rounding: the clock's CSV differs from before by 7e-12 relative after 20 s.
+
 ## What is still slow
 
-* The cost of a large mechanism still grows faster than linearly (80 links is 3.5× the cost of 40): the multiplier matrix is stored
-  densely and the Cholesky factor is only skipped where it is zero, not stored compactly, and the Jacobian is built dense.
-  A fully sparse formulation would be the next step for hundreds of bodies.
-* Contact search is per touch per evaluation; many touches against one big profile still pay the lower-bound pass
-  over all its pieces (a spatial grid would remove that).
-* Kinematic runs (a solve per step) were not the problem and were not touched.
+* A hub body that many rows touch (a planet carrier with hundreds of planets) makes those rows a clique in `A`; that is dense in the number of planets.
+* Contact search is per touch per evaluation; many touches against one big profile still pay the lower-bound pass over all its pieces
+  (a spatial grid would remove that).
+* Per step the code still allocates (sparse rows, hashing the pattern, scratch vectors); a profile of a 1280-link chain is spread over
+  assembling, factoring and solving rather than dominated by one thing.
+* Kinematic runs (a solve per step) benefit from the sparse LM solve, but the multi-start search for a hard configuration is unchanged.

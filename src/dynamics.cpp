@@ -56,33 +56,6 @@ namespace {
 // step can integrate stably.
 const double kFrictionEps = 2e-3;
 
-// Solve A x = b for symmetric A with growing Tikhonov damping until the
-// Cholesky succeeds. Returns false only if even brutal damping collapses.
-//
-// The damping is relative to each row's own diagonal. (It used to be one absolute number scaled by the
-// largest diagonal, which for masses spanning many decades — a 10 kg boom and a 1e-5 kg linkage — swamped
-// the rows that come from the heavy bodies and skewed the multipliers by percent.)
-bool dampedSolve(const std::vector<double>& A, const std::vector<double>& b, int n,
-                 std::vector<double>& x) {
-    double eps = 1e-10;
-    thread_local std::vector<double> Ad;
-    for (int attempt = 0; attempt < 6; ++attempt) {
-        Ad = A;
-        for (int i = 0; i < n; ++i) {
-            const double d = Ad[(size_t)i * n + i];
-            Ad[(size_t)i * n + i] += eps * std::max(d, 1e-12) + 1e-15;
-        }
-        if (choleskySolve(Ad, b, n, x)) return true;
-        eps *= 100.0;
-    }
-    x.assign(n, 0.0);
-    return false;
-}
-
-inline double dot3(const double* a, const double* b) {
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
 } // namespace
 
 DynamicsSystem::DynamicsSystem(const Model& model, const ConstraintSystem& sys)
@@ -114,6 +87,107 @@ void DynamicsSystem::applyW(const std::vector<MassBlock>& W, int bodyIdx,
     out[0] = id * ( M.d * M.d * v0 - M.b * M.d * v1 - M.c * M.d * v2);
     out[1] = id * (-M.b * M.d * v0 + (M.a * M.d - M.c * M.c) * v1 + M.b * M.c * v2);
     out[2] = id * (-M.c * M.d * v0 + M.b * M.c * v1 + (M.a * M.d - M.b * M.b) * v2);
+}
+
+void DynamicsSystem::buildSchur(const std::vector<SparseRow>& J, const std::vector<MassBlock>& W, Schur& S) const {
+    const int rows = (int)J.size();
+    const int nb = (int)m.bodies.size();
+    // W J^T: for each body a row touches, W applied to that body's three entries
+    S.BJ.assign((size_t)rows, SparseRow());
+    std::vector<std::vector<int>> rowsOf((size_t)nb);                 // the rows that touch each body, ascending
+    std::vector<int> bodyOfCol((size_t)m.nq(), 0);
+    for (int bi = 1; bi < nb; ++bi)
+        if (m.bodies[(size_t)bi].qOffset >= 0)
+            for (int k = 0; k < 3; ++k) bodyOfCol[(size_t)m.bodies[(size_t)bi].qOffset + (size_t)k] = bi;
+    std::vector<std::vector<int>> bodiesOfRow((size_t)rows);
+    for (int j = 0; j < rows; ++j) {
+        const SparseRow& Jj = J[(size_t)j];
+        for (size_t x = 0; x < Jj.col.size();) {
+            const int bi = bodyOfCol[(size_t)Jj.col[x]];
+            const int o = m.bodies[(size_t)bi].qOffset;
+            double v[3] = {0.0, 0.0, 0.0};
+            for (; x < Jj.col.size() && bodyOfCol[(size_t)Jj.col[x]] == bi; ++x) v[Jj.col[x] - o] = Jj.val[x];
+            double wv[3];
+            applyW(W, bi, v[0], v[1], v[2], wv);
+            for (int k = 0; k < 3; ++k) { S.BJ[(size_t)j].col.push_back(o + k); S.BJ[(size_t)j].val.push_back(wv[k]); }
+            bodiesOfRow[(size_t)j].push_back(bi);
+            rowsOf[(size_t)bi].push_back(j);
+        }
+    }
+    // The envelope of A: row i reaches back to the first row that shares a body with it. The rows are numbered in the
+    // order the joints were written; when that order makes the envelope large (a mechanism declared out of order) they are
+    // renumbered by reverse Cuthill-McKee, and the solve below maps through the permutation.
+    // (the order is worked out when the pattern of the rows changes, not at every step)
+    struct OrderCache { unsigned long long hash = 0; bool have = false; std::vector<int> perm; };
+    thread_local OrderCache cache;
+    const unsigned long long h = patternHash(J);
+    if (!cache.have || cache.hash != h) {
+        std::vector<std::vector<int>> adj((size_t)rows);
+        for (int bi = 1; bi < nb; ++bi)
+            for (int i : rowsOf[(size_t)bi])
+                for (int k : rowsOf[(size_t)bi]) if (k != i) adj[(size_t)i].push_back(k);
+        cache.perm = envelopeOrdering(adj);
+        cache.hash = h;
+        cache.have = true;
+    }
+    S.perm = cache.perm;
+    S.iperm.clear();
+    if (!S.perm.empty()) {
+        S.iperm.assign((size_t)rows, 0);
+        for (int n = 0; n < rows; ++n) S.iperm[(size_t)S.perm[(size_t)n]] = n;
+    }
+    auto idx = [&](int i) { return S.perm.empty() ? i : S.iperm[(size_t)i]; };
+    std::vector<int> first((size_t)rows);
+    for (int i = 0; i < rows; ++i) {
+        first[(size_t)idx(i)] = idx(i);
+        for (int bi : bodiesOfRow[(size_t)i])
+            for (int k : rowsOf[(size_t)bi]) first[(size_t)idx(i)] = std::min(first[(size_t)idx(i)], idx(k));
+    }
+    S.A.init(first);
+    // A(k, j) = J_j . BJ_k for k >= j, taken over the columns of J_j in ascending order
+    std::vector<int> seen((size_t)rows, -1);
+    for (int j = 0; j < rows; ++j) {
+        const SparseRow& Jj = J[(size_t)j];
+        for (int bi : bodiesOfRow[(size_t)j]) {
+            for (int k : rowsOf[(size_t)bi]) {
+                if (k < j || seen[(size_t)k] == j) continue;
+                seen[(size_t)k] = j;
+                const SparseRow& Bk = S.BJ[(size_t)k];
+                double s = 0.0;
+                size_t y = 0;
+                for (size_t x = 0; x < Jj.col.size(); ++x) {
+                    while (y < Bk.col.size() && Bk.col[y] < Jj.col[x]) ++y;
+                    if (y < Bk.col.size() && Bk.col[y] == Jj.col[x]) s += Jj.val[x] * Bk.val[y];
+                }
+                const int a = idx(k), b = idx(j);
+                S.A.at(std::max(a, b), std::min(a, b)) = s;
+            }
+        }
+    }
+    // the damped factor: relative damping on each row's own diagonal, growing until the Cholesky succeeds
+    S.ok = false;
+    double eps = 1e-10;
+    for (int attempt = 0; attempt < 6 && !S.ok; ++attempt) {
+        S.L = S.A;
+        for (int i = 0; i < rows; ++i) {
+            const double d = S.A.at(i, i);
+            S.L.at(i, i) += eps * std::max(d, 1e-12) + 1e-15;
+        }
+        S.ok = skylineFactorInPlace(S.L);
+        eps *= 100.0;
+    }
+}
+
+bool DynamicsSystem::solveSchur(const Schur& S, const std::vector<double>& rhs, std::vector<double>& x) {
+    if (!S.ok) { x.assign(rhs.size(), 0.0); return false; }
+    if (S.perm.empty()) { skylineSolve(S.L, rhs, x); return true; }
+    const size_t n = rhs.size();
+    std::vector<double> b(n), y;
+    for (size_t k = 0; k < n; ++k) b[k] = rhs[(size_t)S.perm[k]];
+    skylineSolve(S.L, b, y);
+    x.assign(n, 0.0);
+    for (size_t k = 0; k < n; ++k) x[(size_t)S.perm[k]] = y[k];
+    return true;
 }
 
 void DynamicsSystem::accelerations(const std::vector<double>& q,
@@ -222,8 +296,8 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
     // --- constraint rows: J, residuals (for slide dirlock), bias --------------
     std::vector<double> c;
     sys.residuals(q, 0.0, c);   // slide dirlock values; also keeps psi tracking warm
-    std::vector<double> J;
-    sys.jacobian(q, J);
+    std::vector<SparseRow> J;
+    sys.jacobianSparse(q, J);
     std::vector<double> bias(rows, 0.0);
 
     int r = 0;
@@ -382,43 +456,9 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
     // --- KKT via Schur complement --------------------------------------------
     std::vector<MassBlock> Mblocks;
     massBlocks(q, Mblocks);
-    // scratch reused from call to call (a large mechanism would otherwise allocate and zero hundreds of kilobytes per step)
-    thread_local std::vector<std::vector<double>> BJ;
-    BJ.resize((size_t)rows);
-    for (int j = 0; j < rows; ++j) BJ[(size_t)j].assign((size_t)nq, 0.0);
-    for (int j = 0; j < rows; ++j) {
-        const double* Jj = &J[(size_t)j * nq];
-        for (size_t bi = 1; bi < m.bodies.size(); ++bi) {
-            const int o = m.bodies[bi].qOffset;
-            if (Jj[o] == 0.0 && Jj[o + 1] == 0.0 && Jj[o + 2] == 0.0) continue;
-            double wv[3];
-            applyW(Mblocks, (int)bi, Jj[o], Jj[o + 1], Jj[o + 2], wv);
-            BJ[j][o] = wv[0];
-            BJ[j][o + 1] = wv[1];
-            BJ[j][o + 2] = wv[2];
-        }
-    }
-    // The columns each row touches: a joint row involves two bodies, so a row has a handful of nonzeros however
-    // large the mechanism is. The sums below visit only those, in the same order and so with the same rounding
-    // as a sum over every column (the terms left out are exact zeros).
-    std::vector<std::vector<int>> nzJ((size_t)rows), nzB((size_t)rows);
-    for (int j = 0; j < rows; ++j) {
-        const double* Jj = &J[(size_t)j * nq];
-        for (int cix = 0; cix < nq; ++cix) if (Jj[cix] != 0.0) nzJ[(size_t)j].push_back(cix);
-        for (int cix = 0; cix < nq; ++cix) if (BJ[j][cix] != 0.0 || Jj[cix] != 0.0) nzB[(size_t)j].push_back(cix);
-    }
-    // A = J W J^T (it does not depend on the forces)
-    thread_local std::vector<double> A;
-    A.assign((size_t)rows * rows, 0.0);
-    for (int j = 0; j < rows; ++j) {
-        const double* Jj = &J[(size_t)j * nq];
-        for (int k = j; k < rows; ++k) {
-            double s = 0.0;
-            for (int cix : nzJ[(size_t)j]) s += Jj[cix] * BJ[k][cix];
-            A[(size_t)j * rows + k] = s;
-            A[(size_t)k * rows + j] = s;
-        }
-    }
+    // The multiplier system, sparse: W J^T, A = J W J^T as a skyline and its damped factor (it does not depend on the forces)
+    thread_local Schur S;
+    buildSchur(J, Mblocks, S);
 
     // Multipliers and accelerations under a given generalized force Qe:
     //   z = W Qe,  A lam = -(J z + bias),  qdd = z + W J^T lam
@@ -434,17 +474,17 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
         }
         std::vector<double> rhs(rows, 0.0);
         for (int j = 0; j < rows; ++j) {
-            const double* Jj = &J[(size_t)j * nq];
             double s = 0.0;
-            for (int cix : nzJ[(size_t)j]) s += Jj[cix] * z[cix];
+            for (size_t x = 0; x < J[(size_t)j].col.size(); ++x) s += J[(size_t)j].val[x] * z[(size_t)J[(size_t)j].col[x]];
             rhs[j] = -(s + bias[j]);
         }
         lam.assign((size_t)rows, 0.0);
-        if (rows > 0) dampedSolve(A, rhs, rows, lam);
+        if (rows > 0) solveSchur(S, rhs, lam);
         qdd = z;
         for (int j = 0; j < rows; ++j) {
             if (lam[j] == 0.0) continue;
-            for (int cix : nzB[(size_t)j]) qdd[cix] += BJ[j][cix] * lam[j];
+            const SparseRow& Bj = S.BJ[(size_t)j];
+            for (size_t x = 0; x < Bj.col.size(); ++x) qdd[(size_t)Bj.col[x]] += Bj.val[x] * lam[j];
         }
     };
     solveWith(Qeff);
@@ -507,8 +547,8 @@ void DynamicsSystem::accelerations(const std::vector<double>& q,
                 if (rows > 0) {
                     std::vector<double> a((size_t)rows, 0.0), y;
                     for (int j = 0; j < rows; ++j)
-                        for (int i = 0; i < nq; ++i) a[(size_t)j] += J[(size_t)j * nq + i] * g[(size_t)i];
-                    if (dampedSolve(A, a, rows, y)) {
+                        for (size_t x = 0; x < J[(size_t)j].col.size(); ++x) a[(size_t)j] += J[(size_t)j].val[x] * g[(size_t)J[(size_t)j].col[x]];
+                    if (solveSchur(S, a, y)) {
                         double red = 0.0;
                         for (int j = 0; j < rows; ++j) red += a[(size_t)j] * y[(size_t)j];
                         if (mob - red > 1e-12) mob -= red;
@@ -656,13 +696,13 @@ void DynamicsSystem::integrate(std::vector<double>& q, std::vector<double>& qd,
 void DynamicsSystem::projectVelocities(const std::vector<double>& q,
                                         std::vector<double>& qd,
                                         double* impulseWork) const {
-    const int nq = m.nq();
+    (void)q;
     const int rows = sys.rowCount();
     if (impulseWork) *impulseWork = 0.0;
     if (rows <= 0) return;
 
-    std::vector<double> J2;
-    sys.jacobian(q, J2);
+    std::vector<SparseRow> J2;
+    sys.jacobianSparse(q, J2);
     // nu: drive rows prescribe their rate; every other row wants J qd = 0
     const int driveRow0 = sys.driveRowStart();
     std::vector<double> nu(rows, 0.0);
@@ -685,47 +725,20 @@ void DynamicsSystem::projectVelocities(const std::vector<double>& q,
     // energy whenever joint rows couple several bodies' coordinates.
     std::vector<MassBlock> Mblocks;
     massBlocks(q, Mblocks);   // at the stabilized configuration
-    thread_local std::vector<std::vector<double>> BJ2;
-    BJ2.resize((size_t)rows);
-    for (int j = 0; j < rows; ++j) BJ2[(size_t)j].assign((size_t)nq, 0.0);
-    for (int j = 0; j < rows; ++j) {
-        const double* Jj = &J2[(size_t)j * nq];
-        for (size_t bi = 1; bi < m.bodies.size(); ++bi) {
-            const int o = m.bodies[bi].qOffset;
-            if (Jj[o] == 0.0 && Jj[o + 1] == 0.0 && Jj[o + 2] == 0.0) continue;
-            double wv[3];
-            applyW(Mblocks, (int)bi, Jj[o], Jj[o + 1], Jj[o + 2], wv);
-            BJ2[j][o] = wv[0];
-            BJ2[j][o + 1] = wv[1];
-            BJ2[j][o + 2] = wv[2];
-        }
-    }
-    thread_local std::vector<double> A2;
-    A2.assign((size_t)rows * rows, 0.0);
+    thread_local Schur S2;
+    buildSchur(J2, Mblocks, S2);
     std::vector<double> r2(rows, 0.0);
-    std::vector<std::vector<int>> nzJ2((size_t)rows), nzB2((size_t)rows);     // see accelerations(): only the columns a row touches
     for (int j = 0; j < rows; ++j) {
-        const double* Jj = &J2[(size_t)j * nq];
-        for (int cix = 0; cix < nq; ++cix) if (Jj[cix] != 0.0) nzJ2[(size_t)j].push_back(cix);
-        for (int cix = 0; cix < nq; ++cix) if (BJ2[j][cix] != 0.0) nzB2[(size_t)j].push_back(cix);
-    }
-    for (int j = 0; j < rows; ++j) {
-        const double* Jj = &J2[(size_t)j * nq];
-        for (int k = j; k < rows; ++k) {
-            double s = 0.0;
-            for (int cix : nzJ2[(size_t)j]) s += Jj[cix] * BJ2[k][cix];
-            A2[(size_t)j * rows + k] = s;
-            A2[(size_t)k * rows + j] = s;
-        }
         double s = 0.0;
-        for (int cix : nzJ2[(size_t)j]) s += Jj[cix] * qd[cix];
+        for (size_t x = 0; x < J2[(size_t)j].col.size(); ++x) s += J2[(size_t)j].val[x] * qd[(size_t)J2[(size_t)j].col[x]];
         r2[j] = s - nu[j];
     }
     std::vector<double> mu;
-    if (dampedSolve(A2, r2, rows, mu)) {
+    if (solveSchur(S2, r2, mu)) {
         for (int j = 0; j < rows; ++j) {
             if (mu[j] == 0.0) continue;
-            for (int cix : nzB2[(size_t)j]) qd[cix] -= BJ2[j][cix] * mu[j];
+            const SparseRow& Bj = S2.BJ[(size_t)j];
+            for (size_t x = 0; x < Bj.col.size(); ++x) qd[(size_t)Bj.col[x]] -= Bj.val[x] * mu[j];
             // the impulse on row j is -mu_j; on a prescribed coordinate it
             // does work (-mu_j) * nu_j
             if (impulseWork) *impulseWork -= mu[j] * nu[j];

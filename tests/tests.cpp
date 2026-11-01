@@ -9523,6 +9523,200 @@ void testReport() {
     }
 }
 
+// ============================================================================
+// M21 — the sparse solver. The sparse Jacobian is the dense one with the zeros left out; the skyline Cholesky is the
+// dense algorithm on the envelope; the fill-reducing order only renumbers; and a mechanism declared in any order moves the same
+// way. Everything is compared with the dense or the unpermuted computation.
+// ============================================================================
+
+void testSparseSolver() {
+    std::printf("[sparse M21]\n");
+    unsigned seed = 11;
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return ((seed >> 8) & 0xFFFF) / 65535.0; };
+
+    // ---- the sparse Jacobian is the dense Jacobian: same entries, ascending columns, no zeros
+    for (const char* file : {"examples/fourbar.mech", "examples/jumpcam.mech", "examples/geneva.mech", "examples/ellipgears.mech", "examples/boom.mech",
+                             "examples/rackpinion.mech", "examples/rollingwheel.mech", "examples/beltdrive.mech", "examples/planetary.mech",
+                             "examples/scotchyoke.mech", "examples/ratchet.mech"}) {
+        const Model m = modelFromFile(file);
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        m.assemble(q);
+        int iters = 0;
+        sys.solve(q, 0.3, iters);
+        for (double& v : q) v += 1e-3 * (rnd() - 0.5);                         // off the exact solution: general values
+        std::vector<double> J;
+        std::vector<SparseRow> Js;
+        sys.jacobian(q, J);
+        sys.jacobianSparse(q, Js);
+        const int rows = sys.rowCount(), nq = m.nq();
+        CHECK((int)Js.size() == rows);
+        bool same = (int)Js.size() == rows, ascending = true;
+        for (int r = 0; same && r < rows; ++r) {
+            std::vector<double> back((size_t)nq, 0.0);
+            for (size_t x = 0; x < Js[(size_t)r].col.size(); ++x) {
+                if (x > 0 && Js[(size_t)r].col[x] <= Js[(size_t)r].col[x - 1]) ascending = false;
+                if (Js[(size_t)r].val[x] == 0.0) same = false;
+                back[(size_t)Js[(size_t)r].col[x]] = Js[(size_t)r].val[x];
+            }
+            for (int c = 0; c < nq; ++c) if (back[(size_t)c] != J[(size_t)r * nq + c]) same = false;
+        }
+        CHECK(same && ascending);
+    }
+
+    // ---- skyline Cholesky against the dense algorithm
+    {
+        for (int kind = 0; kind < 3; ++kind) {
+            const int n = 60;
+            std::vector<double> B((size_t)n * n, 0.0), M((size_t)n * n, 0.0);
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) {
+                    const bool on = kind == 0 ? std::abs(i - j) <= 3 : kind == 1 ? (i == j || j == 0 || i == 0 || std::abs(i - j) == 2) : (i == j || (i + j) % 7 == 0);
+                    if (on) B[(size_t)i * n + j] = rnd() - 0.4;
+                }
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) {
+                    double sm = i == j ? 1.0 : 0.0;
+                    for (int k = 0; k < n; ++k) sm += B[(size_t)i * n + k] * B[(size_t)j * n + k];
+                    M[(size_t)i * n + j] = sm;
+                }
+            Skyline A;
+            std::vector<int> first((size_t)n);
+            for (int i = 0; i < n; ++i) { int f = i; for (int j = 0; j < i; ++j) if (M[(size_t)i * n + j] != 0.0) { f = j; break; } first[(size_t)i] = f; }
+            A.init(first);
+            for (int i = 0; i < n; ++i) for (int j = first[(size_t)i]; j <= i; ++j) A.at(i, j) = M[(size_t)i * n + j];
+            std::vector<double> b((size_t)n), xd, xs;
+            for (double& v : b) v = rnd() - 0.5;
+            Skyline L;
+            CHECK(denseCholesky(M, b, n, xd) && skylineFactor(A, L));
+            skylineSolve(L, b, xs);
+            bool close = xd.size() == xs.size();
+            for (size_t i = 0; close && i < xd.size(); ++i) close = std::fabs(xd[i] - xs[i]) <= 1e-12 * (1.0 + std::fabs(xd[i]));
+            CHECK(close);
+        }
+        // a pivot that collapses is refused
+        Skyline Z;
+        Z.init({0, 0});
+        Z.at(0, 0) = 1.0; Z.at(1, 0) = 2.0; Z.at(1, 1) = 1.0;
+        Skyline LZ;
+        CHECK(!skylineFactor(Z, LZ));
+    }
+
+    // ---- the fill-reducing order
+    {
+        auto envelopeOf = [](const std::vector<std::vector<int>>& adj, const std::vector<int>& perm) {
+            const int n = (int)adj.size();
+            std::vector<int> pos((size_t)n);
+            for (int i = 0; i < n; ++i) pos[(size_t)(perm.empty() ? i : perm[(size_t)i])] = i;
+            long long e = 0;
+            for (int i = 0; i < n; ++i) {
+                int f = pos[(size_t)i];
+                for (int k : adj[(size_t)i]) f = std::min(f, pos[(size_t)k]);
+                e += pos[(size_t)i] - f + 1;
+            }
+            return e;
+        };
+        const int n = 300;
+        // a path in its own order: left alone
+        std::vector<std::vector<int>> path((size_t)n);
+        for (int i = 0; i + 1 < n; ++i) { path[(size_t)i].push_back(i + 1); path[(size_t)i + 1].push_back(i); }
+        auto a1 = path;
+        CHECK(envelopeOrdering(a1).empty());
+        // the same path with its nodes numbered at random: reordered to a narrow band
+        std::vector<int> label((size_t)n);
+        for (int i = 0; i < n; ++i) label[(size_t)i] = i;
+        for (int i = n - 1; i > 0; --i) std::swap(label[(size_t)i], label[(size_t)(rnd() * i) % (size_t)(i + 1)]);
+        std::vector<std::vector<int>> shuffled((size_t)n);
+        for (int i = 0; i + 1 < n; ++i) { shuffled[(size_t)label[(size_t)i]].push_back(label[(size_t)i + 1]); shuffled[(size_t)label[(size_t)i + 1]].push_back(label[(size_t)i]); }
+        auto a2 = shuffled;
+        const long long before = envelopeOf(shuffled, {});
+        const std::vector<int> perm = envelopeOrdering(a2);
+        CHECK(!perm.empty());
+        if (!perm.empty()) {
+            std::vector<int> seen((size_t)n, 0);
+            for (int v : perm) { CHECK(v >= 0 && v < n); ++seen[(size_t)v]; }
+            bool bijection = true;
+            for (int c : seen) bijection = bijection && c == 1;
+            CHECK(bijection);
+            CHECK(envelopeOf(shuffled, perm) <= 3LL * n);               // a path has envelope 2 n in the right order
+            CHECK(before > 20LL * n);
+        }
+        // a grid in row-major order is not improved by 30%, a randomly numbered one is
+        const int w = 16;
+        std::vector<std::vector<int>> grid((size_t)(w * w));
+        for (int y = 0; y < w; ++y)
+            for (int x = 0; x < w; ++x) {
+                if (x + 1 < w) { grid[(size_t)(y * w + x)].push_back(y * w + x + 1); grid[(size_t)(y * w + x + 1)].push_back(y * w + x); }
+                if (y + 1 < w) { grid[(size_t)(y * w + x)].push_back((y + 1) * w + x); grid[(size_t)((y + 1) * w + x)].push_back(y * w + x); }
+            }
+        auto g1 = grid;
+        CHECK(envelopeOrdering(g1).empty());
+        std::vector<int> lab((size_t)(w * w));
+        for (int i = 0; i < w * w; ++i) lab[(size_t)i] = i;
+        for (int i = w * w - 1; i > 0; --i) std::swap(lab[(size_t)i], lab[(size_t)(rnd() * i) % (size_t)(i + 1)]);
+        std::vector<std::vector<int>> rg((size_t)(w * w));
+        for (int i = 0; i < w * w; ++i) for (int k : grid[(size_t)i]) rg[(size_t)lab[(size_t)i]].push_back(lab[(size_t)k]);
+        auto g2 = rg;
+        const std::vector<int> gp = envelopeOrdering(g2);
+        CHECK(!gp.empty() && envelopeOf(rg, gp) < envelopeOf(rg, {}) / 3);
+    }
+
+    // ---- a mechanism declared in any order moves the same way
+    {
+        const int n = 40;
+        auto build = [&](bool shuffle) {
+            std::vector<int> order((size_t)n);
+            for (int i = 0; i < n; ++i) order[(size_t)i] = i;
+            std::vector<std::string> pins;
+            pins.push_back("pin link_0.A -> frame.pivot");
+            for (int i = 1; i < n; ++i) pins.push_back("pin link_" + std::to_string(i) + ".A -> link_" + std::to_string(i - 1) + ".B");
+            if (shuffle) {
+                unsigned sd = 5;
+                for (int i = n - 1; i > 0; --i) { sd = sd * 1664525u + 1013904223u; std::swap(order[(size_t)i], order[(sd >> 8) % (size_t)(i + 1)]); }
+                for (int i = (int)pins.size() - 1; i > 0; --i) { sd = sd * 1664525u + 1013904223u; std::swap(pins[(size_t)i], pins[(sd >> 8) % (size_t)(i + 1)]); }
+            }
+            std::string src = "mechanism chain { world { gravity: 9.81 step: 0.002 } ground frame { anchor pivot at (0, 0) } ";
+            for (int i : order) src += "rod link_" + std::to_string(i) + " { length: 0.05 mass: 0.05 from: " + std::to_string(-60 + 3 * (i % 7)) + " deg } ";
+            for (const std::string& p : pins) src += p + " ";
+            return src + "}";
+        };
+        const Model a = buildFromText(build(false).c_str()), b = buildFromText(build(true).c_str());
+        const SimSeries sa = simulate(a, 0.4, 0.4, {}, 1), sb = simulate(b, 0.4, 0.4, {}, 1);
+        double worst = 0.0;
+        for (int i : {0, 1, 7, 20, n - 1}) {
+            const std::string nm = "link_" + std::to_string(i) + ".theta";
+            const int ca = colOf(sa.columns, nm), cb = colOf(sb.columns, nm);
+            CHECK(ca > 0 && cb > 0);
+            if (ca > 0 && cb > 0) worst = std::max(worst, std::fabs(sa.rows.back()[(size_t)ca] - sb.rows.back()[(size_t)cb]));
+        }
+        CHECK(worst < 1e-6);                                               // a long chain is chaotic: compare early, before rounding grows
+        auto maxOf = [](const SimSeries& sr, const char* name) {
+            double mx = 0.0;
+            for (size_t k = 0; k < sr.columns.size(); ++k)
+                if (sr.columns[k] == name) for (const auto& row : sr.rows) mx = std::max(mx, row[k]);
+            return mx;
+        };
+        const double ra = maxOf(sa, "maxRes"), rb = maxOf(sb, "maxRes");
+        CHECK(ra < 1e-9 && rb < 1e-9);
+    }
+    // ---- big mechanisms run: a 600-link chain in a few steps, kinematic and dynamic, with its constraints met
+    {
+        const int n = 600;
+        std::string src = "mechanism big { world { gravity: 9.81 step: 0.002 } ground frame { anchor pivot at (0, 0) } ";
+        for (int i = 0; i < n; ++i) src += "rod link_" + std::to_string(i) + " { length: 0.05 mass: 0.05 } ";
+        src += "pin link_0.A -> frame.pivot ";
+        for (int i = 1; i < n; ++i) src += "pin link_" + std::to_string(i) + ".A -> link_" + std::to_string(i - 1) + ".B ";
+        src += "}";
+        const Model m = buildFromText(src.c_str());
+        CHECK(m.nq() == 3 * n);
+        const SimSeries s = simulate(m, 0.02, 0.02, {}, 1);
+        CHECK(s.ok && s.rows.size() >= 2);
+        double mr = 0.0;
+        for (size_t k = 0; k < s.columns.size(); ++k) if (s.columns[k] == "maxRes") for (const auto& row : s.rows) mr = std::max(mr, row[k]);
+        CHECK(mr < 1e-9);
+    }
+}
+
 int runAllTests() {
     testLexer();
     testParser();
@@ -9567,6 +9761,7 @@ int runAllTests() {
     testSpeed();
     testConditionals();
     testReport();
+    testSparseSolver();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

@@ -99,6 +99,19 @@ private:
     void applyW(const std::vector<MassBlock>& W, int bodyIdx,
                 double v0, double v1, double v2, double* out) const;
 
+    // M21: the multiplier system A lam = rhs, A = J W J^T, kept sparse. J is a list of sparse rows; BJ = W J^T row by row
+    // (three entries per body a row touches); A is banded in the order of the rows (two rows meet only if they share a body)
+    // and kept as a skyline with its damped Cholesky factor.
+    struct Schur {
+        std::vector<SparseRow> BJ;
+        Skyline A, L;
+        std::vector<int> perm, iperm;     // row order used for A and L (perm[new] = old); empty: the rows' own order
+        bool ok = false;
+    };
+    void buildSchur(const std::vector<SparseRow>& J, const std::vector<MassBlock>& W, Schur& S) const;
+    // x = A^-1 rhs through the damped factor; false (x = 0) if even heavy damping cannot factor it
+    static bool solveSchur(const Schur& S, const std::vector<double>& rhs, std::vector<double>& x);
+
     // --- M5 hybrid machinery -------------------------------------------------
     // One smooth RK4 step of length h (no event handling inside).
     void integrate(std::vector<double>& q, std::vector<double>& qd,

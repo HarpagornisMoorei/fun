@@ -139,8 +139,8 @@ forms (a bead in a spinning tube, an offset mass under gravity). `--csv` writes 
 
 ## Speed
 
-`mech sweep` runs its rows on all cores (`--jobs N` to choose), and large or contact-heavy mechanisms run several times
-faster than before with identical output; `sh scripts/bench.sh` measures it. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
+`mech sweep` runs its rows on all cores (`--jobs N` to choose), contact-heavy mechanisms run several times faster, and the solver is sparse:
+cost grows linearly with the size of a mechanism (a 1280-link chain steps in about 10 ms), however its joints are ordered; `sh scripts/bench.sh` measures it. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
 
 ## A Geneva drive
 

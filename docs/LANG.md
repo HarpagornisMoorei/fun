@@ -1439,6 +1439,9 @@ M9 added reusable parts: `part` with parameters and `use ... as name on ground a
 (see `docs/PARTS.md`), expanded at parse time so the solver, dynamics and tooling are
 unchanged, and an instanced file runs bit for bit like the flat one.
 
+M21 made the solvers sparse (sparse Jacobian rows, a skyline Cholesky for `J W J^T` and `J^T J`, reverse Cuthill-McKee when the declaration
+order is bad): cost linear in the size of a mechanism (`docs/PERFORMANCE.md`).
+
 M20 added `mech report` (`docs/REPORT.md`): the constraint multipliers, reduced to peak, RMS and mean per drive and joint.
 
 M19 added conditions (`<  >  <=  >=  ==  !=  &&  ||  !`, as 1 and 0), `if(c, a, b)`, `if cond { } else if cond { } else { }`

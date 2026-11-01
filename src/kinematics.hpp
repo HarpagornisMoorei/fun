@@ -1,5 +1,6 @@
 // mech — kinematics.hpp: constraint-based kinematic solver
 #pragma once
+#include "linalg.hpp"
 #include "model.hpp"
 #include <vector>
 
@@ -38,6 +39,8 @@ public:
 
     // Row-major [rows x nq] analytic Jacobian.
     void jacobian(const std::vector<double>& q, std::vector<double>& J) const;
+    // The same Jacobian as sparse rows (columns ascending, exact zeros left out): the form the solvers work on (M21).
+    void jacobianSparse(const std::vector<double>& q, std::vector<SparseRow>& J) const;
 
     // M6: the Jacobian row of one touch (d gap / d q), added into `row`
     // (nq entries, caller zeroes). Used by jacobian() and by impact handling.
@@ -57,6 +60,9 @@ public:
 
     const Model& m;
     int nq;
+
+private:
+    template <class Sink> void assembleJacobian(const std::vector<double>& q, Sink& S) const;
 };
 
 } // namespace mech
