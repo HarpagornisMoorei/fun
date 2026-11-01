@@ -53,6 +53,45 @@ offending token.
 Because `-` is now an operator, `a-b` is a subtraction. A negative literal such
 as `at (-0.01, 0)` works as before.
 
+## 2b. Conditions and `if` (M19)
+
+Comparisons and logic are numbers, 1 for true and 0 for false (anything but 0 counts as true):
+
+| form | meaning |
+| --- | --- |
+| `a < b`, `a > b`, `a <= b`, `a >= b`, `a == b`, `a != b` | comparison (arithmetic binds tighter) |
+| `!c`, `c && d`, `c \|\| d` | not, and, or (`&&` binds tighter than `\|\|`) |
+| `if(c, a, b)` | `a` if `c` is true, else `b`; only the chosen one is evaluated, so `if(n > 1, 1 / (n - 1), 0)` is safe |
+
+They are read on the right of a `param`, inside parentheses, in a part's default or a `use` argument, and in `if` conditions. A bare
+expression elsewhere is still arithmetic only (the `<` and `>` of a `mode` guard keep their meaning).
+
+```
+if n > 2 {
+  rod big on g.a { length: 0.3 }
+} else if n > 1 {
+  rod mid on g.a { length: 0.2 }
+} else {
+  rod small on g.a { length: 0.1 }
+}
+```
+
+The condition is decided while parsing, like a `for` loop's count, so the structure can depend on a parameter (and on `--set`, and on a
+sweep axis). Exactly one branch is read; the others are skipped without being parsed (they may name things that do not exist
+when they are not chosen). `if` works wherever `for` does: among a mechanism's statements, a body's anchors, and a polygon's vertices
+(`polygon: (0, 0) (1, 0) if tip { (0.5, 1) }`), and the two nest in either order. A `param` cannot be declared inside an `if` or a `for`.
+
+`require COND "message"` stops with that message if the condition is false. A part uses it to refuse parameters it cannot build:
+
+```
+part spoked(n = 4) {
+  require n >= 2 "a wheel needs at least two spokes"
+  ...
+```
+
+The error points at the `require` line (inside the library file, for an imported part). `lib/geneva.mech` states its limits this way: at
+least three slots, a lock gap of at least 0.1 mm (a tighter one jams), a pin that fits the slot.
+
 ## 3. Overriding from the command line
 
 ```bash
@@ -76,7 +115,7 @@ declaration is read.
 ## 4. Sweeps
 
 ```bash
-mech sweep FILE --set AXIS [--set AXIS ...] --time T --report METRIC [...]
+mech sweep FILE --set AXIS [--set AXIS ...] --time T --report METRIC [...] [--jobs N]
 ```
 
 An **axis** is a parameter with several values:
@@ -99,7 +138,7 @@ A **metric** reduces one run to one number:
 | `maxres` | worst constraint residual over the run |
 | `ledger` | worst absolute energy-ledger residual |
 
-Output is an aligned table; `--csv FILE` writes it as `axes...,metrics...,error`.
+Rows run on all cores (`--jobs N` picks the number of threads, 1 for none); the table is the same either way. Output is an aligned table; `--csv FILE` writes it as `axes...,metrics...,error`.
 
 ```bash
 # where does the follower start to leave the cam?

@@ -37,7 +37,7 @@ make test       # unit tests
 ```
 
 ```bash
-./mech check examples/fourbar.mech                 # parse, DOF analysis, initial assembly
+./mech check examples/fourbar.mech                 # parse, DOF analysis, initial assembly, is that pose regular
 ./mech run   examples/fourbar.mech --headless 5    # simulate without a window
 ./mech run   examples/fourbar.mech --trace coupler.B   # needs GLFW: draw the coupler curve
 ```
@@ -130,6 +130,36 @@ drive piston.guide force 500                    // ... or push with 500 N
 free `body` can say where its mass is (`com: (0.5, 0)`). Every example here is checked against a closed form (the
 yoke is exactly r cos θ; a bead in a rotating tube follows r₀ cosh ωt). See [`docs/JOINTS.md`](docs/JOINTS.md).
 
+## Sizing: what a design has to carry
+
+`mech report FILE --time T` runs a dynamic mechanism and tabulates the peak, RMS and mean of every load: each drive's torque, speed
+and power (the motor's peak and continuous rating), each pin's radial force (the bearing's load), each slide's side load and
+moment, springs, contacts, racks and belts. The numbers are the solver's constraint multipliers, checked against closed
+forms (a bead in a spinning tube, an offset mass under gravity). `--csv` writes them. See [`docs/REPORT.md`](docs/REPORT.md).
+
+## Speed
+
+`mech sweep` runs its rows on all cores (`--jobs N` to choose), contact-heavy mechanisms run several times faster, and the solver is sparse:
+cost grows linearly with the size of a mechanism (a 1280-link chain steps in about 10 ms), however its joints are ordered; `sh scripts/bench.sh` measures it. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
+
+## Is the pose regular?
+
+"Converged" does not mean "where you meant". A linkage can satisfy every constraint on a folded branch (two rods lying on top of each other), on a dead
+point, or at the flat pose where it branches, or fail to satisfy them once it is driven past its range. `mech check` and `mech run` look at the constraint
+Jacobian and say so, at the assembled pose and at every step of a run. From `mech check` on a Peaucellier cell that folded, and from `mech run` on the
+cell (`examples/peaucellier.mech`) and on the hydraulic boom:
+
+```
+[warn] singular pose: 1 of 21 constraints are dependent here (rank 20)
+  oq and os, pq and ps, qr and sr lie, pair by pair, in exactly the same place: a folded branch, with two copies of one chain on top of each other
+warning: singular configuration at t = 3.517 .. 3.567 s: the constraints came within 0.17 deg of dependent (closest at t = 3.55 s)
+warning: singular configuration at t = 8.083 .. 12 s: ... the mechanism has gone past the end of its range
+```
+
+The measure is a separation angle between each constraint and the others, in units that do not depend on the size of the mechanism. A run with the monitor produces the same
+CSV and table, byte for byte, and costs about one Jacobian assembly per step (a few microseconds on a small mechanism, 13 to 25% on larger ones, under 6% where contact dominates).
+See [`docs/DIAGNOSE.md`](docs/DIAGNOSE.md) for what it can and cannot see.
+
 ## A Geneva drive
 
 `lib/geneva.mech` is a complete external Geneva drive made of ordinary unilateral contacts: a pin entering the slots of an N-slot
@@ -213,6 +243,7 @@ See [`docs/LIB.md`](docs/LIB.md); `import` and rotation are in [`docs/PARTS.md`]
 | `scotchyoke`, `quickreturn`, `boom`, `slidingbead` | slots and slides on moving bodies: a Scotch yoke (x = r cos θ), a quick-return lever (ratio 2), a hydraulic boom driven by a linear actuator, a bead flung out along a rotating tube (r₀ cosh ωt) |
 | `geneva` | an external Geneva drive from `lib/geneva.mech`: the wheel steps 90° per crank turn and is locked in between; closed-form wheel angle while the pin is in the slot |
 | `rackpinion`, `rollingwheel`, `beltdrive` | a pinion driving a rack (x = r θ); a disc rolling down a toothed slope (a = g sin α / (1 + I/mr²)); a belt over three pulleys, one crossed |
+| `peaucellier` | a Peaucellier-Lipkin cell: a turning linkage that draws an exact straight line (x = (L² − l²)/2c), with the seeds that keep it from folding and the bifurcation `mech run` flags |
 | `camstar` | n library cams on a hub from one `for` loop, each turned with `rotate` so its follower pushes radially outward |
 | `camshaft` | two library cams geared 2:1 from outside the parts, `import`ed from `lib/` |
 | `twincam`, `linkage_parts` | parts: one cam-and-follower used twice with different numbers; a crank-slider assembled from one ground-less `link` part |
@@ -229,5 +260,5 @@ gears); M6a through M6f (profiles, cam synthesis, unilateral contact,
 non-circular gears, polygons and a ratchet, friction) are implemented, as are
 parameters and sweeps ([`docs/PARAMS.md`](docs/PARAMS.md)) reusable parts
 ([`docs/PARTS.md`](docs/PARTS.md)), a library of standard ones ([`docs/LIB.md`](docs/LIB.md)) and prismatic joints, slots and linear
-drives ([`docs/JOINTS.md`](docs/JOINTS.md)), a rack and pinion with belts ([`docs/RACKBELT.md`](docs/RACKBELT.md)), and the Geneva drive ([`docs/GENEVA.md`](docs/GENEVA.md)). `scripts/` holds offscreen-rendering harnesses for
+drives ([`docs/JOINTS.md`](docs/JOINTS.md)), a rack and pinion with belts ([`docs/RACKBELT.md`](docs/RACKBELT.md)), the Geneva drive ([`docs/GENEVA.md`](docs/GENEVA.md)) and load reports ([`docs/REPORT.md`](docs/REPORT.md)), and singular poses, branch points and the end of a mechanism's range ([`docs/DIAGNOSE.md`](docs/DIAGNOSE.md)). `scripts/` holds offscreen-rendering harnesses for
 screenshots without a display.

@@ -7,12 +7,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <atomic>
 #include <stdexcept>
+#include <thread>
 
 namespace mech {
 
 SimSeries simulate(const Model& m, double seconds, double dt, const std::vector<Probe>& probes,
-                   long every) {
+                   long every, bool forces) {
     SimSeries out;
     out.dynamic = m.world.dynamic;
     std::vector<double> q;
@@ -47,7 +49,7 @@ SimSeries simulate(const Model& m, double seconds, double dt, const std::vector<
     std::vector<double> qd((size_t)m.nq(), 0.0);
     dyn.projectVelocities(q, qd);
     const double E0 = dyn.kinetic(q, qd) + dyn.potential(q);
-    Recorder rec(m, &dyn, probes);
+    Recorder rec(m, &dyn, probes, forces);
     rec.setBaseline(E0);
     out.columns = rec.columns();
     out.rows.push_back(rec.sample(0.0, q, qd, sys.maxResidual(q, 0.0)));
@@ -273,7 +275,10 @@ SweepResult runSweep(const std::string& source, const std::vector<SweepAxis>& ax
         metrics.push_back(mt);
     }
 
-    for (size_t flat = 0; flat < total; ++flat) {
+    // Every row builds and runs its own model from the shared token list, so rows are independent and can run on
+    // several threads; each writes its own slot, so the result is the same whatever the thread count.
+    res.rows.assign(total, SweepRow());
+    auto runRow = [&](size_t flat) {
         SweepRow row;
         ParamOverrides ov;
         size_t rem = flat;
@@ -298,8 +303,23 @@ SweepResult runSweep(const std::string& source, const std::vector<SweepAxis>& ax
             row.error = where(e.line, e.msg);
         } catch (const SemanticError& e) {
             row.error = where(e.line, e.msg);
+        } catch (const std::exception& e) {      // a worker thread must not let anything escape
+            row.error = e.what();
         }
-        res.rows.push_back(row);
+        res.rows[flat] = row;
+    };
+    {
+        unsigned want = opt.jobs > 0 ? (unsigned)opt.jobs : std::thread::hardware_concurrency();
+        if (want < 1) want = 1;
+        if (want > total) want = (unsigned)total;
+        std::atomic<size_t> nextRow(0);
+        auto worker = [&]() {
+            for (size_t f = nextRow++; f < total; f = nextRow++) runRow(f);
+        };
+        std::vector<std::thread> pool;
+        for (unsigned w = 1; w < want; ++w) pool.emplace_back(worker);
+        worker();
+        for (std::thread& t : pool) t.join();
     }
     return res;
 }

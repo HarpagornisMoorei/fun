@@ -44,6 +44,14 @@ part geneva(N = 4, a = 0.1, rho = 0.008, clearance = 0.0001, lock_gap = 0.0003, 
   param Rn     = 0.5 * (a - Rtip)                     // the notch's floor: well inside the closest approach of a mouth corner to the crank
   param beta   = notch * pi / 180
 
+  // the rules the notes above state, enforced
+  require N >= 3 "a Geneva wheel needs at least three slots"
+  require rho > 0 && rho < 0.5 * Rt "the pin must be narrower than half the wheel's radius at the slots"
+  require floor > 0.001 "the pin does not fit: make rho smaller or the centre distance a bigger (the slot floor would be at or below 1 mm)"
+  require clearance >= 0 && clearance < 0.25 * rho "clearance must be between 0 and a quarter of the pin radius"
+  require lock_gap >= 0.0001 "a locking disc closer than 0.1 mm to the wheel catches it and jams the mechanism (lock_gap >= 0.0001)"
+  require Rn > 0.002 && Rn < Rl "the locking disc's notch floor must be inside the disc (a is too small for this pin)"
+
   ground frame {
     anchor W at (0, 0)
     anchor D at (a, 0)

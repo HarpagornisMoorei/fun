@@ -9,3 +9,4 @@ coupler.*
 *.png
 !docs/img/**/*.png
 __pycache__/
+bench-*/

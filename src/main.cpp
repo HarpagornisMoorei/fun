@@ -1,6 +1,6 @@
 // mech — main.cpp: command line interface
 //
-//   mech check <file.mech>                    static analysis: parse, DOF, assembly
+//   mech check <file.mech>                    static analysis: parse, DOF, assembly, is the pose regular
 //   mech run   <file.mech> [options]          animate (window) or --headless <sec>
 //   mech test                                 run the unit test suite
 //
@@ -11,6 +11,7 @@
 //   --paused           open the window paused
 
 #include "ast.hpp"
+#include "diagnose.hpp"
 #include "dynamics.hpp"
 #include "kinematics.hpp"
 #include "record.hpp"
@@ -20,6 +21,7 @@
 #include "loader.hpp"
 #include "parser.hpp"
 #include "render.hpp"
+#include "report.hpp"
 #include "viewer.hpp"
 #include "../tests/tests.hpp"
 
@@ -116,7 +118,7 @@ void printHelp() {
         "mech — mechanism language, M7: contact, cams, gears, friction; CSV export\n"
         "\n"
         "usage:\n"
-        "  mech check <file.mech>              parse + DOF analysis + initial assembly\n"
+        "  mech check <file.mech>              parse + DOF analysis + initial assembly + is that pose regular\n"
         "  mech run <file.mech> [options]      animate in an OpenGL window\n"
         "  mech sweep <file.mech> --set name=a:b:step [options]\n"
         "                                      run the design over a range of `param` values\n"
@@ -151,6 +153,9 @@ void printHelp() {
         "  --trace <b.a>       draw the path of body b's anchor a (coupler curve)\n"
         "  --speed <x>         initial speed multiplier (default 1)\n"
         "  --paused            start paused\n"
+        "\n"
+        "report options (what the mechanism has to carry: drive torque and power, joint loads):\n"
+        "  mech report <file.mech> [--time s] [--set name=value] [--top n] [--csv file]\n"
         "\n"
         "sweep options:\n"
         "  --set <name=a:b:step | name=v1,v2,... | name=v>   (repeatable: a grid)\n"
@@ -538,6 +543,17 @@ int cmdCheck(const std::string& path, const ParamOverrides& overrides = {}) {
         std::printf("assembly %s (max residual %.2e, %d iterations)\n",
                     ok ? "converged [ok]" : "DID NOT CONVERGE [warn]", res, iters);
 
+        // M22: converged is not the same as regular. A folded branch or a dead point satisfies every constraint; its
+        // Jacobian is where it shows
+        if (ok) {
+            for (const Finding& f : describePose(m, diagnosePose(m, sys, q))) {
+                const char* before = f.severity == Severity::Warn ? "[warn] " : "";
+                const char* after = f.severity == Severity::Ok ? " [ok]" : "";
+                std::printf("%s%s%s\n", before, f.headline.c_str(), after);
+                for (const std::string& d2 : f.details) std::printf("  %s\n", d2.c_str());
+            }
+        }
+
         // M4: hands and dials (dials resolve at assembly)
         for (const Hand& h : m.hands) {
             const Vec2 mount = m.worldAnchor(h.body, h.mountAnchor, q);
@@ -613,7 +629,8 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
     ConstraintSystem sys(m);
     int iters = 0;
     double res = 0;
-    if (!sys.solve(q, 0.0, iters, &res)) {
+    const bool assembled = sys.solve(q, 0.0, iters, &res);
+    if (!assembled) {
         std::fprintf(stderr, "warning: initial assembly did not converge (max residual %.3e)\n", res);
     }
     std::vector<std::string> geomErrs = m.validateAssembly(q);
@@ -621,6 +638,14 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
         for (const std::string& e : geomErrs)
             std::fprintf(stderr, "error: %s\n", e.c_str());
         return 1;
+    }
+    // M22: say so when the pose it assembled to is singular (a folded branch, a dead point)
+    if (assembled) {
+        for (const Finding& f : describePose(m, diagnosePose(m, sys, q))) {
+            if (f.severity == Severity::Ok) continue;
+            std::fprintf(stderr, "%s: %s\n", f.severity == Severity::Warn ? "warning" : "note", f.headline.c_str());
+            for (const std::string& d2 : f.details) std::fprintf(stderr, "  %s\n", d2.c_str());
+        }
     }
 
     if (!headless && (!ex.csv.empty() || !ex.probes.empty() || ex.dt > 0.0 || ex.every != 1)) {
@@ -677,9 +702,12 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
                 std::fprintf(csv.f, "%s\n", rec.headerLine().c_str());
                 csv.row(0.0, q, qd, sys.maxResidual(q, 0.0));
             }
+            RunMonitor monitor(sys);       // M22: reads the Jacobian at each step; changes nothing
+            monitor.observe(q, 0.0);
             for (long k = 1; k <= steps; ++k) {
                 const double t = (k - 1) * h;
                 dyn.step(q, qd, t);
+                monitor.observe(q, k * h);
                 if (csv.f && (k % ex.every == 0 || k == steps))
                     csv.row(k * h, q, qd, sys.maxResidual(q, k * h));
                 if (k % reportEvery == 0 || k == steps) {
@@ -711,6 +739,8 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
                     std::printf("\n");
                 }
             }
+            monitor.finish();
+            for (const std::string& line : monitor.report()) std::fprintf(stderr, "warning: %s\n", line.c_str());
             for (size_t di = 0; di < m.drives.size(); ++di) {
                 if (!m.drives[di].enabled) continue;   // a disabled mode hold
                 std::printf("drive %-8s reaction torque: %9.4f N*m\n",
@@ -790,9 +820,12 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
         }
         int frame = 0;
         double maxSeen = 0;
+        RunMonitor monitor(sys);           // M22: reads the Jacobian at each frame; changes nothing
+        monitor.observe(q, 0.0);
         for (double t = dt; t <= headlessSecs + 1e-9; t += dt, ++frame) {
             sys.solve(q, t, iters);
             double r = sys.maxResidual(q, t);
+            monitor.observe(q, t, r);
             maxSeen = std::max(maxSeen, r);
             if (csv.f && (frame + 1) % ex.every == 0) csv.row(t, q, noVel, r);
             if (frame % printEvery == 0) {
@@ -806,6 +839,8 @@ int cmdRun(const std::string& path, double headlessSecs, bool headless,
                 std::printf("\n");
             }
         }
+        monitor.finish();
+        for (const std::string& line : monitor.report()) std::fprintf(stderr, "warning: %s\n", line.c_str());
         std::printf("done: %d frames, worst residual %.2e\n", frame, maxSeen);
         if (csv.f)
             std::printf("wrote %s: %ld rows x %zu columns\n", ex.csv.c_str(), csv.rows,
@@ -835,6 +870,47 @@ int cmdRender(const std::string& path, const RenderOptions& opt, const ParamOver
         f << r.svg;
         std::printf("wrote %s: %s, %d %s\n", outPath.c_str(), m.name.c_str(), r.frames,
                     r.frames == 1 ? "pose" : "frames");
+    }
+    return 0;
+}
+
+// mech report FILE [--time s] [--set name=v ...] [--top n] [--csv file]: what the mechanism has to carry
+int cmdReport(const std::string& path, double seconds, const ParamOverrides& ov, int top, const std::string& csvPath) {
+    const Program prog = loadAndParse(path, ov);
+    const Model m = buildOrThrow(path, prog.mechanisms[0]);
+    const Report r = buildReport(m, seconds);
+    if (!r.ok) throw ToolError{path, 0, 0, r.error};
+    std::printf("report of '%s': %g s of a dynamic run (h = %g ms)\n", m.name.c_str(), seconds, 1000.0 * m.world.step);
+    std::printf("loads are the constraint multipliers: rigid bodies and ideal joints, so they are what the joints must supply\n");
+    const char* groups[] = {"drive", "joint", "slide", "spring", "contact", "rack", "belt"};
+    const char* titles[] = {"drives (size the motor: peak torque, RMS torque for the continuous rating, peak speed, power)",
+                            "pins (size the bearings: peak and RMS radial load)", "slides and slots (side load and moment on the guide)",
+                            "springs (tension)", "contacts (normal force)", "racks (tooth force)", "belts (force carried by each link)"};
+    for (size_t g = 0; g < 7; ++g) {
+        std::vector<const ReportRow*> rows;
+        for (const ReportRow& row : r.rows) if (row.group == groups[g]) rows.push_back(&row);
+        if (rows.empty()) continue;
+        std::printf("\n%s\n", titles[g]);
+        std::printf("  %-28s %-22s %11s %11s %11s %9s\n", "", "", "peak", "RMS", "mean", "peak at");
+        int shown = 0;
+        for (const ReportRow* row : rows) {
+            if (std::string(groups[g]) != "drive" && top > 0 && shown >= top * (std::string(groups[g]) == "slide" ? 2 : 1)) break;
+            const std::string q = row->quantity + " [" + row->unit + "]";
+            std::printf("  %-28s %-22s %11.4g %11.4g %11.4g %7.3f s\n", row->name.c_str(), q.c_str(), row->peak, row->rms, row->mean, row->peakAt);
+            ++shown;
+        }
+        if (top > 0 && std::string(groups[g]) != "drive" && (int)rows.size() > shown)
+            std::printf("  ... and %zu more (--top 0 shows all)\n", rows.size() - (size_t)shown);
+    }
+    if (!csvPath.empty()) {
+        std::FILE* f = std::fopen(csvPath.c_str(), "w");
+        if (!f) throw ToolError{path, 0, 0, "cannot write " + csvPath};
+        std::fprintf(f, "group,name,quantity,unit,peak,peak_at_s,rms,mean\n");
+        for (const ReportRow& row : r.rows)
+            std::fprintf(f, "%s,%s,%s,%s,%.12g,%.12g,%.12g,%.12g\n", row.group.c_str(), row.name.c_str(), row.quantity.c_str(),
+                         row.unit.c_str(), row.peak, row.peakAt, row.rms, row.mean);
+        std::fclose(f);
+        std::printf("\nwrote %s\n", csvPath.c_str());
     }
     return 0;
 }
@@ -960,6 +1036,24 @@ int main(int argc, char** argv) {
             if (ro.frames > 1 && !(ro.span > 0.0)) { std::fprintf(stderr, "an animation needs --span <sec>\n"); return 1; }
             return cmdRender(argv[2], ro, set, outPath);
         }
+        if (cmd == "report") {
+            if (argc < 3) { std::fprintf(stderr, "usage: mech report <file.mech> [--time s] [--set name=value ...] [--top n] [--csv file]\n"); return 1; }
+            ParamOverrides ov;
+            double seconds = 2.0;
+            int top = 8;
+            std::string csvPath;
+            for (int i = 3; i < argc; ++i) {
+                const std::string a = argv[i];
+                std::string err;
+                if (a == "--set" && i + 1 < argc) { if (!parseSetArg(argv[++i], ov, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; } }
+                else if (a == "--time" && i + 1 < argc) seconds = std::atof(argv[++i]);
+                else if (a == "--top" && i + 1 < argc) top = std::atoi(argv[++i]);
+                else if (a == "--csv" && i + 1 < argc) csvPath = argv[++i];
+                else { std::fprintf(stderr, "unknown option '%s'\n", a.c_str()); return 1; }
+            }
+            if (!(seconds > 0.0)) { std::fprintf(stderr, "--time must be positive\n"); return 1; }
+            return cmdReport(argv[2], seconds, ov, top, csvPath);
+        }
         if (cmd == "sweep") {
             if (argc < 3) {
                 std::fprintf(stderr, "usage: mech sweep <file.mech> --set name=start:stop:step "
@@ -973,6 +1067,7 @@ int main(int argc, char** argv) {
                 const std::string a = argv[i];
                 if (a == "--set" && i + 1 < argc) sets.push_back(argv[++i]);
                 else if (a == "--time" && i + 1 < argc) opt.seconds = std::atof(argv[++i]);
+                else if (a == "--jobs" && i + 1 < argc) opt.jobs = std::atoi(argv[++i]);
                 else if (a == "--dt" && i + 1 < argc) opt.dt = std::atof(argv[++i]);
                 else if (a == "--report" && i + 1 < argc) opt.reports.push_back(argv[++i]);
                 else if (a == "--probe" && i + 1 < argc) opt.probes.push_back(argv[++i]);

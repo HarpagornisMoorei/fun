@@ -73,6 +73,9 @@ public:
     // M14: the force (N, along the rail) each linear rate drive transmits into its guide; 0 for a force drive.
     const std::vector<double>& linearReactions() const { return lastLinReaction_; }
     // M16: the tangential force between each pinion and its rack (N), and the force of each belt link (N)
+    // every constraint multiplier of the last acceleration solve, in row order (pins: 2 each, then slides, ...): the force
+    // (or moment) the row applies to its first body. Used by the force columns and `mech report`.
+    const std::vector<double>& lambdas() const { return lastLambda_; }
     const std::vector<double>& rackForces() const { return lastRackForce_; }
     const std::vector<double>& beltForces() const { return lastBeltForce_; }
 
@@ -95,6 +98,19 @@ private:
     void massBlocks(const std::vector<double>& q, std::vector<MassBlock>& out) const;
     void applyW(const std::vector<MassBlock>& W, int bodyIdx,
                 double v0, double v1, double v2, double* out) const;
+
+    // M21: the multiplier system A lam = rhs, A = J W J^T, kept sparse. J is a list of sparse rows; BJ = W J^T row by row
+    // (three entries per body a row touches); A is banded in the order of the rows (two rows meet only if they share a body)
+    // and kept as a skyline with its damped Cholesky factor.
+    struct Schur {
+        std::vector<SparseRow> BJ;
+        Skyline A, L;
+        std::vector<int> perm, iperm;     // row order used for A and L (perm[new] = old); empty: the rows' own order
+        bool ok = false;
+    };
+    void buildSchur(const std::vector<SparseRow>& J, const std::vector<MassBlock>& W, Schur& S) const;
+    // x = A^-1 rhs through the damped factor; false (x = 0) if even heavy damping cannot factor it
+    static bool solveSchur(const Schur& S, const std::vector<double>& rhs, std::vector<double>& x);
 
     // --- M5 hybrid machinery -------------------------------------------------
     // One smooth RK4 step of length h (no event handling inside).
@@ -133,7 +149,7 @@ private:
 
     mutable std::vector<double> lastReaction_;
     mutable std::vector<double> lastLinReaction_;
-    mutable std::vector<double> lastRackForce_, lastBeltForce_;
+    mutable std::vector<double> lastRackForce_, lastBeltForce_, lastLambda_;
     mutable std::vector<double> lastContact_;
     mutable double lastDriveWork_ = 0.0;   // J of the last integrate() call
     mutable double lastFrictionLoss_ = 0.0; // J dissipated by friction in the last integrate()

@@ -30,7 +30,7 @@ struct SimSeries {
 // Assemble and run a model: a kinematic file for `seconds` at `dt` per frame, a dynamic
 // one at its world step. Records every `every`-th step (the t = 0 row always).
 SimSeries simulate(const Model& m, double seconds, double dt, const std::vector<Probe>& probes,
-                   long every = 1);
+                   long every = 1, bool forces = false);
 
 // What to measure from a series. `spec` is one of
 //   max:<col> min:<col> mean:<col> final:<col>   a recorded column (the [unit] may be omitted)
@@ -71,6 +71,7 @@ struct SweepOptions {
     std::vector<std::string> reports;   // empty: a sensible default for the file
     std::vector<std::string> probes;
     std::string path;                   // where the source came from: anchors relative `import`s
+    int jobs = 0;                       // worker threads (0: one per core); the rows come out in grid order either way
 };
 
 // Run the sweep over the full grid of axes (first axis slowest). Throws std::runtime_error

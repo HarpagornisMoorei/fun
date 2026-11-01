@@ -207,12 +207,45 @@ void ConstraintSystem::residuals(const std::vector<double>& q, double t,
     }
 }
 
-void ConstraintSystem::jacobian(const std::vector<double>& q,
-                                std::vector<double>& J) const {
-    const int cols = nq;
-    const int rows = rowCount();
-    J.assign((size_t)rows * cols, 0.0);
+namespace {
 
+// where assembleJacobian puts what it computes: into a dense row-major matrix ...
+struct DenseSink {
+    std::vector<double>& J;
+    int cols;
+    void add(int r, int c, double v) { J[(size_t)r * cols + c] += v; }
+    void touch(const ConstraintSystem& cs, const TouchJoint& tj, const std::vector<double>& q, int r) {
+        cs.touchRow(tj, q, &J[(size_t)r * cols]);
+    }
+};
+
+// ... or into sparse rows: the entries of a row are collected as they come and then summed per column in the order
+// they came, which is what `+=` into a zeroed dense cell does
+struct SparseSink {
+    std::vector<std::vector<std::pair<int, double>>> raw;
+    std::vector<double> scratch;      // a dense row for the touch rows, cleared after each use
+    void add(int r, int c, double v) { raw[(size_t)r].emplace_back(c, v); }
+    void touch(const ConstraintSystem& cs, const TouchJoint& tj, const std::vector<double>& q, int r) {
+        const Body& bp = cs.m.bodies[(size_t)tj.body];
+        const Body& bh = cs.m.bodies[(size_t)cs.m.profiles[(size_t)tj.profile].body];
+        if (scratch.size() < (size_t)cs.nq) scratch.assign((size_t)cs.nq, 0.0);
+        cs.touchRow(tj, q, scratch.data());
+        for (const Body* b : {&bp, &bh}) {
+            if (b->qOffset < 0) continue;
+            for (int k = 0; k < 3; ++k) {
+                double& v = scratch[(size_t)b->qOffset + (size_t)k];
+                if (v != 0.0) raw[(size_t)r].emplace_back(b->qOffset + k, v);
+                v = 0.0;
+            }
+            if (&bp == &bh) break;
+        }
+    }
+};
+
+} // namespace
+
+template <class Sink>
+void ConstraintSystem::assembleJacobian(const std::vector<double>& q, Sink& S) const {
     int r = 0;
     for (const PinJoint& p : m.pins) {
         for (int side = 0; side < 2; ++side) {
@@ -222,10 +255,10 @@ void ConstraintSystem::jacobian(const std::vector<double>& q,
             if (b.qOffset >= 0) {
                 const double sgn = side == 0 ? 1.0 : -1.0;
                 const Vec2 rl = rotate(b.anchors[ai].local, q[b.qOffset + 0]);
-                addJ(J, cols, r,     b.qOffset + 0, sgn * (-rl.y));
-                addJ(J, cols, r + 1, b.qOffset + 0, sgn * ( rl.x));
-                addJ(J, cols, r,     b.qOffset + 1, sgn * 1.0);
-                addJ(J, cols, r + 1, b.qOffset + 2, sgn * 1.0);
+                S.add(r,     b.qOffset + 0, sgn * (-rl.y));
+                S.add(r + 1, b.qOffset + 0, sgn * ( rl.x));
+                S.add(r,     b.qOffset + 1, sgn * 1.0);
+                S.add(r + 1, b.qOffset + 2, sgn * 1.0);
             }
         }
         r += 2;
@@ -234,26 +267,26 @@ void ConstraintSystem::jacobian(const std::vector<double>& q,
         const SlideGeom g = slideGeom(m, s, q);
         const Vec2 v = g.pA - g.pB;
         // offset row: d crossz(u, pA - pB)
-        addJ(J, cols, r, g.oA + 0, crossz(g.u, perp(g.rA)));
-        addJ(J, cols, r, g.oA + 1, -g.u.y);
-        addJ(J, cols, r, g.oA + 2,  g.u.x);
+        S.add(r, g.oA + 0, crossz(g.u, perp(g.rA)));
+        S.add(r, g.oA + 1, -g.u.y);
+        S.add(r, g.oA + 2,  g.u.x);
         if (g.oB >= 0) {                                    // M14: the rail's body moves too
-            addJ(J, cols, r, g.oB + 0, crossz(perp(g.u), v) - crossz(g.u, perp(g.rB)));
-            addJ(J, cols, r, g.oB + 1,  g.u.y);
-            addJ(J, cols, r, g.oB + 2, -g.u.x);
+            S.add(r, g.oB + 0, crossz(perp(g.u), v) - crossz(g.u, perp(g.rB)));
+            S.add(r, g.oB + 1,  g.u.y);
+            S.add(r, g.oB + 2, -g.u.x);
         }
         ++r;
         if (s.lockDir) {
             // dir-lock row: d crossz(R(thA) guideDir, u)
-            addJ(J, cols, r, g.oA + 0, crossz(perp(g.dirG), g.u));
-            if (g.oB >= 0) addJ(J, cols, r, g.oB + 0, crossz(g.dirG, perp(g.u)));
+            S.add(r, g.oA + 0, crossz(perp(g.dirG), g.u));
+            if (g.oB >= 0) S.add(r, g.oB + 0, crossz(g.dirG, perp(g.u)));
             ++r;
         }
     }
     for (const Drive& d : m.drives) {
         if (!d.enabled) continue;
         const Body& b = m.bodies[d.body];
-        if (b.qOffset >= 0) addJ(J, cols, r, b.qOffset + 0, 1.0);
+        if (b.qOffset >= 0) S.add(r, b.qOffset + 0, 1.0);
         ++r;
     }
     for (const MeshJoint& mm : m.meshes) {
@@ -276,27 +309,27 @@ void ConstraintSystem::jacobian(const std::vector<double>& q,
         if (bb.qOffset >= 0) wB = rotate(bb.anchors[gb.hostAnchor].local, q[bb.qOffset + 0]);
 
         if (ba.qOffset >= 0) {
-            addJ(J, cols, r, ba.qOffset + 0, ga.radius + K * crossz(d, wA));
-            addJ(J, cols, r, ba.qOffset + 1, -K * d.y);
-            addJ(J, cols, r, ba.qOffset + 2,  K * d.x);
+            S.add(r, ba.qOffset + 0, ga.radius + K * crossz(d, wA));
+            S.add(r, ba.qOffset + 1, -K * d.y);
+            S.add(r, ba.qOffset + 2,  K * d.x);
         }
         if (bb.qOffset >= 0) {
-            addJ(J, cols, r, bb.qOffset + 0, s * gb.radius - K * crossz(d, wB));
-            addJ(J, cols, r, bb.qOffset + 1,  K * d.y);
-            addJ(J, cols, r, bb.qOffset + 2, -K * d.x);
+            S.add(r, bb.qOffset + 0, s * gb.radius - K * crossz(d, wB));
+            S.add(r, bb.qOffset + 1,  K * d.y);
+            S.add(r, bb.qOffset + 2, -K * d.x);
         }
         ++r;
 
         if (mm.tangent) {
             if (ba.qOffset >= 0) {
-                addJ(J, cols, r, ba.qOffset + 0, -2.0 * dot(d, wA));
-                addJ(J, cols, r, ba.qOffset + 1, -2.0 * d.x);
-                addJ(J, cols, r, ba.qOffset + 2, -2.0 * d.y);
+                S.add(r, ba.qOffset + 0, -2.0 * dot(d, wA));
+                S.add(r, ba.qOffset + 1, -2.0 * d.x);
+                S.add(r, ba.qOffset + 2, -2.0 * d.y);
             }
             if (bb.qOffset >= 0) {
-                addJ(J, cols, r, bb.qOffset + 0,  2.0 * dot(d, wB));
-                addJ(J, cols, r, bb.qOffset + 1,  2.0 * d.x);
-                addJ(J, cols, r, bb.qOffset + 2,  2.0 * d.y);
+                S.add(r, bb.qOffset + 0,  2.0 * dot(d, wB));
+                S.add(r, bb.qOffset + 1,  2.0 * d.x);
+                S.add(r, bb.qOffset + 2,  2.0 * d.y);
             }
             ++r;
         }
@@ -308,13 +341,13 @@ void ConstraintSystem::jacobian(const std::vector<double>& q,
         const int oB = m.bodies[(size_t)pb.body].qOffset;
         double rho, drho;
         pm.phase(*pa.curve, pm.psi - q[(size_t)oA], rho, drho);
-        addJ(J, cols, r, oA, rho);        // d/dthA of -F(psi - thA)
-        addJ(J, cols, r, oB, 1.0);
+        S.add(r, oA, rho);        // d/dthA of -F(psi - thA)
+        S.add(r, oB, 1.0);
         ++r;
     }
     for (const TouchJoint& tj : m.touches) {
         if (!tj.engaged) continue;
-        touchRow(tj, q, &J[(size_t)r * cols]);
+        S.touch(*this, tj, q, r);
         ++r;
     }
     for (const RackMesh& rm : m.racks) {                       // M16
@@ -322,25 +355,25 @@ void ConstraintSystem::jacobian(const std::vector<double>& q,
         const Gear& gr = m.gears[(size_t)rm.gear];
         const Vec2 v = g.pA - g.pB;
         if (rm.tangent) {                                   // tangency: the slide offset row
-            addJ(J, cols, r, g.oA + 0, crossz(g.u, perp(g.rA)));
-            addJ(J, cols, r, g.oA + 1, -g.u.y);
-            addJ(J, cols, r, g.oA + 2,  g.u.x);
+            S.add(r, g.oA + 0, crossz(g.u, perp(g.rA)));
+            S.add(r, g.oA + 1, -g.u.y);
+            S.add(r, g.oA + 2,  g.u.x);
             if (g.oB >= 0) {
-                addJ(J, cols, r, g.oB + 0, crossz(perp(g.u), v) - crossz(g.u, perp(g.rB)));
-                addJ(J, cols, r, g.oB + 1,  g.u.y);
-                addJ(J, cols, r, g.oB + 2, -g.u.x);
+                S.add(r, g.oB + 0, crossz(perp(g.u), v) - crossz(g.u, perp(g.rB)));
+                S.add(r, g.oB + 1,  g.u.y);
+                S.add(r, g.oB + 2, -g.u.x);
             }
             ++r;
         }
         // rolling: the linear row u.v plus side*r*(thP - thR)
         const double sr = rm.side * gr.radius;
-        addJ(J, cols, r, g.oA + 0, dot(g.u, perp(g.rA)) + sr);
-        addJ(J, cols, r, g.oA + 1, g.u.x);
-        addJ(J, cols, r, g.oA + 2, g.u.y);
+        S.add(r, g.oA + 0, dot(g.u, perp(g.rA)) + sr);
+        S.add(r, g.oA + 1, g.u.x);
+        S.add(r, g.oA + 2, g.u.y);
         if (g.oB >= 0) {
-            addJ(J, cols, r, g.oB + 0, dot(perp(g.u), v) - dot(g.u, perp(g.rB)) - sr);
-            addJ(J, cols, r, g.oB + 1, -g.u.x);
-            addJ(J, cols, r, g.oB + 2, -g.u.y);
+            S.add(r, g.oB + 0, dot(perp(g.u), v) - dot(g.u, perp(g.rB)) - sr);
+            S.add(r, g.oB + 1, -g.u.x);
+            S.add(r, g.oB + 2, -g.u.y);
         }
         ++r;
     }
@@ -348,8 +381,8 @@ void ConstraintSystem::jacobian(const std::vector<double>& q,
         for (size_t i = 0; i + 1 < b.gears.size(); ++i) {
             const Gear& ga = m.gears[(size_t)b.gears[i]];
             const Gear& gb = m.gears[(size_t)b.gears[i + 1]];
-            addJ(J, cols, r, m.bodies[(size_t)ga.body].qOffset, b.sign[i] * ga.radius);
-            addJ(J, cols, r, m.bodies[(size_t)gb.body].qOffset, -b.sign[i + 1] * gb.radius);
+            S.add(r, m.bodies[(size_t)ga.body].qOffset, b.sign[i] * ga.radius);
+            S.add(r, m.bodies[(size_t)gb.body].qOffset, -b.sign[i + 1] * gb.radius);
             ++r;
         }
     }
@@ -357,15 +390,39 @@ void ConstraintSystem::jacobian(const std::vector<double>& q,
         if (ld.isForce) continue;
         const SlideGeom g = slideGeom(m, m.slides[(size_t)ld.slide], q);
         const Vec2 v = g.pA - g.pB;
-        addJ(J, cols, r, g.oA + 0, dot(g.u, perp(g.rA)));
-        addJ(J, cols, r, g.oA + 1, g.u.x);
-        addJ(J, cols, r, g.oA + 2, g.u.y);
+        S.add(r, g.oA + 0, dot(g.u, perp(g.rA)));
+        S.add(r, g.oA + 1, g.u.x);
+        S.add(r, g.oA + 2, g.u.y);
         if (g.oB >= 0) {
-            addJ(J, cols, r, g.oB + 0, dot(perp(g.u), v) - dot(g.u, perp(g.rB)));
-            addJ(J, cols, r, g.oB + 1, -g.u.x);
-            addJ(J, cols, r, g.oB + 2, -g.u.y);
+            S.add(r, g.oB + 0, dot(perp(g.u), v) - dot(g.u, perp(g.rB)));
+            S.add(r, g.oB + 1, -g.u.x);
+            S.add(r, g.oB + 2, -g.u.y);
         }
         ++r;
+    }
+}
+
+void ConstraintSystem::jacobian(const std::vector<double>& q, std::vector<double>& J) const {
+    const int rows = rowCount();
+    J.assign((size_t)rows * nq, 0.0);
+    DenseSink S{J, nq};
+    assembleJacobian(q, S);
+}
+
+void ConstraintSystem::jacobianSparse(const std::vector<double>& q, std::vector<SparseRow>& J) const {
+    SparseSink S;
+    S.raw.assign((size_t)rowCount(), {});
+    assembleJacobian(q, S);
+    J.assign(S.raw.size(), SparseRow());
+    for (size_t r = 0; r < S.raw.size(); ++r) {
+        auto& e = S.raw[r];
+        std::stable_sort(e.begin(), e.end(), [](const std::pair<int, double>& x, const std::pair<int, double>& y) { return x.first < y.first; });
+        for (size_t i = 0; i < e.size();) {
+            const int c = e[i].first;
+            double v = 0.0;
+            for (; i < e.size() && e[i].first == c; ++i) v += e[i].second;      // the dense matrix summed them into 0.0 in this order
+            if (v != 0.0) { J[r].col.push_back(c); J[r].val.push_back(v); }
+        }
     }
 }
 
@@ -429,7 +486,9 @@ bool ConstraintSystem::solveAttempt(std::vector<double>& q, double t, int& iters
 
     double lam = 1e-3;
     const double kStepClamp = 0.35;   // radians / world units per iteration
-    std::vector<double> J, A, g, delta;
+    std::vector<SparseRow> J;
+    std::vector<double> g, delta;
+    Skyline A, L;
 
     for (int iter = 0; iter < 100; ++iter) {
         const double mx = maxAbs(c);
@@ -439,36 +498,65 @@ bool ConstraintSystem::solveAttempt(std::vector<double>& q, double t, int& iters
             return true;
         }
 
-        jacobian(q, J);
+        jacobianSparse(q, J);
         const int rows = (int)c.size();
 
-        // normal equations: A = J^T J + lam^2 I, g = J^T c
-        A.assign((size_t)nq * nq, 0.0);
+        // normal equations: A = J^T J + lam^2 I, g = J^T c. A is banded in the order of the unknowns (a row couples only the
+        // bodies it joins), so it is kept as a skyline: row k from the first column a row it shares with k reaches back to.
+        // Two unknowns are neighbours when a row joins them. They are numbered in the order the bodies were declared; when that
+        // makes the envelope large (a mechanism declared out of order) they are renumbered by reverse Cuthill-McKee.
+        struct OrderCache { unsigned long long hash = 0; bool have = false; std::vector<int> perm; };
+        thread_local OrderCache cache;
+        const unsigned long long h = patternHash(J);
+        if (!cache.have || cache.hash != h) {
+            std::vector<std::vector<int>> adj((size_t)nq);
+            for (int i = 0; i < rows; ++i)
+                for (int a : J[(size_t)i].col)
+                    for (int b : J[(size_t)i].col) if (a != b) adj[(size_t)a].push_back(b);
+            cache.perm = envelopeOrdering(adj);
+            cache.hash = h;
+            cache.have = true;
+        }
+        const std::vector<int>& perm = cache.perm;
+        std::vector<int> iperm;
+        if (!perm.empty()) {
+            iperm.assign((size_t)nq, 0);
+            for (int n = 0; n < nq; ++n) iperm[(size_t)perm[(size_t)n]] = n;
+        }
+        auto idx = [&](int i) { return perm.empty() ? i : iperm[(size_t)i]; };
+        std::vector<int> first((size_t)nq);
+        for (int k = 0; k < nq; ++k) first[(size_t)idx(k)] = idx(k);
+        for (int i = 0; i < rows; ++i)
+            for (int a : J[(size_t)i].col)
+                for (int b : J[(size_t)i].col) first[(size_t)idx(a)] = std::min(first[(size_t)idx(a)], idx(b));
+        A.init(first);
         g.assign(nq, 0.0);
         for (int i = 0; i < rows; ++i) {
-            const double* Ji = &J[(size_t)i * nq];
-            for (int j = 0; j < nq; ++j) {
-                const double Jij = Ji[j];
-                if (Jij == 0.0) continue;
-                g[j] += Jij * c[i];
-                for (int k = j; k < nq; ++k)
-                    A[(size_t)j * nq + k] += Jij * Ji[k];
+            const SparseRow& Ji = J[(size_t)i];
+            for (size_t x = 0; x < Ji.col.size(); ++x) {
+                const int j = Ji.col[x];
+                const double Jij = Ji.val[x];
+                g[(size_t)j] += Jij * c[(size_t)i];
+                for (size_t y = x; y < Ji.col.size(); ++y) {
+                    const int ra = idx(Ji.col[y]), rb = idx(j);
+                    A.at(std::max(ra, rb), std::min(ra, rb)) += Jij * Ji.val[y];
+                }
             }
         }
-        for (int i = 0; i < nq; ++i) A[(size_t)i * nq + i] += lam * lam;
-        // mirror upper triangle to lower
-        for (int i = 0; i < nq; ++i)
-            for (int k = 0; k < i; ++k)
-                A[(size_t)i * nq + k] = A[(size_t)k * nq + i];
+        for (int i = 0; i < nq; ++i) A.at(i, i) += lam * lam;      // (a diagonal entry is the same in either numbering)
 
         // Newton/LM step: solve (J^T J + lam^2 I) delta = -J^T c
         std::vector<double> rhs(nq);
-        for (int j = 0; j < nq; ++j) rhs[j] = -g[j];
-        if (!choleskySolve(A, rhs, nq, delta)) {
+        for (int j = 0; j < nq; ++j) rhs[(size_t)idx(j)] = -g[(size_t)j];
+        if (!skylineFactor(A, L)) {
             lam *= 10.0;
             if (lam > 1e14) break;
             continue;
         }
+        std::vector<double> sol;
+        skylineSolve(L, rhs, sol);
+        delta.assign((size_t)nq, 0.0);
+        for (int j = 0; j < nq; ++j) delta[(size_t)j] = sol[(size_t)idx(j)];
 
         // damped, clamped trial step
         std::vector<double> q2 = q;

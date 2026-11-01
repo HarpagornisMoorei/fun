@@ -3,10 +3,13 @@
 
 #include "../src/geom.hpp"
 #include "../src/cam.hpp"
+#include "../src/diagnose.hpp"
 #include "../src/dynamics.hpp"
 #include "../src/kinematics.hpp"
 #include "../src/lexer.hpp"
 #include "../src/loader.hpp"
+#include "../src/linalg.hpp"
+#include "../src/report.hpp"
 #include "../src/model.hpp"
 #include "../src/parser.hpp"
 #include "../src/profile.hpp"
@@ -22,6 +25,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -329,7 +333,7 @@ void testLexer() {
     CHECK(v[2].type == Tok::Ident && v[2].text == "b");
 
     bool threw = false;
-    try { lex("what !"); } catch (const LexError&) { threw = true; }
+    try { lex("what @"); } catch (const LexError&) { threw = true; }
     CHECK(threw);
 }
 
@@ -8929,11 +8933,11 @@ void testGeneva() {
         CHECK(i > 0);
         return i;
     };
-    // a model the dimensions of which are out of whack warns: a disc too big for the wheel starts inside it
+    // a model the dimensions of which are out of whack warns: a point that starts inside its curve
     {
-        ParamOverrides ov;
-        ov["gv.lock_gap"] = -0.0003;
-        const Model m = modelFromFile("examples/geneva.mech", ov);
+        const Model m = buildFromText("mechanism m { world { gravity: 0 step: 0.001 } ground g { anchor o at (0,0) anchor p at (0.01, 0) } "
+            "body w { anchor o at (0,0) mass: 1 } pin w.o -> g.o profile c on w.o { circle: 0.02 } "
+            "body f { anchor p at (0,0) mass: 1 } pin f.p -> g.p touch f.p on c }");
         std::vector<double> q;
         const std::vector<std::string> w = m.assemble(q);
         bool found = false;
@@ -8942,6 +8946,15 @@ void testGeneva() {
         std::vector<double> q2;
         const Model ok = modelFromFile("examples/geneva.mech");
         for (const std::string& x : ok.assemble(q2)) CHECK(x.find("inside the curve") == std::string::npos);
+        // the part states its own limits: a tight lock gap, too few slots, a pin that does not fit
+        for (const auto& bad : std::vector<std::pair<const char*, double>>{{"gv.lock_gap", 0.00002}, {"gv.N", 2.0}, {"gv.rho", 0.03}, {"gv.clearance", -0.001}}) {
+            ParamOverrides ov;
+            ov[bad.first] = bad.second;
+            bool refused = false;
+            try { (void)modelFromFile("examples/geneva.mech", ov); }
+            catch (const ParseError& e) { refused = e.msg.find("requirement not met") != std::string::npos; }
+            CHECK(refused);
+        }
         // nine unilateral contacts are not nine constraints
         const DofReport d = ok.dofReport();
         CHECK(d.nTouches == 9 && d.freeDof == 2 && d.residualDof == 1);
@@ -8992,6 +9005,1315 @@ void testGeneva() {
     }
 }
 
+// ============================================================================
+// M18 — speed. The three speedups change nothing about the numbers, so each is held to an independent oracle:
+// the pruned polygon nearest-point search against a brute-force distance to every outline segment, the envelope Cholesky
+// against the plain dense algorithm bit for bit, and a sweep on several threads against the same sweep on one.
+// ============================================================================
+
+namespace {
+
+// the dense Cholesky solve as it was before the envelope version (the reference)
+bool denseCholesky(const std::vector<double>& A, const std::vector<double>& b, int n, std::vector<double>& x) {
+    std::vector<double> L(A);
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j <= i; ++j) {
+            double s = L[(size_t)i * n + j];
+            for (int k = 0; k < j; ++k) s -= L[(size_t)i * n + k] * L[(size_t)j * n + k];
+            if (i == j) { if (s <= 1e-14) return false; L[(size_t)i * n + i] = std::sqrt(s); }
+            else L[(size_t)i * n + j] = s / L[(size_t)j * n + j];
+        }
+    }
+    std::vector<double> y(n);
+    for (int i = 0; i < n; ++i) {
+        double s = b[i];
+        for (int k = 0; k < i; ++k) s -= L[(size_t)i * n + k] * y[k];
+        y[i] = s / L[(size_t)i * n + i];
+    }
+    x.assign(n, 0.0);
+    for (int i = n - 1; i >= 0; --i) {
+        double s = y[i];
+        for (int k = i + 1; k < n; ++k) s -= L[(size_t)k * n + i] * x[k];
+        x[i] = s / L[(size_t)i * n + i];
+    }
+    return true;
+}
+
+} // namespace
+
+void testSpeed() {
+    std::printf("[speed M18]\n");
+    unsigned seed = 7;
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return ((seed >> 8) & 0xFFFF) / 65535.0; };
+
+    // ---- polygon nearest point: a 100-sided disc with a notch, and a star, queried from inside, outside and far away
+    {
+        std::vector<Vec2> disc;
+        for (int i = 0; i <= 100; ++i) {
+            const double a = 0.9 + (2.0 * kPi - 1.8) * i / 100.0;
+            disc.push_back(Vec2{0.0626 * std::cos(a), 0.0626 * std::sin(a)});
+        }
+        disc.push_back(Vec2{0.03 * std::cos(-0.9), 0.03 * std::sin(-0.9)});
+        disc.push_back(Vec2{0.03 * std::cos(0.9), 0.03 * std::sin(0.9)});
+        std::vector<Vec2> star;
+        for (int i = 0; i < 24; ++i) {
+            const double a = 2.0 * kPi * i / 24.0, r = (i % 2 == 0) ? 0.05 : 0.03;
+            star.push_back(Vec2{r * std::cos(a), r * std::sin(a)});
+        }
+        for (const std::vector<Vec2>* poly : {&disc, &star}) {
+            const ProfileCurve c = ProfileCurve::polygon(*poly, 0.0003);
+            const std::vector<Vec2> ring = c.outline(4000);
+            double worst = 0.0;
+            for (int t = 0; t < 400; ++t) {
+                const double sc = (t % 4 == 0) ? 3.0 : (t % 4 == 1) ? 0.2 : 1.0;
+                const Vec2 u{(rnd() - 0.5) * 0.2 * sc, (rnd() - 0.5) * 0.2 * sc};
+                double best = 1e9;                      // brute force: the distance to every segment of the outline
+                for (size_t q = 0; q < ring.size(); ++q) {
+                    const Vec2 p0 = ring[q], p1 = ring[(q + 1) % ring.size()], e = p1 - p0;
+                    const double l2 = dot(e, e);
+                    const double tt = l2 > 0.0 ? std::min(1.0, std::max(0.0, dot(u - p0, e) / l2)) : 0.0;
+                    best = std::min(best, vlen(u - (p0 + e * tt)));
+                }
+                const ProfileCurve::Foot f = c.nearest(u);
+                // the foot is on the curve, and no sample is nearer than it (up to the sampling's own spacing)
+                worst = std::max(worst, std::fabs(vlen(u - f.point) - best));
+                CHECK(vlen(u - f.point) <= best + 1e-9);
+                CHECK(std::fabs(std::fabs(f.signedDist) - vlen(u - f.point)) < 1e-9);
+            }
+            CHECK(worst < 2e-5);
+        }
+    }
+
+    // ---- the envelope Cholesky is the dense one, for banded, arrow-shaped and dense matrices
+    {
+        for (int kind = 0; kind < 3; ++kind) {
+            const int n = (kind == 2) ? 25 : 70;
+            std::vector<double> M((size_t)n * n, 0.0);
+            // A = B B^T + I with B sparse in the shape of the kind, so A is symmetric positive definite with that envelope
+            std::vector<double> B((size_t)n * n, 0.0);
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) {
+                    bool on = false;
+                    if (kind == 0) on = std::abs(i - j) <= 2;                      // chain
+                    else if (kind == 1) on = (i == j) || j == 0 || i == 0 || std::abs(i - j) == 1;   // arrow plus chain
+                    else on = true;                                                // dense
+                    if (on) B[(size_t)i * n + j] = rnd() - 0.4;
+                }
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) {
+                    double s = (i == j) ? 1.0 : 0.0;
+                    for (int k = 0; k < n; ++k) s += B[(size_t)i * n + k] * B[(size_t)j * n + k];
+                    M[(size_t)i * n + j] = s;
+                }
+            std::vector<double> b((size_t)n), x1, x2;
+            for (double& v : b) v = rnd() - 0.5;
+            CHECK(denseCholesky(M, b, n, x1) && choleskySolve(M, b, n, x2));
+            // The envelope version leaves out only exact zeros, so on one compiler it is the same bit for bit (checked
+            // with `scripts/bench.sh check`); across compilers a fused multiply-add may round the two loops differently,
+            // so the test asks for agreement to rounding error.
+            bool same = x1.size() == x2.size();
+            for (size_t i = 0; same && i < x1.size(); ++i) same = std::fabs(x1[i] - x2[i]) <= 1e-12 * (1.0 + std::fabs(x1[i]));
+            CHECK(same);
+        }
+        // a pivot that collapses is reported the same way
+        std::vector<double> neg = {1.0, 2.0, 2.0, 1.0}, bb = {1.0, 1.0}, xx;
+        CHECK(!choleskySolve(neg, bb, 2, xx));
+    }
+
+    // ---- a sweep gives the same rows on one thread and on several, in the same order
+    {
+        const std::string src = readFile("examples/jumpcam.mech");
+        SweepAxis ax;
+        std::string err;
+        CHECK(parseAxis("speed=300:700:50", ax, err));
+        SweepOptions one, many;
+        one.seconds = many.seconds = 0.15;
+        one.reports = many.reports = {"liftoffs", "maxres"};
+        one.jobs = 1;
+        many.jobs = 4;
+        const SweepResult a = runSweep(src, {ax}, one), b = runSweep(src, {ax}, many);
+        CHECK(a.rows.size() == 9 && b.rows.size() == 9);
+        bool same = a.rows.size() == b.rows.size();
+        for (size_t i = 0; same && i < a.rows.size(); ++i) {
+            same = a.rows[i].params == b.rows[i].params && a.rows[i].error == b.rows[i].error && a.rows[i].metrics.size() == b.rows[i].metrics.size();
+            for (size_t k = 0; same && k < a.rows[i].metrics.size(); ++k) same = a.rows[i].metrics[k] == b.rows[i].metrics[k];
+        }
+        CHECK(same);
+        // a design that does not build is an error row, in its place, under threads too
+        SweepAxis bad;
+        CHECK(parseAxis("rise_deg=100,10,60", bad, err));
+        SweepOptions o3;
+        o3.seconds = 0.2;
+        o3.jobs = 3;
+        const SweepResult r = runSweep(readFile("examples/platecam.mech"), {bad}, o3);
+        CHECK(r.rows.size() == 3 && r.rows[0].error.empty() && !r.rows[1].error.empty() && r.rows[2].error.empty());
+    }
+}
+
+// ============================================================================
+// M19 — conditionals. Comparisons and logic are numbers (1 or 0) inside `param`, parentheses and `if(c, a, b)`;
+// `if cond { } else if cond { } else { }` chooses which statements (or anchors, or polygon vertices) exist. All of
+// it is decided while parsing, so the oracle is the flat file the chosen branch spells out, bit for bit.
+// ============================================================================
+
+void testConditionals() {
+    std::printf("[conditionals M19]\n");
+    auto val = [](const std::string& expr, double* out) {
+        try {
+            const Program p = parse(lex("mechanism x { ground g { anchor a at (0,0) } param v = " + expr + " }"));
+            *out = p.mechanisms[0].params.at(0).value;
+            return true;
+        } catch (const ParseError&) { return false; }
+    };
+    // ---- the lexer: two-character operators, and the single '<' '>' the mode guards use are unchanged ---------------------
+    {
+        const std::vector<Token> t = lex("a <= b >= c == d != e && f || !g < h > i");
+        std::vector<std::string> syms;
+        for (const Token& k : t) if (k.type == Tok::Sym) syms.push_back(k.text);
+        const std::vector<std::string> want = {"<=", ">=", "==", "!=", "&&", "||", "!", "<", ">"};
+        CHECK(syms == want);
+        CHECK(lex("x = y")[1].text == "=" && lex("a -> b")[1].text == "->");
+    }
+    // ---- values ----------------------------------------------------------------------------------------------------------------
+    {
+        struct Case { const char* e; double v; };
+        const Case cases[] = {
+            {"1 < 2", 1}, {"2 < 1", 0}, {"2 > 1", 1}, {"1 > 2", 0}, {"2 <= 2", 1}, {"3 <= 2", 0}, {"2 >= 2", 1}, {"1 >= 2", 0},
+            {"2 == 2", 1}, {"2 == 3", 0}, {"2 != 3", 1}, {"2 != 2", 0},
+            {"1 + 2 > 2", 1}, {"2 * 3 == 6", 1}, {"(1 > 0) + (1 > 0)", 2},                    // arithmetic binds tighter than a comparison
+            {"(1 < 2) && (2 < 3)", 1}, {"(1 < 2) && (3 < 2)", 0}, {"(1 > 2) || (3 > 2)", 1}, {"(1 > 2) || (3 < 2)", 0},
+            {"!(1 > 2)", 1}, {"!(1 < 2)", 0}, {"!0", 1}, {"!5", 0}, {"!!5", 1},
+            {"(1 > 2) || (1 < 2) && (2 < 1)", 0},                                                // && binds tighter than ||
+            {"(1 < 2) || (1 > 2) && (2 > 1)", 1},
+            {"1 > 2 || 2 > 1", 1}, {"2 > 1 && 3 > 2", 1},                                        // param right-hand sides take a whole condition
+            {"if(1, 5, 6)", 5}, {"if(0, 5, 6)", 6}, {"if(2 > 1, 10, 20)", 10}, {"if(2 < 1, 10, 20)", 20}, {"if(-3, 1, 2)", 1},
+            {"if(1, 4, 1 / 0)", 4}, {"if(0, 1 / 0, 7)", 7},                                      // only the chosen branch is evaluated
+            {"if(1, 2, sqrt(-1))", 2}, {"if(0, sqrt(-1), 3)", 3},
+            {"if(1, if(0, 1, 2), 3)", 2}, {"if(0, 1, if(1, 8, 9))", 8},                           // nested
+            {"if(2 > 1, (3 + 4) * 2, 0) + 1", 15}, {"max(if(1, 3, 9), if(0, 9, 4))", 4},
+            {"if(1 > 0 && 2 > 1, min(3, 5), 0)", 3},
+        };
+        for (const Case& c : cases) {
+            double v = std::nan("");
+            const bool ok = val(c.e, &v);
+            CHECK(ok);
+            if (!ok || v != c.v) { std::printf("  case '%s': %s %g, wanted %g\n", c.e, ok ? "got" : "failed", v, c.v); CHECK(false); }
+        }
+        double v;
+        CHECK(!val("if(1, 2)", &v) && !val("if(1, 2, 3, 4)", &v) && !val("if(1 2, 3)", &v) && !val("if(1, 2, 3", &v));
+        CHECK(!val("1 / 0", &v) && !val("if(1, 1 / 0, 2)", &v));                                 // the chosen branch still errors
+        CHECK(!val("1 <", &v) && !val("<= 2", &v));
+        // a bare expression is still arithmetic only: the guards' '<' and '>' are not read as comparisons there
+        CHECK(!val("1 < 2", &v) || v == 1.0);                                                    // allowed because `param` takes a condition
+    }
+    // ---- statements ------------------------------------------------------------------------------------------------------------
+    {
+        const std::string src = R"(
+mechanism m {
+  param n = 3
+  ground g { anchor a at (0, 0) }
+  if n > 2 {
+    rod big on g.a { length: 0.3 }
+  } else if n > 1 {
+    rod mid on g.a { length: 0.2 }
+  } else {
+    rod small on g.a { length: 0.1 }
+  }
+})";
+        auto names = [&](double n) {
+            std::vector<std::string> out;
+            const Program p = parse(lex(src), ParamOverrides{{"n", n}});
+            for (const BodyDecl& b : p.mechanisms[0].bodies) out.push_back(b.name);
+            return out;
+        };
+        CHECK(names(3) == (std::vector<std::string>{"g", "big"}));
+        CHECK(names(5) == (std::vector<std::string>{"g", "big"}));
+        CHECK(names(2) == (std::vector<std::string>{"g", "mid"}));
+        CHECK(names(1) == (std::vector<std::string>{"g", "small"}));
+        CHECK(names(-4) == (std::vector<std::string>{"g", "small"}));
+        // exactly one branch is taken even when several conditions hold
+        CHECK(parse(lex("mechanism m { ground g { anchor a at (0,0) } if 1 { rod a1 on g.a { length: 1 } } else if 1 { rod a2 on g.a { length: 1 } } else { rod a3 on g.a { length: 1 } } }"))
+                  .mechanisms[0].bodies.size() == 2);
+        // no else: nothing happens when it is false
+        CHECK(parse(lex("mechanism m { ground g { anchor a at (0,0) } if 0 { rod r on g.a { length: 1 } } }")).mechanisms[0].bodies.size() == 1);
+        // the skipped branch is only skipped, not parsed: it may mention things that do not exist
+        CHECK(parse(lex("mechanism m { ground g { anchor a at (0,0) } if 0 { rod r on nowhere.x { length: 1 / 0 } bogus } }")).mechanisms[0].bodies.size() == 1);
+        // braces inside the skipped block are matched
+        CHECK(parse(lex("mechanism m { ground g { anchor a at (0,0) } if 0 { body b { anchor p at (0,0) } } else { rod r on g.a { length: 1 } } }")).mechanisms[0].bodies.size() == 2);
+        // it composes with loops, both ways
+        const std::string mixed = R"(
+mechanism m {
+  ground g { anchor a at (0, 0) }
+  for i = 0 to 4 {
+    if i > 1 && i < 4 { rod r[i] on g.a { length: 0.1 * i } }
+  }
+  if 1 { for j = 0 to 1 { rod s[j] on g.a { length: 1 } } }
+})";
+        const Program q = parse(lex(mixed));
+        std::vector<std::string> got;
+        for (const BodyDecl& b : q.mechanisms[0].bodies) got.push_back(b.name);
+        CHECK(got == (std::vector<std::string>{"g", "r_2", "r_3", "s_0", "s_1"}));
+        // errors
+        CHECK(parseFails("mechanism m { ground g { } if 1 { rod r on g.a { length: 1 }", "unterminated"));
+        CHECK(parseFails("mechanism m { ground g { } if 1 rod r }", "expected '{'"));
+        CHECK(parseFails("mechanism m { ground g { } else { } }", "expected a statement"));
+        CHECK(parseFails("mechanism m { ground g { } if 0 { } else", "expected '{'"));
+        CHECK(parseFails("mechanism m { if 1 { param p = 2 } }", "cannot be declared inside"));
+        CHECK(parseFails("mechanism m { if 1 > { } }", "expected number"));
+    }
+    // ---- inside a body's anchors and a polygon's vertices -----------------------------------------------------------------------------
+    {
+        const std::string withIf = R"(
+mechanism m {
+  param tip = 1
+  param n = 5
+  ground g { anchor a at (0, 0) }
+  body b {
+    anchor p at (0, 0)
+    if tip { anchor t at (0.1, 0) }
+    for i = 0 to n - 1 { if i != 2 { anchor k[i] at (0.01 * i, 0) } }
+  }
+  profile shape on b.p {
+    polygon:
+      (0, 0) (0.05, 0) (0.05, 0.02)
+      if tip { (0.03, 0.04) }
+      for i = 0 to 1 { if i == 1 { (0.0, 0.03) } }
+    fillet 0.001
+  }
+})";
+        const std::string flat = R"(
+mechanism m {
+  ground g { anchor a at (0, 0) }
+  body b {
+    anchor p at (0, 0)
+    anchor t at (0.1, 0)
+    anchor k_0 at (0.01 * 0, 0)
+    anchor k_1 at (0.01 * 1, 0)
+    anchor k_3 at (0.01 * 3, 0)
+    anchor k_4 at (0.01 * 4, 0)
+  }
+  profile shape on b.p {
+    polygon: (0, 0) (0.05, 0) (0.05, 0.02) (0.03, 0.04) (0.0, 0.03)
+    fillet 0.001
+  }
+})";
+        const Program a = parse(lex(withIf)), b = parse(lex(flat));
+        const BodyDecl &ba = a.mechanisms[0].bodies[1], &bb = b.mechanisms[0].bodies[1];
+        CHECK(ba.anchors.size() == bb.anchors.size() && ba.anchors.size() == 6);
+        bool same = ba.anchors.size() == bb.anchors.size();
+        for (size_t i = 0; same && i < ba.anchors.size(); ++i)
+            same = ba.anchors[i].name == bb.anchors[i].name && ba.anchors[i].pos.x == bb.anchors[i].pos.x && ba.anchors[i].pos.y == bb.anchors[i].pos.y;
+        CHECK(same);
+        const ProfileDecl &pa = a.mechanisms[0].profiles[0], &pb = b.mechanisms[0].profiles[0];
+        CHECK(pa.points.size() == 5 && pb.points.size() == 5);
+        CHECK(!pa.points.empty() && pa.points.size() == pb.points.size() && pa.points.back().x == pb.points.back().x);
+        // without the tip: no anchor t and one vertex fewer
+        const Program c = parse(lex(withIf), ParamOverrides{{"tip", 0.0}});
+        CHECK(c.mechanisms[0].bodies[1].anchors.size() == 5 && c.mechanisms[0].profiles[0].points.size() == 4);
+    }
+    // ---- the actual use: a part that refuses a bad parameter, and one that adapts ----------------------------------------------------
+    {
+        const std::string part = R"(
+part spoked(n = 4, hub = 0.01) {
+  require n >= 2 "a wheel needs at least two spokes"
+  require hub > 0 && hub < 0.1 "the hub radius must be between 0 and 0.1"
+  param len = if(n > 6, 0.05, 0.1)
+  ground frame { anchor c at (0, 0) }
+  for i = 0 to n - 1 { rod spoke[i] on frame.c { length: len, from: 360 * i / n deg } }
+}
+mechanism m { ground bench { anchor o at (0, 0) } use spoked(n = N) as w on bench at (0, 0) }
+)";
+        auto count = [&](double n) {
+            std::string src = part;
+            const size_t at = src.find("N)");
+            src.replace(at, 1, std::to_string((int)n));
+            return parse(lex(src)).mechanisms[0].bodies.size();
+        };
+        CHECK(count(4) == 5 && count(8) == 9);
+        CHECK(parseFails([&] { std::string s = part; s.replace(s.find("N)"), 1, "1"); return s; }().c_str(), "requirement not met: a wheel needs at least two spokes"));
+        double L4 = 0, L8 = 0;
+        {
+            std::string a = part, b = part;
+            a.replace(a.find("N)"), 1, "4");
+            b.replace(b.find("N)"), 1, "8");
+            L4 = parse(lex(a)).mechanisms[0].bodies[1].props.at("length");
+            L8 = parse(lex(b)).mechanisms[0].bodies[1].props.at("length");
+        }
+        CHECK(L4 == 0.1 && L8 == 0.05);                                                           // the length follows the count
+    }
+}
+
+// ============================================================================
+// M20 — `mech report`: what a mechanism has to carry. The loads are the constraint multipliers, so each has a
+// closed form:
+//   * a bead in a tube turned at constant w: the side force is the Coriolis force 2 m r' w = 2 m r0 w^2 sinh(w t) and the
+//     drive's torque is d/dt (m r^2 w) = 2 m r r' w = 2 m r0^2 w^2 cosh(w t) sinh(w t)
+//   * a mass m at distance d from its pin, turned at constant w in gravity: the drive torque is m g d cos(theta)
+//     (peak m g d, RMS m g d / sqrt 2, mean power 0, peak power w m g d), and the pin's force is m |g up - w^2 d r_hat|:
+//     peak m (w^2 d + g), RMS m sqrt(w^4 d^2 + g^2)
+//   * at rest: a hanging mass loads its pin with m g, a block on a rail loads the rail with m g, a stretched spring
+//     has the tension k x, and one that oscillates has RMS k x0 / sqrt 2
+// ============================================================================
+
+void testReport() {
+    std::printf("[report M20]\n");
+    auto find = [](const Report& r, const char* group, const char* name, const char* quantity) -> const ReportRow* {
+        for (const ReportRow& row : r.rows)
+            if (row.group == group && row.name == name && row.quantity == quantity) return &row;
+        return nullptr;
+    };
+    // ---- the columns are opt-in: a plain run's CSV is what it was
+    {
+        const Model m = modelFromFile("examples/slidingbead.mech");
+        const SimSeries plain = simulate(m, 0.05, 1.0 / 60.0, {}, 1), loaded = simulate(m, 0.05, 1.0 / 60.0, {}, 1, true);
+        bool anyPlain = false, pin = false, normal = false, moment = false;
+        for (const std::string& c : plain.columns) if (c.find(".pin[") != std::string::npos || c.find(".normal[N]") != std::string::npos) anyPlain = true;
+        for (const std::string& c : loaded.columns) {
+            if (c == "tube.A-frame.pivot.pin[N]") pin = true;
+            if (c == "bead.g.normal[N]") normal = true;
+            if (c == "bead.g.moment[N*m]") moment = true;
+        }
+        CHECK(!anyPlain && pin && normal && moment);
+        CHECK(loaded.columns.size() == plain.columns.size() + 3);
+        // a kinematic mechanism has nothing to carry
+        const Report k = buildReport(modelFromFile("examples/fourbar.mech"), 1.0);
+        CHECK(!k.ok && k.error.find("dynamic") != std::string::npos);
+    }
+    // ---- a bead in a rotating tube
+    {
+        const Model m = modelFromFile("examples/slidingbead.mech");
+        const double w = deg2rad(120.0), r0 = 0.1, mb = 0.1, T = 1.0;
+        const Report r = buildReport(m, T);
+        CHECK(r.ok);
+        const ReportRow* side = find(r, "slide", "bead.g", "side force");
+        const ReportRow* torque = find(r, "drive", "tube", "torque");
+        const ReportRow* speed = find(r, "drive", "tube", "speed");
+        const ReportRow* mom = find(r, "slide", "bead.g", "moment");
+        CHECK(side && torque && speed && mom);
+        if (side && torque && speed && mom) {
+            CHECK_APPROX(side->peak, 2.0 * mb * r0 * w * w * std::sinh(w * T), 2e-3 * side->peak);
+            CHECK_APPROX(torque->peak, 2.0 * mb * r0 * r0 * w * w * std::cosh(w * T) * std::sinh(w * T), 2e-3 * torque->peak);
+            CHECK_APPROX(side->peakAt, T, 0.01);
+            CHECK_APPROX(speed->peak, w, 1e-9);
+            CHECK(mom->peak < 1e-9);                                  // the bead's mass is on its guide point: no moment
+            // the drive's mean torque over [0, T]: m r0^2 w^2 (cosh 2wT - 1) / (2 w T), and its mean power is w times that
+            const double meanT = mb * r0 * r0 * w * w * (std::cosh(2.0 * w * T) - 1.0) / (2.0 * w * T);
+            CHECK_APPROX(torque->mean, meanT, 3e-3 * meanT);
+            const ReportRow* pwr = find(r, "drive", "tube", "power");
+            CHECK(pwr != nullptr && std::fabs(pwr->mean - w * meanT) < 3e-3 * w * meanT);
+            // RMS of the side force over [0, T]: 2 m r0 w^2 sqrt( (sinh 2wT / (4 w T)) - 1/2 )
+            const double rms = 2.0 * mb * r0 * w * w * std::sqrt(std::sinh(2.0 * w * T) / (4.0 * w * T) - 0.5);
+            CHECK_APPROX(side->rms, rms, 3e-3 * rms);
+        }
+    }
+    // ---- an offset mass turned at constant speed in gravity: closed forms over one whole turn
+    {
+        const double mass = 2.0, d = 0.3, g = 9.81, w = kPi / 3.0;
+        const std::string src = "mechanism arm { world { gravity: 9.81 step: 0.002 } ground frame { anchor p at (0, 0) } "
+            "body b { anchor A at (0, 0) mass: 2 com: (0.3, 0) inertia: 0.05 } pin b.A -> frame.p drive b at 60 deg/s from 0 deg }";
+        const Report r = buildReport(buildFromText(src.c_str()), 6.0);
+        CHECK(r.ok);
+        const ReportRow* tq = find(r, "drive", "b", "torque");
+        const ReportRow* pw = find(r, "drive", "b", "power");
+        const ReportRow* pin = find(r, "joint", "b.A-frame.p", "force");
+        CHECK(tq && pw && pin);
+        if (tq && pw && pin) {
+            const double mgd = mass * g * d;
+            CHECK_APPROX(tq->peak, mgd, 2e-3 * mgd);
+            CHECK_APPROX(tq->rms, mgd / std::sqrt(2.0), 2e-3 * mgd);
+            CHECK(std::fabs(tq->mean) < 2e-3 * mgd);                  // up and down: no net torque over a turn
+            CHECK_APPROX(pw->peak, w * mgd, 2e-3 * w * mgd);
+            CHECK(std::fabs(pw->mean) < 2e-3 * w * mgd);              // and no net power
+            CHECK_APPROX(pin->peak, mass * (w * w * d + g), 2e-3 * pin->peak);
+            CHECK_APPROX(pin->rms, mass * std::sqrt(std::pow(w * w * d, 2) + g * g), 2e-3 * pin->rms);
+        }
+    }
+    // ---- at rest: a hanging mass, a block on a rail, a spring
+    {
+        const std::string hang = "mechanism hang { world { gravity: 9.81 step: 0.002 } ground frame { anchor p at (0, 0) } "
+            "body b { anchor A at (0, 0) mass: 3 com: (0.4, 0) inertia: 0.05 from: -90 deg } pin b.A -> frame.p }";
+        const Report r = buildReport(buildFromText(hang.c_str()), 0.5);
+        const ReportRow* pin = find(r, "joint", "b.A-frame.p", "force");
+        CHECK(pin != nullptr);
+        if (pin) { CHECK_APPROX(pin->peak, 3.0 * 9.81, 1e-6); CHECK_APPROX(pin->rms, 3.0 * 9.81, 1e-6); }
+
+        const std::string block = "mechanism blk { world { gravity: 9.81 step: 0.002 } ground frame { anchor rail at (0, 0) dir (1, 0) } "
+            "body b { anchor g at (0, 0) dir (1, 0) mass: 4 } slide b.g -> frame.rail }";
+        const Report rb = buildReport(buildFromText(block.c_str()), 0.3);
+        const ReportRow* nrm = find(rb, "slide", "b.g", "side force");
+        const ReportRow* mm = find(rb, "slide", "b.g", "moment");
+        CHECK(nrm && mm);
+        if (nrm && mm) { CHECK_APPROX(nrm->peak, 4.0 * 9.81, 1e-6); CHECK(mm->peak < 1e-9); }
+
+        // a mass on a spring: stretched by x0 and let go, five whole periods; k = 100 N/m, m = 1 kg
+        const double k = 100.0, x0 = 0.05, period = 2.0 * kPi / std::sqrt(k / 1.0);
+        const std::string spr = "mechanism spr { world { gravity: 0 step: 0.001 } ground frame { anchor rail at (0.35, 0) dir (1, 0) anchor wall at (0, 0) } "
+            "body b { anchor g at (0, 0) dir (1, 0) mass: 1 } slide b.g -> frame.rail spring s frame.wall -> b.g { k: 100 rest: 0.3 } }";
+        const Report rs = buildReport(buildFromText(spr.c_str()), 5.0 * period);
+        const ReportRow* sp = find(rs, "spring", "s", "tension");
+        CHECK(sp != nullptr);
+        if (sp) {
+            CHECK_APPROX(sp->peak, k * x0, 2e-3 * k * x0);
+            CHECK_APPROX(sp->rms, k * x0 / std::sqrt(2.0), 3e-3 * k * x0);
+            CHECK_APPROX(sp->peakAt, 0.0, period / 2.0 + 1e-9);          // at t = 0, or a half period later at the other extreme
+        }
+    }
+    // ---- ordering and bookkeeping: heaviest joint first, two slides keep their own rows, a damped spring adds its damping force
+    {
+        // a hanging two-link chain at rest: the upper pin carries both links (5 m g), the lower one its own link (m g)
+        const std::string chain = "mechanism ch { world { gravity: 9.81 step: 0.002 } ground frame { anchor p at (0, 0) } "
+            "body u { anchor A at (0, 0) anchor B at (0.4, 0) mass: 1 com: (0.2, 0) inertia: 0.01 from: -90 deg } "
+            "body l { anchor A at (0, 0) mass: 1 com: (0.2, 0) inertia: 0.01 from: -90 deg } "
+            "pin u.A -> frame.p pin l.A -> u.B }";
+        const Report rc = buildReport(buildFromText(chain.c_str()), 0.2);
+        std::vector<const ReportRow*> pins;
+        for (const ReportRow& row : rc.rows) if (row.group == "joint") pins.push_back(&row);
+        CHECK(pins.size() == 2);
+        if (pins.size() == 2) {
+            CHECK_APPROX(pins[0]->peak, 2.0 * 9.81, 1e-3);                 // sorted: the heavier load first
+            CHECK_APPROX(pins[1]->peak, 1.0 * 9.81, 1e-3);
+            CHECK(pins[0]->name == "u.A-frame.p");
+        }
+        // two slides with different loads: each reads its own multiplier (a mass on each of two parallel rails)
+        const std::string two = "mechanism tw { world { gravity: 9.81 step: 0.002 } ground frame { anchor r1 at (0, 0) dir (1, 0) anchor r2 at (0, 1) dir (1, 0) } "
+            "body a { anchor g at (0, 0) dir (1, 0) mass: 2 } body b { anchor g at (0, 0) dir (1, 0) mass: 5 } slide a.g -> frame.r1 slide b.g -> frame.r2 }";
+        const Report rt = buildReport(buildFromText(two.c_str()), 0.2);
+        const ReportRow* na = find(rt, "slide", "a.g", "side force");
+        const ReportRow* nb = find(rt, "slide", "b.g", "side force");
+        const ReportRow* ma = find(rt, "slide", "a.g", "moment");
+        const ReportRow* mb2 = find(rt, "slide", "b.g", "moment");
+        CHECK(na && nb && ma && mb2);
+        if (na && nb && ma && mb2) {
+            CHECK_APPROX(na->peak, 2.0 * 9.81, 1e-6);
+            CHECK_APPROX(nb->peak, 5.0 * 9.81, 1e-6);
+            CHECK(ma->peak < 1e-9 && mb2->peak < 1e-9);
+        }
+        // a spring with damping: a mass released from a stretch x0 has speed v, so the tension is k x + c v; at t = 0 it is k x0
+        // and the damped decay x0 e^(-zeta w t) shows in the peak at later times, so compare with and without the damping
+        const std::string base = "mechanism sp { world { gravity: 0 step: 0.001 } ground frame { anchor rail at (0.35, 0) dir (1, 0) anchor wall at (0, 0) } "
+            "body b { anchor g at (0, 0) dir (1, 0) mass: 1 } slide b.g -> frame.rail spring s frame.wall -> b.g { k: 100 rest: 0.3 damp: DAMP } "
+            "drive b.g at 0.2 m/s }";
+        auto withDamp = [&](const char* d) { std::string x = base; x.replace(x.find("DAMP"), 4, d); return x; };
+        const Report r0 = buildReport(buildFromText(withDamp("0").c_str()), 0.5);
+        const Report r1 = buildReport(buildFromText(withDamp("10").c_str()), 0.5);
+        const ReportRow* s0 = find(r0, "spring", "s", "tension");
+        const ReportRow* s1 = find(r1, "spring", "s", "tension");
+        CHECK(s0 && s1);
+        if (s0 && s1) {
+            // the guide is driven outward at 0.2 m/s from the rest length + 0.05 m: x = 0.05 + 0.2 t, v = 0.2, so at t = 0.5
+            // the tension is k x (+ c v)
+            CHECK_APPROX(s0->peak, 100.0 * (0.05 + 0.2 * 0.5), 1e-3);
+            CHECK_APPROX(s1->peak, 100.0 * (0.05 + 0.2 * 0.5) + 10.0 * 0.2, 1e-3);
+        }
+    }
+    // ---- the command line
+    {
+        TempDir td;
+        const std::string csv = td.dir + "/r.csv", log = td.dir + "/log.txt";
+        auto run = [&](const std::string& args) { return std::system(("./mech report " + args + " > " + log + " 2>&1").c_str()); };
+        CHECK(run("examples/slidingbead.mech --time 1 --csv " + csv) == 0);
+        const std::string out = readFile(log.c_str()), file = readFile(csv.c_str());
+        CHECK(out.find("drives (size the motor") != std::string::npos && out.find("tube.A-frame.pivot") != std::string::npos);
+        CHECK(file.compare(0, 53, "group,name,quantity,unit,peak,peak_at_s,rms,mean\ndrive") == 0 || file.find("group,name,quantity") == 0);
+        CHECK(file.find("slide,bead.g,side force,N,") != std::string::npos);
+        CHECK(run("examples/fourbar.mech") != 0 && readFile(log.c_str()).find("needs a dynamic mechanism") != std::string::npos);
+        CHECK(run("examples/slidingbead.mech --time 0") != 0);
+        CHECK(run("examples/slidingbead.mech --bogus") != 0);
+        CHECK(run("nofile.mech") != 0);
+        CHECK(run("examples/slidingbead.mech --set nothing=1") != 0);
+        CHECK(run("examples/geneva.mech --time 0.5 --top 1") == 0 && readFile(log.c_str()).find("more (--top 0 shows all)") != std::string::npos);
+    }
+}
+
+// ============================================================================
+// M21 — the sparse solver. The sparse Jacobian is the dense one with the zeros left out; the skyline Cholesky is the
+// dense algorithm on the envelope; the fill-reducing order only renumbers; and a mechanism declared in any order moves the same
+// way. Everything is compared with the dense or the unpermuted computation.
+// ============================================================================
+
+void testSparseSolver() {
+    std::printf("[sparse M21]\n");
+    unsigned seed = 11;
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return ((seed >> 8) & 0xFFFF) / 65535.0; };
+
+    // ---- the sparse Jacobian is the dense Jacobian: same entries, ascending columns, no zeros
+    for (const char* file : {"examples/fourbar.mech", "examples/jumpcam.mech", "examples/geneva.mech", "examples/ellipgears.mech", "examples/boom.mech",
+                             "examples/rackpinion.mech", "examples/rollingwheel.mech", "examples/beltdrive.mech", "examples/planetary.mech",
+                             "examples/scotchyoke.mech", "examples/ratchet.mech"}) {
+        const Model m = modelFromFile(file);
+        ConstraintSystem sys(m);
+        std::vector<double> q;
+        m.assemble(q);
+        int iters = 0;
+        sys.solve(q, 0.3, iters);
+        for (double& v : q) v += 1e-3 * (rnd() - 0.5);                         // off the exact solution: general values
+        std::vector<double> J;
+        std::vector<SparseRow> Js;
+        sys.jacobian(q, J);
+        sys.jacobianSparse(q, Js);
+        const int rows = sys.rowCount(), nq = m.nq();
+        CHECK((int)Js.size() == rows);
+        bool same = (int)Js.size() == rows, ascending = true;
+        for (int r = 0; same && r < rows; ++r) {
+            std::vector<double> back((size_t)nq, 0.0);
+            for (size_t x = 0; x < Js[(size_t)r].col.size(); ++x) {
+                if (x > 0 && Js[(size_t)r].col[x] <= Js[(size_t)r].col[x - 1]) ascending = false;
+                if (Js[(size_t)r].val[x] == 0.0) same = false;
+                back[(size_t)Js[(size_t)r].col[x]] = Js[(size_t)r].val[x];
+            }
+            for (int c = 0; c < nq; ++c) if (back[(size_t)c] != J[(size_t)r * nq + c]) same = false;
+        }
+        CHECK(same && ascending);
+    }
+
+    // ---- skyline Cholesky against the dense algorithm
+    {
+        for (int kind = 0; kind < 3; ++kind) {
+            const int n = 60;
+            std::vector<double> B((size_t)n * n, 0.0), M((size_t)n * n, 0.0);
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) {
+                    const bool on = kind == 0 ? std::abs(i - j) <= 3 : kind == 1 ? (i == j || j == 0 || i == 0 || std::abs(i - j) == 2) : (i == j || (i + j) % 7 == 0);
+                    if (on) B[(size_t)i * n + j] = rnd() - 0.4;
+                }
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) {
+                    double sm = i == j ? 1.0 : 0.0;
+                    for (int k = 0; k < n; ++k) sm += B[(size_t)i * n + k] * B[(size_t)j * n + k];
+                    M[(size_t)i * n + j] = sm;
+                }
+            Skyline A;
+            std::vector<int> first((size_t)n);
+            for (int i = 0; i < n; ++i) { int f = i; for (int j = 0; j < i; ++j) if (M[(size_t)i * n + j] != 0.0) { f = j; break; } first[(size_t)i] = f; }
+            A.init(first);
+            for (int i = 0; i < n; ++i) for (int j = first[(size_t)i]; j <= i; ++j) A.at(i, j) = M[(size_t)i * n + j];
+            std::vector<double> b((size_t)n), xd, xs;
+            for (double& v : b) v = rnd() - 0.5;
+            Skyline L;
+            CHECK(denseCholesky(M, b, n, xd) && skylineFactor(A, L));
+            skylineSolve(L, b, xs);
+            bool close = xd.size() == xs.size();
+            for (size_t i = 0; close && i < xd.size(); ++i) close = std::fabs(xd[i] - xs[i]) <= 1e-12 * (1.0 + std::fabs(xd[i]));
+            CHECK(close);
+        }
+        // a pivot that collapses is refused
+        Skyline Z;
+        Z.init({0, 0});
+        Z.at(0, 0) = 1.0; Z.at(1, 0) = 2.0; Z.at(1, 1) = 1.0;
+        Skyline LZ;
+        CHECK(!skylineFactor(Z, LZ));
+    }
+
+    // ---- the fill-reducing order
+    {
+        auto envelopeOf = [](const std::vector<std::vector<int>>& adj, const std::vector<int>& perm) {
+            const int n = (int)adj.size();
+            std::vector<int> pos((size_t)n);
+            for (int i = 0; i < n; ++i) pos[(size_t)(perm.empty() ? i : perm[(size_t)i])] = i;
+            long long e = 0;
+            for (int i = 0; i < n; ++i) {
+                int f = pos[(size_t)i];
+                for (int k : adj[(size_t)i]) f = std::min(f, pos[(size_t)k]);
+                e += pos[(size_t)i] - f + 1;
+            }
+            return e;
+        };
+        const int n = 300;
+        // a path in its own order: left alone
+        std::vector<std::vector<int>> path((size_t)n);
+        for (int i = 0; i + 1 < n; ++i) { path[(size_t)i].push_back(i + 1); path[(size_t)i + 1].push_back(i); }
+        auto a1 = path;
+        CHECK(envelopeOrdering(a1).empty());
+        // the same path with its nodes numbered at random: reordered to a narrow band
+        std::vector<int> label((size_t)n);
+        for (int i = 0; i < n; ++i) label[(size_t)i] = i;
+        for (int i = n - 1; i > 0; --i) std::swap(label[(size_t)i], label[(size_t)(rnd() * i) % (size_t)(i + 1)]);
+        std::vector<std::vector<int>> shuffled((size_t)n);
+        for (int i = 0; i + 1 < n; ++i) { shuffled[(size_t)label[(size_t)i]].push_back(label[(size_t)i + 1]); shuffled[(size_t)label[(size_t)i + 1]].push_back(label[(size_t)i]); }
+        auto a2 = shuffled;
+        const long long before = envelopeOf(shuffled, {});
+        const std::vector<int> perm = envelopeOrdering(a2);
+        CHECK(!perm.empty());
+        if (!perm.empty()) {
+            std::vector<int> seen((size_t)n, 0);
+            for (int v : perm) { CHECK(v >= 0 && v < n); ++seen[(size_t)v]; }
+            bool bijection = true;
+            for (int c : seen) bijection = bijection && c == 1;
+            CHECK(bijection);
+            CHECK(envelopeOf(shuffled, perm) <= 3LL * n);               // a path has envelope 2 n in the right order
+            CHECK(before > 20LL * n);
+        }
+        // a grid in row-major order is not improved by 30%, a randomly numbered one is
+        const int w = 16;
+        std::vector<std::vector<int>> grid((size_t)(w * w));
+        for (int y = 0; y < w; ++y)
+            for (int x = 0; x < w; ++x) {
+                if (x + 1 < w) { grid[(size_t)(y * w + x)].push_back(y * w + x + 1); grid[(size_t)(y * w + x + 1)].push_back(y * w + x); }
+                if (y + 1 < w) { grid[(size_t)(y * w + x)].push_back((y + 1) * w + x); grid[(size_t)((y + 1) * w + x)].push_back(y * w + x); }
+            }
+        auto g1 = grid;
+        CHECK(envelopeOrdering(g1).empty());
+        std::vector<int> lab((size_t)(w * w));
+        for (int i = 0; i < w * w; ++i) lab[(size_t)i] = i;
+        for (int i = w * w - 1; i > 0; --i) std::swap(lab[(size_t)i], lab[(size_t)(rnd() * i) % (size_t)(i + 1)]);
+        std::vector<std::vector<int>> rg((size_t)(w * w));
+        for (int i = 0; i < w * w; ++i) for (int k : grid[(size_t)i]) rg[(size_t)lab[(size_t)i]].push_back(lab[(size_t)k]);
+        auto g2 = rg;
+        const std::vector<int> gp = envelopeOrdering(g2);
+        CHECK(!gp.empty() && envelopeOf(rg, gp) < envelopeOf(rg, {}) / 3);
+    }
+
+    // ---- a mechanism declared in any order moves the same way
+    {
+        const int n = 40;
+        auto build = [&](bool shuffle) {
+            std::vector<int> order((size_t)n);
+            for (int i = 0; i < n; ++i) order[(size_t)i] = i;
+            std::vector<std::string> pins;
+            pins.push_back("pin link_0.A -> frame.pivot");
+            for (int i = 1; i < n; ++i) pins.push_back("pin link_" + std::to_string(i) + ".A -> link_" + std::to_string(i - 1) + ".B");
+            if (shuffle) {
+                unsigned sd = 5;
+                for (int i = n - 1; i > 0; --i) { sd = sd * 1664525u + 1013904223u; std::swap(order[(size_t)i], order[(sd >> 8) % (size_t)(i + 1)]); }
+                for (int i = (int)pins.size() - 1; i > 0; --i) { sd = sd * 1664525u + 1013904223u; std::swap(pins[(size_t)i], pins[(sd >> 8) % (size_t)(i + 1)]); }
+            }
+            std::string src = "mechanism chain { world { gravity: 9.81 step: 0.002 } ground frame { anchor pivot at (0, 0) } ";
+            for (int i : order) src += "rod link_" + std::to_string(i) + " { length: 0.05 mass: 0.05 from: " + std::to_string(-60 + 3 * (i % 7)) + " deg } ";
+            for (const std::string& p : pins) src += p + " ";
+            return src + "}";
+        };
+        const Model a = buildFromText(build(false).c_str()), b = buildFromText(build(true).c_str());
+        const SimSeries sa = simulate(a, 0.4, 0.4, {}, 1), sb = simulate(b, 0.4, 0.4, {}, 1);
+        double worst = 0.0;
+        for (int i : {0, 1, 7, 20, n - 1}) {
+            const std::string nm = "link_" + std::to_string(i) + ".theta";
+            const int ca = colOf(sa.columns, nm), cb = colOf(sb.columns, nm);
+            CHECK(ca > 0 && cb > 0);
+            if (ca > 0 && cb > 0) worst = std::max(worst, std::fabs(sa.rows.back()[(size_t)ca] - sb.rows.back()[(size_t)cb]));
+        }
+        CHECK(worst < 1e-6);                                               // a long chain is chaotic: compare early, before rounding grows
+        auto maxOf = [](const SimSeries& sr, const char* name) {
+            double mx = 0.0;
+            for (size_t k = 0; k < sr.columns.size(); ++k)
+                if (sr.columns[k] == name) for (const auto& row : sr.rows) mx = std::max(mx, row[k]);
+            return mx;
+        };
+        const double ra = maxOf(sa, "maxRes"), rb = maxOf(sb, "maxRes");
+        CHECK(ra < 1e-9 && rb < 1e-9);
+    }
+    // ---- a redundant constraint (the same pin twice) makes A singular: the damping lets the factor through and the motion is the pendulum's
+    {
+        const std::string once = "mechanism p { world { gravity: 9.81 step: 0.001 } ground g { anchor o at (0, 0) } body b { anchor A at (0, 0) mass: 1 com: (0.5, 0) inertia: 0.02 from: -20 deg } pin b.A -> g.o }";
+        const std::string twice = "mechanism p { world { gravity: 9.81 step: 0.001 } ground g { anchor o at (0, 0) } body b { anchor A at (0, 0) mass: 1 com: (0.5, 0) inertia: 0.02 from: -20 deg } pin b.A -> g.o pin b.A -> g.o }";
+        const SimSeries s1 = simulate(buildFromText(once.c_str()), 1.0, 1.0, {}, 1), s2 = simulate(buildFromText(twice.c_str()), 1.0, 1.0, {}, 1);
+        const int c1 = colOf(s1.columns, "b.theta"), c2 = colOf(s2.columns, "b.theta");
+        CHECK(c1 > 0 && c2 > 0);
+        if (c1 > 0 && c2 > 0) CHECK_APPROX(s2.rows.back()[(size_t)c2], s1.rows.back()[(size_t)c1], 1e-6);
+        CHECK(std::fabs(s1.rows.back()[(size_t)c1] - s1.rows[0][(size_t)c1]) > 0.1);          // and it did swing
+    }
+    // ---- big mechanisms run: a 600-link chain in a few steps, kinematic and dynamic, with its constraints met
+    {
+        const int n = 600;
+        std::string src = "mechanism big { world { gravity: 9.81 step: 0.002 } ground frame { anchor pivot at (0, 0) } ";
+        for (int i = 0; i < n; ++i) src += "rod link_" + std::to_string(i) + " { length: 0.05 mass: 0.05 } ";
+        src += "pin link_0.A -> frame.pivot ";
+        for (int i = 1; i < n; ++i) src += "pin link_" + std::to_string(i) + ".A -> link_" + std::to_string(i - 1) + ".B ";
+        src += "}";
+        const Model m = buildFromText(src.c_str());
+        CHECK(m.nq() == 3 * n);
+        const SimSeries s = simulate(m, 0.02, 0.02, {}, 1);
+        CHECK(s.ok && s.rows.size() >= 2);
+        double mr = 0.0;
+        for (size_t k = 0; k < s.columns.size(); ++k) if (s.columns[k] == "maxRes") for (const auto& row : s.rows) mr = std::max(mr, row[k]);
+        CHECK(mr < 1e-9);
+    }
+}
+
+
+// ---- M22: the Jacobian says whether a pose is regular --------------------------------------------------------------------------
+
+// A Peaucellier-Lipkin cell: P rides a circle through O, so the far corner R of the rhombus traces the straight line
+// x = (L^2 - l^2) / 2c. `seeds` are starting angles for the rods (see the file's comments): none lets the solver fold the rhombus.
+std::string peaucellierText(const char* oq, const char* os, const char* pq, const char* ps, const char* qr, const char* sr) {
+    auto rod = [](const char* name, const char* len, const char* from) {
+        std::string s = std::string("  rod ") + name + " { length: " + len;
+        if (from && *from) s += std::string(", from: ") + from + " deg";
+        return s + " }\n";
+    };
+    return std::string("mechanism peaucellier {\n  param c = 0.5\n  param L = 1.0\n  param l = 0.8\n"
+                       "  ground frame { anchor O at (0, 0)  anchor F at (c, 0) }\n") +
+           rod("crank", "c", "") + rod("oq", "L", oq) + rod("os", "L", os) + rod("pq", "l", pq) + rod("ps", "l", ps) +
+           rod("qr", "l", qr) + rod("sr", "l", sr) +
+           "  pin crank.A -> frame.F\n  pin oq.A -> frame.O\n  pin os.A -> frame.O\n  pin pq.A -> crank.B\n  pin ps.A -> crank.B\n"
+           "  pin pq.B -> oq.B\n  pin ps.B -> os.B\n  pin qr.A -> oq.B\n  pin sr.A -> os.B\n  pin qr.B -> sr.B\n"
+           "  drive crank at 30 deg/s from 0 deg\n}\n";
+}
+
+// A train of two small gears (1 and 2 mm at scale 1) beside a 1.5 m arm: parts of very different size in one mechanism.
+std::string tinyTrainText(const char* s) {
+    return std::string("mechanism tiny { param s = ") + s + " ground frame { anchor a at (0, 0)  anchor b at (0.003 * s, 0)  anchor c at (1.5, 0) } "
+           "shaft s1 at frame.a shaft s2 at frame.b gear g1 { radius: 0.001 * s } on s1 gear g2 { radius: 0.002 * s } on s2 mesh g1 g2 "
+           "rod arm { length: 1.5 } pin arm.A -> frame.a drive s1 at 30 deg/s }";
+}
+
+// the rank of sparse rows by Gaussian elimination with full pivoting on a dense copy, after the same unit-length scaling of the
+// columns: an independent route to the count that jacobianHealth reaches by a sparse Cholesky
+int denseRank(const std::vector<SparseRow>& J, int nq, double rel = 1e-7) {
+    const int m = (int)J.size();
+    std::vector<double> A((size_t)m * nq, 0.0), norm((size_t)nq, 0.0);
+    for (int i = 0; i < m; ++i)
+        for (size_t x = 0; x < J[(size_t)i].col.size(); ++x) {
+            A[(size_t)i * nq + J[(size_t)i].col[x]] = J[(size_t)i].val[x];
+            norm[(size_t)J[(size_t)i].col[x]] += J[(size_t)i].val[x] * J[(size_t)i].val[x];
+        }
+    for (int c = 0; c < nq; ++c)
+        if (norm[(size_t)c] > 0.0)
+            for (int i = 0; i < m; ++i) A[(size_t)i * nq + c] /= std::sqrt(norm[(size_t)c]);
+    std::vector<char> rowUsed((size_t)m, 0), colUsed((size_t)nq, 0);
+    int rank = 0;
+    double first = -1.0;
+    for (int step = 0; step < std::min(m, nq); ++step) {
+        double best = 0.0;
+        int bi = -1, bc = -1;
+        for (int i = 0; i < m; ++i) {
+            if (rowUsed[(size_t)i]) continue;
+            for (int c = 0; c < nq; ++c)
+                if (!colUsed[(size_t)c] && std::fabs(A[(size_t)i * nq + c]) > best) { best = std::fabs(A[(size_t)i * nq + c]); bi = i; bc = c; }
+        }
+        if (bi < 0) break;
+        if (first < 0.0) first = best;
+        if (best <= rel * first) break;
+        ++rank;
+        rowUsed[(size_t)bi] = colUsed[(size_t)bc] = 1;
+        for (int i = 0; i < m; ++i) {
+            if (rowUsed[(size_t)i]) continue;
+            const double f = A[(size_t)i * nq + bc] / A[(size_t)bi * nq + bc];
+            for (int c = 0; c < nq; ++c) A[(size_t)i * nq + c] -= f * A[(size_t)bi * nq + c];
+        }
+    }
+    return rank;
+}
+
+// Assemble a model the way `mech run` does, ready to be stepped.
+struct Assembled {
+    Model m;
+    std::vector<double> q;
+    explicit Assembled(Model model) : m(std::move(model)) {
+        m.assemble(q);
+        ConstraintSystem sys(m);
+        int it = 0;
+        sys.solve(q, 0.0, it);
+    }
+};
+
+void testDiagnose() {
+    std::printf("[diagnose M22]\n");
+    unsigned seed = 7;
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return ((seed >> 8) & 0xFFFF) / 65535.0; };
+    auto poseOf = [](const std::string& text) {
+        Assembled a(buildFromText(text.c_str()));
+        ConstraintSystem sys(a.m);
+        return std::make_pair(diagnosePose(a.m, sys, a.q), a.m);
+    };
+
+    // ---- the sparse rank-revealing factorization against a dense rank, on rows with planted dependencies ---------------------------
+    {
+        int agree = 0, trials = 0;
+        for (int trial = 0; trial < 40; ++trial) {
+            const int m = 14, n = 18, planted = 1 + trial % 3;
+            std::vector<std::vector<double>> dense((size_t)m, std::vector<double>((size_t)n, 0.0));
+            for (int i = 0; i < m - planted; ++i)
+                for (int k = 0; k < 4; ++k) dense[(size_t)i][(size_t)(rnd() * n) % n] = rnd() * 2.0 - 1.0 + (rnd() < 0.5 ? 0.3 : -0.3);
+            for (int p = 0; p < planted; ++p) {                        // each planted row: a combination of two earlier rows
+                const int a = (int)(rnd() * (m - planted)) % (m - planted), b = (int)(rnd() * (m - planted)) % (m - planted);
+                const double ca = 0.5 + rnd(), cb = rnd() - 0.5;
+                for (int c = 0; c < n; ++c) dense[(size_t)(m - planted + p)][(size_t)c] = ca * dense[(size_t)a][(size_t)c] + cb * dense[(size_t)b][(size_t)c];
+            }
+            // shuffle the rows, so the dependent row is not always the last one
+            std::vector<int> order((size_t)m);
+            for (int i = 0; i < m; ++i) order[(size_t)i] = i;
+            for (int i = m - 1; i > 0; --i) std::swap(order[(size_t)i], order[(size_t)((int)(rnd() * (i + 1)) % (i + 1))]);
+            std::vector<SparseRow> J((size_t)m);
+            for (int i = 0; i < m; ++i)
+                for (int c = 0; c < n; ++c) {
+                    const double v = dense[(size_t)order[(size_t)i]][(size_t)c];
+                    if (v != 0.0) { J[(size_t)i].col.push_back(c); J[(size_t)i].val.push_back(v); }
+                }
+            const int want = denseRank(J, n);
+            const JacobianHealth h = jacobianHealth(J, n);
+            ++trials;
+            if (h.rank == want && (int)h.dependent.size() == m - want) ++agree;
+            CHECK(want <= m - planted);                                // the planted rows really are dependent
+        }
+        CHECK(agree == trials);
+    }
+
+    // ---- the units a constraint is written in do not change the separation angle --------------------------------------------------------
+    {
+        const Assembled a(modelFromFile("examples/fourbar.mech"));
+        ConstraintSystem sys(a.m);
+        std::vector<SparseRow> J;
+        sys.jacobianSparse(a.q, J);
+        const std::vector<double> w0 = unknownWeights(a.m, &J);
+        const JacobianHealth base = jacobianHealth(J, sys.nq, &w0);
+        std::vector<SparseRow> R = J;
+        for (size_t i = 0; i < R.size(); ++i) {
+            const double f = (i % 3 == 0 ? 1e3 : (i % 3 == 1 ? 1e-3 : -7.0));
+            for (double& v : R[i].val) v *= f;                          // every equation in other units
+        }
+        const std::vector<double> w1 = unknownWeights(a.m, &R);         // and the weights, worked out from the rescaled rows
+        const JacobianHealth rescaled = jacobianHealth(R, sys.nq, &w1);
+        CHECK_APPROX(rescaled.minRatio, base.minRatio, 1e-9);
+        CHECK(rescaled.ratios.size() == base.ratios.size() && base.ratios.size() == J.size());
+        for (size_t i = 0; i < base.ratios.size() && i < rescaled.ratios.size(); ++i) CHECK_APPROX(rescaled.ratios[i], base.ratios[i], 1e-9);
+        for (size_t c = 0; c < w0.size(); ++c) CHECK_APPROX(w1[c], w0[c], 1e-9 * w0[c]);
+        CHECK(base.dependent.empty() && base.rank == (int)J.size() && base.minDegrees() > 20.0);
+    }
+
+    // ---- a mechanism drawn ten times bigger is exactly as regular -----------------------------------------------------------------
+    {
+        const Assembled a(modelFromFile("examples/fourbar.mech"));
+        const Assembled b(buildFromText(
+            "mechanism big { ground base { anchor p1 at (0, 0)  anchor p2 at (30, 0) } rod crank { length: 8 } rod coupler { length: 26 } "
+            "rod rocker { length: 22 } pin crank.A -> base.p1 pin coupler.A -> crank.B pin rocker.A -> base.p2 pin coupler.B -> rocker.B "
+            "drive crank at 36 deg/s from 60 deg }"));
+        ConstraintSystem sa(a.m), sb(b.m);
+        const JacobianHealth ha = diagnosePose(a.m, sa, a.q).health, hb = diagnosePose(b.m, sb, b.q).health;
+        CHECK_APPROX(ha.minRatio, hb.minRatio, 1e-9);
+        CHECK(ha.ratios.size() == hb.ratios.size() && !ha.ratios.empty());
+        for (size_t i = 0; i < ha.ratios.size() && i < hb.ratios.size(); ++i) CHECK_APPROX(ha.ratios[i], hb.ratios[i], 1e-9);
+    }
+
+    // ---- a cam drawn ten times bigger is exactly as regular: its shaft reaches only through its profile, so the lever arm has to come from the rows ----
+    {
+        auto cam = [](const char* scale) {
+            return std::string("mechanism cam { param s = ") + scale + " ground frame { anchor axle at (0, 0)  anchor rail at (0, 0.09 * s) dir (0, 1) } "
+                   "shaft cam at frame.axle cam lobe on cam.A { base 0.025 * s  roller 0.006 * s  rise 0.012 * s over 100 deg cycloidal  dwell 60 deg  "
+                   "return over 140 deg modtrap  dwell } body follower { anchor tip at (0, 0) dir (1, 0) } slide follower.tip -> frame.rail "
+                   "touch follower.tip on lobe drive cam at 30 rpm }";
+        };
+        const auto small = poseOf(cam("1")), big = poseOf(cam("10"));
+        CHECK(small.first.health.dependent.empty() && big.first.health.dependent.empty());
+        // The follower meets the cam on the line through the axle, so the contact exerts no torque on the shaft: its row is the follower's
+        // height against the cam's, and what is left of it, once the pins and the drive have taken their share, is half its length squared.
+        // Exactly 45 degrees. (The ~1e-9 of torque the contact search leaves must not be mistaken for the shaft's reach: it once was.)
+        CHECK_APPROX(small.first.health.minDegrees(), 45.0, 1e-3);
+        CHECK_APPROX(big.first.health.minDegrees(), 45.0, 1e-3);
+        {
+            Assembled a(buildFromText(cam("1").c_str()));
+            ConstraintSystem sys(a.m);
+            std::vector<SparseRow> J;
+            sys.jacobianSparse(a.q, J);
+            const std::vector<double> w = unknownWeights(a.m, &J);
+            const double reach = 1.0 / w[(size_t)a.m.bodies[(size_t)a.m.bodyIndex("cam")].qOffset];
+            CHECK(reach > 0.03 && reach < 0.045);                        // the cam: base 25 mm + 12 mm of lift
+        }
+        CHECK_APPROX(small.first.health.minRatio, big.first.health.minRatio, 1e-6 * small.first.health.minRatio);
+        CHECK(small.first.health.ratios.size() == big.first.health.ratios.size() && !small.first.health.ratios.empty());
+        for (size_t i = 0; i < small.first.health.ratios.size() && i < big.first.health.ratios.size(); ++i)
+            CHECK_APPROX(small.first.health.ratios[i], big.first.health.ratios[i], 1e-6);   // every row, not only the closest
+    }
+
+    // ---- small parts inside a big mechanism count for what they are: a train of 1 and 2 mm gears beside a 1.5 m arm is regular, as it is drawn big ---------
+    {
+        const auto tiny = poseOf(tinyTrainText("1")), big = poseOf(tinyTrainText("300"));
+        CHECK(tiny.first.health.dependent.empty() && big.first.health.dependent.empty());
+        CHECK(tiny.first.health.minDegrees() > 20.0);                    // not 5: nothing is made of the part being small
+        CHECK_APPROX(tiny.first.health.minRatio, big.first.health.minRatio, 1e-6);
+    }
+
+    // ---- a gear on an anchor away from its body's origin reaches the anchor's distance plus its own radius ------------------------------------------------
+    {
+        const Assembled a(buildFromText("mechanism offs { ground g { anchor a at (0, 0) } body wheel { anchor A at (0, 0)  anchor c at (0.5, 0) } "
+                                        "pin wheel.A -> g.a gear gg { radius: 0.1 } on wheel.c drive wheel at 30 deg/s }"));
+        const std::vector<double> w = unknownWeights(a.m);
+        const int wheel = a.m.bodyIndex("wheel");
+        CHECK_APPROX(1.0 / w[(size_t)a.m.bodies[(size_t)wheel].qOffset], 0.6, 1e-12);   // 0.5 m out, plus the 0.1 m of the gear
+    }
+
+    // ---- the shipped examples assemble regular, and every row has a name ---------------------------------------------------------------
+    {
+        int seen = 0;
+        for (const auto& e : std::filesystem::directory_iterator("examples")) {
+            if (e.path().extension() != ".mech") continue;
+            const std::string path = e.path().string();
+            const Assembled a(modelFromFile(path.c_str()));
+            ConstraintSystem sys(a.m);
+            const PoseDiagnosis d = diagnosePose(a.m, sys, a.q);
+            CHECK(d.health.dependent.empty());                          // none of the examples starts on a singular pose
+            CHECK(d.health.minDegrees() > 5.0);                         // the boom, near the end of its stroke, is the closest at 7.7
+            CHECK((int)constraintLabels(a.m).size() == sys.rowCount()); // the names follow the rows, whatever rows a type adds
+            std::vector<SparseRow> J;
+            sys.jacobianSparse(a.q, J);
+            CHECK(jacobianHealth(J, sys.nq).rank == denseRank(J, sys.nq));
+            ++seen;
+        }
+        CHECK(seen >= 30);
+    }
+
+    // ---- a folded branch: the rhombus of a Peaucellier cell folded onto itself --------------------------------------------------------
+    {
+        const std::string folded = peaucellierText("", "", "", "", "", "");
+        const auto pm = poseOf(folded);
+        const PoseDiagnosis& d = pm.first;
+        CHECK(d.health.rows == 21 && d.health.rank == 20 && d.health.dependent.size() == 1);
+        CHECK(d.coincident.size() == 3);                                  // oq=os, pq=ps, qr=sr
+        std::vector<std::string> names;
+        for (const auto& p : d.coincident) names.push_back(pm.second.bodies[(size_t)p.first].name + "=" + pm.second.bodies[(size_t)p.second].name);
+        std::sort(names.begin(), names.end());
+        CHECK(names == (std::vector<std::string>{"oq=os", "pq=ps", "qr=sr"}));
+        const std::vector<Finding> f = describePose(pm.second, d);
+        CHECK(f.size() == 1 && f[0].severity == Severity::Warn);
+        CHECK(f[0].headline.find("singular pose") != std::string::npos);
+        std::string all;
+        for (const std::string& line : f[0].details) all += line + "\n";
+        CHECK(all.find("folded branch") != std::string::npos && all.find("from:") != std::string::npos && all.find("oq and os") != std::string::npos);
+    }
+
+    // ---- seeded, the same cell is regular; the other, regular, assembly mode cannot be called wrong by the Jacobian ---------------------
+    {
+        const auto right = poseOf(peaucellierText("47.16", "-47.16", "113.58", "-113.58", "-113.58", "113.58"));
+        CHECK(right.first.health.dependent.empty() && right.first.health.rank == 21 && right.first.coincident.empty());
+        CHECK(right.first.health.minDegrees() > 15.0);
+        const std::vector<Finding> f = describePose(right.second, right.first);
+        CHECK(f.size() == 1 && f[0].severity == Severity::Ok);
+        // rhombus folded the other way (R on top of P): a legitimate assembly mode, with a full-rank Jacobian: not flagged
+        const auto other = poseOf(peaucellierText("", "-47.16", "", "-113.58", "-113.58", "113.58"));
+        CHECK(other.first.health.dependent.empty());
+    }
+
+    // ---- redundancy the count already admits is a note, not an alarm; redundancy it does not is a hedged note ---------------------------
+    {
+        // two pins hold one plate: 4 rows on 3 unknowns, so one row is dependent however the plate sits
+        const auto w = poseOf("mechanism weld { world { gravity: 9.81 } ground g { anchor a at (0, 0)  anchor b at (0.1, 0) } "
+                              "body plate { anchor p at (0, 0)  anchor q at (0.1, 0)  mass: 1 } pin plate.p -> g.a pin plate.q -> g.b }");
+        CHECK(w.first.health.dependent.size() == 1 && w.first.explained == 1 && w.first.unexplained == 0);
+        const std::vector<Finding> f = describePose(w.second, w.first);
+        CHECK(f.size() == 1 && f[0].severity == Severity::Note && f[0].headline.find("as the count") != std::string::npos);
+        // three parallel equal cranks on one coupler: 12 rows on 12 unknowns, rank 11 (a parallelogram's extra link)
+        const auto par = poseOf("mechanism par { world { gravity: 9.81 } ground frame { anchor a at (0, 0)  anchor b at (1, 0)  anchor c at (2, 0) } "
+                                "rod c1 { length: 0.5, from: -40 deg } rod c2 { length: 0.5, from: -40 deg } rod c3 { length: 0.5, from: -40 deg } "
+                                "body coupler { anchor p at (0, 0)  anchor q at (1, 0)  anchor r at (2, 0)  mass: 1  from: 0 deg } "
+                                "pin c1.A -> frame.a pin c2.A -> frame.b pin c3.A -> frame.c pin c1.B -> coupler.p pin c2.B -> coupler.q pin c3.B -> coupler.r }");
+        CHECK(par.first.health.rows == 12 && par.first.health.rank == 11);
+        CHECK(par.first.explained == 0 && par.first.unexplained == 1 && par.first.coincident.empty());
+        const std::vector<Finding> g = describePose(par.second, par.first);
+        CHECK(g.size() == 1 && g[0].severity == Severity::Note);
+        std::string det;
+        for (const std::string& line : g[0].details) det += line + "\n";
+        CHECK(det.find("on purpose") != std::string::npos && det.find("pin ") != std::string::npos);
+    }
+
+    // ---- two rods that start alike lie in the same place; a degree apart, they do not --------------------------------------------------
+    {
+        auto two = [](const char* second) {
+            return std::string("mechanism two { ground g { anchor a at (0, 0) } rod r1 { length: 1, from: 30 deg } rod r2 { length: 1, from: ") +
+                   second + " deg } pin r1.A -> g.a pin r2.A -> g.a }";
+        };
+        const Assembled same(buildFromText(two("30").c_str())), apart(buildFromText(two("31").c_str()));
+        CHECK(coincidentBodies(same.m, same.q).size() == 1);
+        CHECK(coincidentBodies(apart.m, apart.q).empty());
+    }
+}
+
+// Run a model the way `mech run --headless` does, feeding a monitor.
+struct Monitored {
+    std::vector<Excursion> excursions;
+    double closest = 1.0, closestAt = 0.0;
+    long samples = 0;
+    std::vector<double> q;
+    std::vector<std::string> report;
+};
+
+Monitored runWithMonitor(const Model& m, double seconds, double dt, bool watch) {
+    Monitored out;
+    std::vector<double> q;
+    m.assemble(q);
+    ConstraintSystem sys(m);
+    int iters = 0;
+    sys.solve(q, 0.0, iters);
+    RunMonitor mon(sys);
+    if (watch) mon.observe(q, 0.0);
+    if (m.world.dynamic) {
+        DynamicsSystem dyn(m, sys);
+        std::vector<double> qd(m.nq(), 0.0);
+        dyn.projectVelocities(q, qd);
+        const long steps = (long)std::llround(seconds / m.world.step);
+        for (long k = 1; k <= steps; ++k) {
+            dyn.step(q, qd, (k - 1) * m.world.step);
+            if (watch) mon.observe(q, k * m.world.step);
+        }
+    } else {
+        for (double t = dt; t <= seconds + 1e-9; t += dt) {
+            sys.solve(q, t, iters);
+            const double res = sys.maxResidual(q, t);    // the run computes it either way; the monitor is only handed it
+            if (watch) mon.observe(q, t, res);
+        }
+    }
+    mon.finish();
+    out.excursions = mon.excursions();
+    out.closest = mon.closestDegrees();
+    out.closestAt = mon.closestAt();
+    out.samples = mon.samples();
+    out.q = q;
+    out.report = mon.report();
+    return out;
+}
+
+void testDiagnoseRun() {
+    std::printf("[diagnose run M22]\n");
+    const double dt = 1.0 / 60.0;
+
+    // ---- the Peaucellier cell meets its bifurcation where the closed form says --------------------------------------------------------
+    // P = F + c (cos th, sin th) is at distance 2c cos(th/2) from O. The rhombus goes flat (R on P) when |OP| = sqrt(L^2 - l^2),
+    // at th = 2 acos(k / 2c), and the crank (30 deg/s from 0) gets there at th / 30 deg.
+    {
+        const Model m = buildFromText(peaucellierText("47.16", "-47.16", "113.58", "-113.58", "-113.58", "113.58").c_str());
+        const double k = std::sqrt(1.0 - 0.64), thStar = 2.0 * std::acos(k / 1.0);
+        const double tStar = thStar * 180.0 / 3.14159265358979323846 / 30.0;
+        const Monitored r = runWithMonitor(m, 4.0, dt, true);
+        CHECK(r.excursions.size() == 1);
+        if (!r.excursions.empty()) {
+            const Excursion& e = r.excursions[0];
+            CHECK(e.t0 <= tStar + dt && e.t1 >= tStar - dt);              // the stretch it flags holds the bifurcation, to a frame
+            CHECK(e.t1 - e.t0 < 5 * dt);                                  // and is short
+            CHECK(e.worstDegrees() < 0.5 && e.dependent == 0);            // near, not (to the sample) exactly on it
+            CHECK(e.maxResidual >= 0.0 && e.maxResidual < kLostResidual); // the constraints were still met: a branch point, not a limit
+            CHECK(!e.involving.empty());
+        }
+        std::string text;
+        for (const std::string& l : r.report) text += l + "\n";
+        CHECK(text.find("singular configuration") != std::string::npos && text.find("different branch") != std::string::npos);
+        // before the bifurcation there is nothing to report, and the samples keep their distance
+        const Monitored before = runWithMonitor(m, tStar - 0.25, dt, true);
+        CHECK(before.excursions.empty() && before.closest > 1.0);
+        CHECK(r.samples == 241 && before.samples > 100);
+    }
+
+    // ---- the shipped cell: R runs along x = (L^2 - l^2) / 2c for the crank's whole range, and the seeds follow the parameters ----------------------------
+    {
+        const Model m = modelFromFile("examples/peaucellier.mech");
+        const int qr = m.bodyIndex("qr");
+        const int B = m.anchorIndex(qr, "B");
+        CHECK(qr > 0 && B >= 0);
+        std::vector<double> q;
+        m.assemble(q);
+        ConstraintSystem sys(m);
+        int iters = 0;
+        CHECK(sys.solve(q, 0.0, iters));
+        double worst = 0.0;
+        for (double t = 0.0; t <= 3.4 + 1e-9; t += dt) {
+            sys.solve(q, t, iters);
+            worst = std::max(worst, std::fabs(m.worldAnchor(qr, B, q).x - (1.0 - 0.64) / (2.0 * 0.5)));
+        }
+        CHECK(worst < 1e-8);
+        for (const auto& cl : {std::make_pair(0.45, 1.1), std::make_pair(0.6, 0.95), std::make_pair(0.4, 1.3)}) {
+            const Model v = modelFromFile("examples/peaucellier.mech", {{"c", cl.first}, {"L", cl.second}});
+            std::vector<double> qv;
+            v.assemble(qv);
+            ConstraintSystem sv(v);
+            CHECK(sv.solve(qv, 0.0, iters));
+            const PoseDiagnosis d = diagnosePose(v, sv, qv);
+            CHECK(d.health.dependent.empty() && d.coincident.empty() && d.health.minDegrees() > 3.0);
+        }
+    }
+
+    // ---- the hydraulic boom runs out of stroke where the geometry says ------------------------------------------------------------------
+    // the actuator reaches |base - pivot| + 0.25 = 0.6623 m, and it was 0.50 m long, growing 20 mm/s
+    {
+        const Model m = modelFromFile("examples/boom.mech");
+        const double tStar = (std::hypot(0.40, 0.10) + 0.25 - 0.50) / 0.02;
+        const Monitored r = runWithMonitor(m, 10.0, dt, true);
+        CHECK(r.excursions.size() == 1);
+        if (!r.excursions.empty()) {
+            const Excursion& e = r.excursions[0];
+            CHECK(e.t0 >= tStar - 3 * dt && e.t0 <= tStar + dt);          // flagged as the stroke runs out: near it, then at the limit
+            CHECK(e.dependent >= 1 && e.rank == e.rows - e.dependent);
+            CHECK(e.maxResidual > kLostResidual);                        // the drive can no longer be followed
+            CHECK(e.t1 > 9.9);                                            // and stays out of reach
+        }
+        std::string text;
+        for (const std::string& l : r.report) text += l + "\n";
+        CHECK(text.find("past the end of its range") != std::string::npos);
+        // stroke left to go: nothing
+        const Monitored early = runWithMonitor(m, tStar - 0.5, dt, true);
+        CHECK(early.excursions.empty() && early.closest > 0.57);
+    }
+
+    // ---- healthy runs say nothing, kinematic and dynamic (a mode switching rows, contacts coming and going) ----------------------------
+    {
+        for (const char* file : {"examples/fourbar.mech", "examples/crankslider.mech", "examples/planetary.mech", "examples/camstar.mech",
+                                 "examples/quickreturn.mech", "examples/scotchyoke.mech", "examples/ellipgears.mech", "examples/geartrain.mech"}) {
+            const Monitored r = runWithMonitor(modelFromFile(file), 6.0, dt, true);
+            CHECK(r.excursions.empty());
+            CHECK(r.closest > 10.0);
+        }
+        for (const char* file : {"examples/clock.mech", "examples/ratchet.mech", "examples/jumpcam.mech", "examples/rollingwheel.mech",
+                                 "examples/pendulum_dyn.mech"}) {
+            const Monitored r = runWithMonitor(modelFromFile(file), 2.0, dt, true);
+            CHECK(r.excursions.empty());
+            CHECK(r.closest > 10.0);
+        }
+        // The bead is flung from 0.1 m to r0 cosh(2 pi) = 27 m along a tube drawn 0.1 m long. Nothing singular happens, and the
+        // measure must not think so: it takes the lever arm the rows show at the pose, not the one the body was drawn with.
+        {
+            const Model bead = modelFromFile("examples/slidingbead.mech");
+            const Monitored r = runWithMonitor(bead, 3.0, dt, true);
+            CHECK(r.excursions.empty());
+            CHECK(r.closest > 30.0);
+            ConstraintSystem sys(bead);
+            std::vector<SparseRow> J;
+            sys.jacobianSparse(r.q, J);
+            const std::vector<double> w = unknownWeights(bead, &J);
+            const int tube = bead.bodyIndex("tube"), b = bead.bodyIndex("bead");
+            const Vec2 far = bead.worldAnchor(b, bead.anchorIndex(b, "g"), r.q);
+            const double dist = std::hypot(far.x, far.y);
+            CHECK(dist > 20.0);                                          // r0 cosh(2 pi) = 26.8 m, from a tube drawn 0.1 m long
+            CHECK_APPROX(1.0 / w[(size_t)bead.bodies[(size_t)tube].qOffset], dist, 0.05 * dist);   // and the tube's angle is worth that
+        }
+    }
+
+    // ---- a crank a thousand times shorter than the links it drives is as regular as a long one: its angle is weighed by its own reach ----
+    {
+        for (const char* crank : {"0.1", "0.01", "0.003"}) {
+            const std::string text = std::string("mechanism short { ground base { anchor p1 at (0, 0)  anchor p2 at (3, 0) } rod crank { length: ") + crank +
+                                     " } rod coupler { length: 2.6 } rod rocker { length: 2.2 } pin crank.A -> base.p1 pin coupler.A -> crank.B "
+                                     "pin rocker.A -> base.p2 pin coupler.B -> rocker.B drive crank at 36 deg/s from 60 deg }";
+            const Monitored r = runWithMonitor(buildFromText(text.c_str()), 10.0, dt, true);
+            CHECK(r.excursions.empty() && r.closest > 20.0);
+        }
+    }
+
+    // ---- the tiny gear train, run: regular all the way ------------------------------------------------------------------------------------
+    {
+        const Monitored r = runWithMonitor(buildFromText(tinyTrainText("1").c_str()), 3.0, dt, true);
+        CHECK(r.excursions.empty() && r.closest > 20.0);
+    }
+
+    // ---- redundancy that is there all along is not news: the baseline is taken at the start --------------------------------------------------
+    {
+        const Model m = buildFromText("mechanism par { world { gravity: 9.81 } ground frame { anchor a at (0, 0)  anchor b at (1, 0)  anchor c at (2, 0) } "
+                                      "rod c1 { length: 0.5, from: -40 deg } rod c2 { length: 0.5, from: -40 deg } rod c3 { length: 0.5, from: -40 deg } "
+                                      "body coupler { anchor p at (0, 0)  anchor q at (1, 0)  anchor r at (2, 0)  mass: 1  from: 0 deg } "
+                                      "pin c1.A -> frame.a pin c2.A -> frame.b pin c3.A -> frame.c pin c1.B -> coupler.p pin c2.B -> coupler.q pin c3.B -> coupler.r }");
+        const Monitored r = runWithMonitor(m, 1.0, dt, true);
+        CHECK(r.excursions.empty() && r.closest > 5.0);
+    }
+
+    // ---- the monitor changes nothing: the same run with and without it ends in bit-for-bit the same state, and the state the solvers
+    //      track from step to step (a gear mesh's centre-line angle, which every evaluation of the residuals updates) is untouched too -------
+    {
+        auto same = [&](const char* file, double seconds) {
+            const Model a = modelFromFile(file), b = modelFromFile(file);
+            const Monitored with = runWithMonitor(a, seconds, dt, true), without = runWithMonitor(b, seconds, dt, false);
+            CHECK(with.q == without.q);
+            CHECK(a.meshes.size() == b.meshes.size());
+            for (size_t k = 0; k < a.meshes.size() && k < b.meshes.size(); ++k)
+                CHECK(a.meshes[k].psiTrack == b.meshes[k].psiTrack && a.meshes[k].psiInit == b.meshes[k].psiInit);
+        };
+        for (const char* file : {"examples/planetary.mech", "examples/geartrain.mech", "examples/train.mech", "examples/fourbar.mech",
+                                 "examples/camstar.mech", "examples/boom.mech"})
+            same(file, 20.0);
+        for (const char* file : {"examples/clock.mech", "examples/geneva.mech", "examples/ratchet.mech"}) same(file, 0.5);
+    }
+
+    // ---- the window's interface: each excursion told once as it begins, again if it turns out to be the end of the range, and forgotten on reset --
+    {
+        auto live = [&](const Model& m, double seconds, std::vector<std::string>& told, RunMonitor*& keep, ConstraintSystem*& keepSys) {
+            std::vector<double> q;
+            m.assemble(q);
+            keepSys = new ConstraintSystem(m);
+            int iters = 0;
+            keepSys->solve(q, 0.0, iters);
+            keep = new RunMonitor(*keepSys);
+            keep->observe(q, 0.0);
+            for (double t = dt; t <= seconds + 1e-9; t += dt) {
+                double res = 0.0;
+                keepSys->solve(q, t, iters, &res);           // the residual comes with the solve, as in the window
+                keep->observe(q, t, res);
+                for (const std::string& l : keep->startedSince()) told.push_back(l);
+            }
+        };
+        std::vector<std::string> told;
+        RunMonitor* mon = nullptr;
+        ConstraintSystem* sys = nullptr;
+        const Model boom = modelFromFile("examples/boom.mech");
+        live(boom, 10.0, told, mon, sys);
+        CHECK(told.size() == 2);                                           // it begins near the end of the stroke, then the stroke runs out
+        if (told.size() == 2) {
+            CHECK(told[0].find("singular configuration") != std::string::npos && told[0].find("different branch") != std::string::npos);
+            CHECK(told[1].find("no longer be met") != std::string::npos && told[1].find("end of its range") != std::string::npos);
+        }
+        CHECK(mon->startedSince().empty());                                // nothing is told twice
+        mon->finish();
+        CHECK(mon->excursions().size() == 1);
+        mon->reset();
+        CHECK(mon->excursions().empty() && mon->samples() == 0 && mon->startedSince().empty() && mon->report().empty());
+        delete mon;
+        delete sys;
+        // a branch point is told once, and never as an end of range
+        told.clear();
+        const Model cell = buildFromText(peaucellierText("47.16", "-47.16", "113.58", "-113.58", "-113.58", "113.58").c_str());
+        live(cell, 4.0, told, mon, sys);
+        CHECK(told.size() == 1 && told[0].find("different branch") != std::string::npos && told[0].find("no longer be met") == std::string::npos);
+        delete mon;
+        delete sys;
+    }
+
+    // ---- names follow the rows through a run in which contacts engage and lift off ------------------------------------------------------------
+    {
+        const Model m = modelFromFile("examples/ratchet.mech");
+        std::vector<double> q;
+        m.assemble(q);
+        ConstraintSystem sys(m);
+        int it = 0;
+        sys.solve(q, 0.0, it);
+        DynamicsSystem dyn(m, sys);
+        std::vector<double> qd(m.nq(), 0.0);
+        dyn.projectVelocities(q, qd);
+        bool always = true;
+        std::set<int> rowCounts;
+        for (long k = 1; k <= 1500; ++k) {
+            dyn.step(q, qd, (k - 1) * m.world.step);
+            always = always && (int)constraintLabels(m).size() == sys.rowCount();
+            rowCounts.insert(sys.rowCount());
+        }
+        CHECK(always && rowCounts.size() >= 2);                          // the rows really did come and go
+    }
+
+    // ---- the command line --------------------------------------------------------------------------------------------------------------------
+    if (std::ifstream("./mech")) {
+        TempDir td;
+        auto sh = [&](const std::string& cmd, const std::string& out) { return std::system((cmd + " > " + out + " 2>&1").c_str()); };
+        const std::string folded = td.put("folded.mech", peaucellierText("", "", "", "", "", "")),
+                          seeded = td.put("seeded.mech", peaucellierText("47.16", "-47.16", "113.58", "-113.58", "-113.58", "113.58"));
+        const std::string out = td.dir + "/out.txt";
+        CHECK(sh("./mech check " + folded, out) == 0);                    // a warning is not an error
+        std::string text = readFile(out.c_str());
+        CHECK(text.find("[warn] singular pose") != std::string::npos && text.find("folded branch") != std::string::npos);
+        CHECK(sh("./mech check " + seeded, out) == 0);
+        text = readFile(out.c_str());
+        CHECK(text.find("pose regular") != std::string::npos && text.find("[warn]") == std::string::npos);
+        CHECK(sh("./mech run " + folded + " --headless 0.2", out) == 0);
+        CHECK(readFile(out.c_str()).find("warning: singular pose") != std::string::npos);
+        CHECK(sh("./mech run " + seeded + " --headless 4", out) == 0);
+        text = readFile(out.c_str());
+        CHECK(text.find("warning: singular configuration at t = 3.5") != std::string::npos);
+        CHECK(sh("./mech run examples/boom.mech --headless 10", out) == 0);
+        CHECK(readFile(out.c_str()).find("past the end of its range") != std::string::npos);
+        CHECK(sh("./mech run examples/fourbar.mech --headless 5", out) == 0);
+        CHECK(readFile(out.c_str()).find("warning") == std::string::npos);
+        CHECK(sh("./mech run examples/clock.mech --headless 2", out) == 0);
+        CHECK(readFile(out.c_str()).find("warning") == std::string::npos);
+        // the files a run writes do not depend on whether anyone is watching: stdout (the table) and the CSV are what they were
+        const std::string csv = td.dir + "/boom.csv";
+        CHECK(sh("./mech run examples/boom.mech --headless 5 --csv " + csv, out) == 0);
+        CHECK(readFile(out.c_str()).find("warning") == std::string::npos);
+    } else {
+        std::fprintf(stderr, "note: ./mech not found (cwd?); skipping the command-line checks\n");
+    }
+}
+
 int runAllTests() {
     testLexer();
     testParser();
@@ -9033,6 +10355,12 @@ int runAllTests() {
     testSlides();
     testRackBelt();
     testGeneva();
+    testSpeed();
+    testConditionals();
+    testReport();
+    testSparseSolver();
+    testDiagnose();
+    testDiagnoseRun();
     std::printf("tests: %d checks, %d failure%s\n", g_checks, g_failures,
                 g_failures == 1 ? "" : "s");
     return g_failures;

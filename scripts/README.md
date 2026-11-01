@@ -22,8 +22,8 @@ screenshot-capable binary with:
 
     g++ -std=c++17 -O2 -Isrc -DHAVE_VIEWER=1 \
         src/main.cpp src/viewer.cpp tests/tests.cpp \
-        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/render.cpp src/scene.cpp src/loader.cpp src/sweep.cpp \
-        src/kinematics.cpp src/dynamics.cpp \
+        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/render.cpp src/scene.cpp src/loader.cpp src/sweep.cpp src/report.cpp \
+        src/kinematics.cpp src/dynamics.cpp src/diagnose.cpp \
         scripts/glfw_shim.cpp -o mech-shot -lOSMesa -lGL
 
 ## glfw_shim_softgl.cpp (no GL at all)
@@ -35,8 +35,8 @@ GL/gl.h:
 
     g++ -std=c++17 -O2 -Isrc -Iscripts/glfw3Stub -DHAVE_VIEWER=1 \
         src/main.cpp src/viewer.cpp tests/tests.cpp \
-        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/render.cpp src/scene.cpp src/loader.cpp src/sweep.cpp \
-        src/kinematics.cpp src/dynamics.cpp \
+        src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/render.cpp src/scene.cpp src/loader.cpp src/sweep.cpp src/report.cpp \
+        src/kinematics.cpp src/dynamics.cpp src/diagnose.cpp \
         scripts/glfw_shim_softgl.cpp -o mech-shot
 
 ## running offscreen

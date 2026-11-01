@@ -372,9 +372,8 @@ ProfileCurve::Foot ProfileCurve::nearest(Vec2 u) const {
         double bestD2 = 1e300;
         size_t bi = 0;
         double bu = 0.0;
-        for (size_t i = 0; i < prims_.size(); ++i) {
-            const Prim& q = prims_[i];
-            double uu;
+        // Exact distance of one piece (closest point and its parameter).
+        auto exact = [&](const Prim& q, double& uu) {
             if (!q.arc) {
                 uu = std::min(q.len, std::max(0.0, dot(u - q.a, q.dir)));
             } else {
@@ -390,8 +389,39 @@ ProfileCurve::Foot ProfileCurve::nearest(Vec2 u) const {
                 }
             }
             const Vec2 d = u - primPoint(q, uu);
-            const double dd = dot(d, d);
-            if (dd < bestD2) { bestD2 = dd; bi = i; bu = uu; }
+            return dot(d, d);
+        };
+        // A cheap lower bound on a piece's distance: the distance to its bounding circle (a line's midpoint
+        // and half length; an arc's centre and radius, which it lies on). A piece whose bound is above the
+        // best so far cannot win, so the closest piece is found with a handful of exact evaluations
+        // instead of one per piece, and the answer (including which piece wins a tie) is unchanged.
+        auto lowerBound2 = [&](const Prim& q) {
+            double lb;
+            if (!q.arc) lb = vlen(u - (q.a + q.dir * (0.5 * q.len))) - 0.5 * q.len;
+            else lb = std::fabs(vlen(u - q.c) - q.r);
+            return lb > 0.0 ? lb * lb : 0.0;
+        };
+        thread_local std::vector<double> lbs;               // each piece's bound, computed once per query
+        lbs.resize(prims_.size());
+        {   // seed with the piece of smallest bound
+            size_t seed = 0;
+            double sb = 1e300;
+            for (size_t i = 0; i < prims_.size(); ++i) {
+                const double lb2 = lowerBound2(prims_[i]);
+                lbs[i] = lb2;
+                if (lb2 < sb) { sb = lb2; seed = i; }
+            }
+            double uu;
+            bestD2 = exact(prims_[seed], uu);
+            bi = seed;
+            bu = uu;
+        }
+        for (size_t i = 0; i < prims_.size(); ++i) {
+            const Prim& q = prims_[i];
+            if (lbs[i] > bestD2 * (1.0 + 1e-9) + 1e-24) continue;
+            double uu;
+            const double dd = exact(q, uu);
+            if (dd < bestD2 || (dd == bestD2 && i < bi)) { bestD2 = dd; bi = i; bu = uu; }
         }
         const Prim& q = prims_[bi];
         Vec2 p, d1, d2;

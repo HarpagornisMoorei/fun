@@ -18,7 +18,7 @@ if [ ! -x "$SHOT" ]; then
   g++ -std=c++17 -O1 -Isrc -Iscripts/glfw3Stub -DHAVE_VIEWER=1 \
       src/main.cpp src/viewer.cpp tests/tests.cpp \
       src/lexer.cpp src/parser.cpp src/model.cpp src/profile.cpp src/cam.cpp src/record.cpp src/render.cpp \
-      src/scene.cpp src/loader.cpp src/sweep.cpp src/kinematics.cpp src/dynamics.cpp \
+      src/scene.cpp src/loader.cpp src/sweep.cpp src/report.cpp src/kinematics.cpp src/dynamics.cpp src/diagnose.cpp \
       scripts/glfw_shim_softgl.cpp -o "$SHOT"
 fi
 mkdir -p "$OUT"
